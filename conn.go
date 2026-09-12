@@ -111,12 +111,6 @@ type conn struct {
 	wr *bufio.Writer
 }
 
-// func newConn(addr *Addr, dialTimeout time.Duration) (*conn, error) {
-// 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
-// 	defer cancel()
-// 	return newConnContext(ctx, addr, dialTimeout)
-// }
-
 // newConnWithContext dials a TCP connection
 func newConnContext(ctx context.Context, addr *Addr, dialTimeout time.Duration) (*conn, error) {
 	rawConn, err := addr.dial(ctx, dialTimeout)
@@ -127,14 +121,10 @@ func newConnContext(ctx context.Context, addr *Addr, dialTimeout time.Duration) 
 	cn := &conn{
 		createdAt:  nowFunc(),
 		returnedAt: nowFunc(),
-
-		Mutex:  sync.Mutex{},
-		closed: false,
-		raw:    rawConn,
-		addr:   rawConn.RemoteAddr(),
-
-		rr: bufio.NewReader(rawConn),
-		wr: bufio.NewWriter(rawConn),
+		raw:        rawConn,
+		addr:       rawConn.RemoteAddr(),
+		rr:         bufio.NewReader(rawConn),
+		wr:         bufio.NewWriter(rawConn),
 	}
 
 	return cn, nil
@@ -291,18 +281,9 @@ func newConnPool(
 		maxConns:    maxConn,
 		maxLifeTime: maxLifeTime,
 		maxIdleTime: maxIdleTime,
-
-		mu:         sync.Mutex{},
-		conns:      make(chan memcachedConn, maxConn),
-		createConn: createConn,
-		numOpen:    atomic.Int32{},
-		closed:     false,
-		closedCh:   make(chan struct{}),
-		cleanerCh:  nil, // created when needed in startCleaner
-
-		maxIdleClosed:     0,
-		maxIdleTimeClosed: 0,
-		maxLifeTimeClosed: 0,
+		conns:       make(chan memcachedConn, maxConn),
+		createConn:  createConn,
+		closedCh:    make(chan struct{}),
 	}
 
 	return p

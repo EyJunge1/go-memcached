@@ -5,8 +5,8 @@ Go client for [Memcached](https://memcached.org/), based on [yeqown/memcached](h
 ### Features
 
 - [x] Completed Memcached text protocol, includes meta text protocol.
-- [ ] Integrated serialization and deserialization function
-- [x] Cluster support, multiple hash algorithm support, include: crc32, murmur3, redezvous and also custom hash algorithm.
+- Values are raw `[]byte`; encode or compress in the caller before `Set`
+- [x] Cluster support, multiple hash algorithm support, include: crc32, murmur3, rendezvous and also custom hash algorithm.
 - [x] Fully connection pool features support.
 - [x] <del>SASL support.</del>
 - [x] support TCP、UDP and Unix domain socket transport.
@@ -36,7 +36,7 @@ func main() {
 	addrs := "localhost:11211"
 
 	// client support options, you can set the options to client.
-	// e.g. memcached.New(addrs, memcached.WithDialTimeout(5*time.Second))
+	// e.g. memcached.New(addrs, memcached.WithDialTimeout(3*time.Second))
 	client, err := memcached.New(addrs)
 	if err != nil {
 		panic(err)
@@ -73,7 +73,7 @@ func main() {
 
 ### Values and flags
 
-The client stores and returns `[]byte` and a `uint32` flags field as-is. Compress or serialize in your application before `Set` if you need it; decompress after `Get`. The library does not pull compression dependencies.
+The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode (JSON, Protobuf, …) or compress in your application before `Set`; decode after `Get`. The library does not pull serialization or compression dependencies.
 
 ### Support Commands
 
@@ -100,7 +100,8 @@ Now, we have implemented some commands, and we will implement more commands in t
 | Delete         | ✅      | `Delete(ctx context.Context, key string) error`                                                                     | Delete a key-value pair from memcached                            |
 | Incr           | ✅      | `Incr(ctx context.Context, key string, delta uint64) (uint64, error)`                                               | Increment a key's value                                           |
 | Decr           | ✅      | `Decr(ctx context.Context, key string, delta uint64) (uint64, error)`                                               | Decrement a key's value                                           |
-| Touch          | ✅      | `Touch(ctx context.Context, key string, expiry uint32) error`                                                       | Touch a key's expire time                                         |
+| Touch          | ✅      | `Touch(ctx context.Context, key string, expiry time.Duration) error`                                                | Touch a key's expire time                                         |
+| Stats          | ✅      | `Stats(ctx context.Context) (*Statistic, error)`                                                                    | Get memcached server statistics                                   |
 | MetaGet        | ✅      | `MetaGet(ctx context.Context, key []byte, options ...MetaGetOption) (*MetaItem, error)`                             | Get a key's meta information                                      |
 | MetaSet        | ✅      | `MetaSet(ctx context.Context, key, value []byte, options ...MetaSetOption) (*MetaItem, error)`                      | Set a key's meta information                                      |
 | MetaDelete     | ✅      | `MetaDelete(ctx context.Context, key []byte, options ...MetaDeleteOption) (*MetaItem, error)`                       | Delete a key's meta information                                   |
@@ -138,7 +139,7 @@ Now, we have implemented some commands, and we will implement more commands in t
 #### Make targets
 
 ```bash
-make lint      # golangci-lint (gofumpt + gosec)
+make lint      # golangci-lint v2 (gofumpt, gosec, unused, staticcheck)
 make test      # go test -race
 make coverage  # tests + coverage.html
 make vuln      # govulncheck

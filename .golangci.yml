@@ -5,7 +5,6 @@ linters:
   enable:
     - revive
     - gosec
-  disable:
     - unused
     - staticcheck
   settings:
@@ -16,14 +15,15 @@ linters:
           disabled: true
         - name: var-naming
           disabled: true
+    staticcheck:
+      checks:
+        - all
+        - "-QF1008"
   exclusions:
     rules:
       - linters:
           - revive
         text: "var-naming: avoid package names that conflict with Go standard library"
-      - linters:
-          - revive
-        text: "could remove embedded field.*Mutex"
 
 formatters:
   enable:

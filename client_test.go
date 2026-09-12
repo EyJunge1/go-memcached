@@ -8,19 +8,18 @@ import (
 	"time"
 )
 
-func setupLiveClient(t *testing.T) *client {
+func setupLiveClient(t *testing.T) *Client {
 	t.Helper()
-	c, err := newClientWithContext(context.Background(), "localhost:11211")
+	c, err := New("localhost:11211")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cc := c.(*client)
 	t.Cleanup(func() {
-		if err := cc.Close(); err != nil {
+		if err := c.Close(); err != nil {
 			t.Errorf("close client: %v", err)
 		}
 	})
-	return cc
+	return c
 }
 
 func Test_concurrent_dispatchRequest(t *testing.T) {
@@ -70,13 +69,10 @@ func Test_concurrent(t *testing.T) {
 	// prepare data
 	ctx := context.Background()
 
-	wg := sync.WaitGroup{}
-	wg.Add(3)
+	var wg sync.WaitGroup
 
 	// meta set goroutine
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		counter := 0
 		cas := uint64(0)
 
@@ -93,12 +89,10 @@ func Test_concurrent(t *testing.T) {
 
 			time.Sleep(20 * time.Millisecond)
 		}
-	}()
+	})
 
 	// get goroutine
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		counter := 0
 
 		for counter <= 200 {
@@ -117,11 +111,10 @@ func Test_concurrent(t *testing.T) {
 		next:
 			time.Sleep(5 * time.Millisecond)
 		}
-	}()
+	})
 
 	// touch goroutine
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		counter := 0
 
 		for counter <= 100 {
@@ -134,7 +127,7 @@ func Test_concurrent(t *testing.T) {
 
 			time.Sleep(10 * time.Millisecond)
 		}
-	}()
+	})
 
 	wg.Wait()
 
@@ -206,7 +199,7 @@ func Test_udp(t *testing.T) {
 	t.Skipf("skip test_udp, since it could not run in CI")
 
 	addrs := "udp://localhost:11211"
-	c, err := newClientWithContext(context.Background(), addrs, WithUDPEnabled())
+	c, err := New(addrs, WithUDPEnabled())
 	if err != nil {
 		t.Fatalf("Failed to create client: %+v", err)
 	}
@@ -227,7 +220,7 @@ func Test_unix(t *testing.T) {
 	t.Skipf("skip test_unix, since it could not run in CI")
 
 	addrs := "unix:///tmp/memcached.sock"
-	c, err := newClientWithContext(context.Background(), addrs)
+	c, err := New(addrs)
 	noError(t, err)
 	notNil(t, c)
 

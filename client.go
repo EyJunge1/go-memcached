@@ -1,27 +1,15 @@
 package memcached
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
-	"time"
 )
 
-// Client represents a memcached client API set.
-type Client interface {
-	io.Closer
-
-	basicTextProtocolCommander
-	metaTextProtocolCommander
-	statisticsTextProtocolCommander
-}
-
-var _ Client = (*client)(nil)
-
-type client struct {
+// Client is a thread-safe memcached client. It manages a connection pool per
+// server address and, in cluster mode, picks a node per key.
+type Client struct {
 	options *clientOptions
 
 	// addrs represents the list of memcached addresses.
@@ -36,23 +24,13 @@ type client struct {
 	connPools map[*Addr]*connPool
 }
 
-// New creates a new memcached client with the given address and options.
+// New creates a memcached client for the given address and options.
 //
-// The client contains a connection pool to manage the connections to
-// one memcached instance. And it can manage multiple memcached instances with
-// cluster mode.
-//
-// The Cluster mode means that the client can connect to multiple memcached instances
-// and automatically pick a memcached instance to execute a command, of course,
-// the client makes sure that the same key will be executed on the same memcached instance.
-// Be careful, there are some `keys` command does not obey this rule, such as `gets`, `gats`.
-func New(addr string, opts ...ClientOption) (Client, error) {
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return newClientWithContext(timeoutCtx, addr, opts...)
-}
-
-func newClientWithContext(_ context.Context, addr string, opts ...ClientOption) (Client, error) {
+// The address may be a single node or a comma-separated cluster list.
+// The same key is always sent to the same instance. Commands that take
+// multiple keys (gets, gats) do not follow that rule unless all keys
+// live on one instance.
+func New(addr string, opts ...ClientOption) (*Client, error) {
 	options := newClientOptions()
 	for _, opt := range opts {
 		opt(options)
@@ -66,19 +44,16 @@ func newClientWithContext(_ context.Context, addr string, opts ...ClientOption) 
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 	}
-	picker := options.pickBuilder.Build(addrs)
 
-	return &client{
-		options: options,
-		addrs:   addrs,
-		picker:  picker,
-
-		mu:        sync.Mutex{},
+	return &Client{
+		options:   options,
+		addrs:     addrs,
+		picker:    options.pickBuilder.Build(addrs),
 		connPools: make(map[*Addr]*connPool, 4),
 	}, nil
 }
 
-func (c *client) Close() error {
+func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -92,7 +67,7 @@ func (c *client) Close() error {
 }
 
 // getConn returns a true connection from the pool.
-func (c *client) getConn(ctx context.Context, addr *Addr) (memcachedConn, error) {
+func (c *Client) getConn(ctx context.Context, addr *Addr) (memcachedConn, error) {
 	c.mu.Lock()
 	pool, ok := c.connPools[addr]
 	if ok {
@@ -116,14 +91,6 @@ func (c *client) getConn(ctx context.Context, addr *Addr) (memcachedConn, error)
 			return nil, fmt.Errorf("newConnContext failed: %w", err)
 		}
 
-		// SASL auth if enabled
-		if c.options.enableSASL {
-			if err = authSASL(cn, c.options.plainUsername, c.options.plainPassword); err != nil {
-				_ = cn.Close()
-				return nil, err
-			}
-		}
-
 		return cn, nil
 	}
 
@@ -142,29 +109,25 @@ func (c *client) getConn(ctx context.Context, addr *Addr) (memcachedConn, error)
 
 type callFunc func(ctx context.Context, conn memcachedConn) error
 
-func (c *client) autoSwitchToUDP(_ context.Context, req *request, resp *response) {
+func (c *Client) autoSwitchToUDP(_ context.Context, req *request, resp *response) {
 	req.udpEnabled = c.options.enableUDP
 	resp.udpEnabled = c.options.enableUDP
 }
 
-func (c *client) broadcastRequest(ctx context.Context, call callFunc) error {
+func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
 
-	wg := sync.WaitGroup{}
+	var wg sync.WaitGroup
 
 	errCh := make(chan error, len(c.addrs))
 
 	for _, addr := range c.addrs {
-		wg.Add(1)
-		addrCopy := addr
-		go func() {
-			defer wg.Done()
-
-			cn, err := c.getConn(ctx, addrCopy)
+		wg.Go(func() {
+			cn, err := c.getConn(ctx, addr)
 			if err != nil {
 				errCh <- err
 				return
@@ -174,7 +137,7 @@ func (c *client) broadcastRequest(ctx context.Context, call callFunc) error {
 			if err = call(ctx, cn); err != nil {
 				errCh <- err
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -188,7 +151,7 @@ func (c *client) broadcastRequest(ctx context.Context, call callFunc) error {
 	return errors.Join(errs...)
 }
 
-func (c *client) dispatchRequest(ctx context.Context, req *request, resp *response) error {
+func (c *Client) dispatchRequest(ctx context.Context, req *request, resp *response) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -213,46 +176,4 @@ func (c *client) dispatchRequest(ctx context.Context, req *request, resp *respon
 	}
 
 	return resp.recv(ctx, cn, c.options.readTimeout)
-}
-
-// authSASL performs the Binary SASL authentication.
-// https://docs.memcached.org/protocols/binarysasl/
-// https://datatracker.ietf.org/doc/html/rfc4422
-//
-// https://en.wikipedia.org/wiki/Simple_Authentication_and_Security_Layer
-// SASL mechanism:
-// EXTERNAL, ANONYMOUS, PLAIN, OTP, SKEY, CRAM-MD5, DIGEST-MD5, SCRAM, NTLM, GS2-, GSSAPI and more.
-//
-// But here we only support a PLAIN mechanism for now.
-// https://datatracker.ietf.org/doc/html/rfc4616
-func authSASL(conn memcachedConn, username, password string) error {
-	// 1. first, list mechanisms the server supports
-	req, resp := saslListMechanisms()
-	if err := req.send(conn); err != nil {
-		return fmt.Errorf("authSASL send: %w", err)
-	}
-	if err := resp.read(conn); err != nil {
-		return fmt.Errorf("authSASL recv: %w", err)
-	}
-	if err := resp.expect(_binaryStatusOK); err != nil {
-		return fmt.Errorf("authSASL: %w", err)
-	}
-
-	if !bytes.Contains(resp.value, []byte("PLAIN")) {
-		return errors.New("memcached server does not support PLAIN mechanism")
-	}
-
-	// 2. choose one mechanism and send the authentication request
-	req, resp = saslAuthRequestPlain(username, password)
-	if err := req.send(conn); err != nil {
-		return fmt.Errorf("authSASL send: %w", err)
-	}
-	if err := resp.read(conn); err != nil {
-		return fmt.Errorf("authSASL recv: %w", err)
-	}
-	if err := resp.expect(_binaryStatusOK); err != nil {
-		return fmt.Errorf("authSASL: %w", err)
-	}
-
-	return nil
 }

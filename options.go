@@ -21,7 +21,7 @@ type clientOptions struct {
 	resolver Resolver
 
 	// dialTimeout is the timeout for dialing a connection to the memcached server
-	// instance. Default is 5 seconds.
+	// instance. Default is 3 seconds.
 	// (Connection Timeout)
 	dialTimeout time.Duration
 	// readTimeout is the timeout for reading from the connection.
@@ -49,11 +49,6 @@ type clientOptions struct {
 	// noReply is the flag to indicate whether the client should wait for the response.
 	noReply bool
 
-	// enableTLS means whether the client should use TLS to connect to the server.
-	enableSASL    bool
-	plainUsername string
-	plainPassword string
-
 	// enableUDP means whether the client should use UDP datagram to send the request.
 	enableUDP bool
 }
@@ -73,10 +68,6 @@ func newClientOptions() *clientOptions {
 		maxIdleTimeout: 0,
 
 		noReply: false,
-
-		enableSASL:    false,
-		plainUsername: "",
-		plainPassword: "",
 	}
 }
 
@@ -105,11 +96,11 @@ func WithPickBuilder(p Builder) ClientOption {
 }
 
 // WithDialTimeout sets the dial timeout for the client.
-// Default is 5 seconds.
+// Default is 3 seconds.
 func WithDialTimeout(timeout time.Duration) ClientOption {
 	return func(o *clientOptions) {
 		if timeout <= 0 {
-			timeout = 5 * time.Second
+			timeout = 3 * time.Second
 		}
 
 		o.dialTimeout = timeout
@@ -129,6 +120,7 @@ func WithReadTimeout(timeout time.Duration) ClientOption {
 }
 
 // WithWriteTimeout sets the write timeout for the client.
+// Default is 5 seconds.
 func WithWriteTimeout(timeout time.Duration) ClientOption {
 	return func(o *clientOptions) {
 		if timeout <= 0 {
@@ -179,16 +171,6 @@ func WithMaxIdleTimeout(d time.Duration) ClientOption {
 func WithNoReply() ClientOption {
 	return func(o *clientOptions) {
 		o.noReply = true
-	}
-}
-
-// WithSASL sets the SASL authentication for the client.
-// @Deprecated: since SASL is supported over binary protocol, but binary protocol is deprecated.
-func WithSASL(username, password string) ClientOption {
-	return func(o *clientOptions) {
-		o.enableSASL = true
-		o.plainUsername = username
-		o.plainPassword = password
 	}
 }
 

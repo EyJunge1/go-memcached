@@ -9,130 +9,12 @@ import (
 	"time"
 )
 
-type basicTextProtocolCommander interface {
-	/**
-	Storage commands: set, add, replace, append, prepend, cas
-	*/
-
-	// Set is used to store the given key-value pair.
-	//
-	// Flags is an arbitrary 32-bit unsigned integer (written out in decimal) that
-	// the server stores along with the data and sends back when the item is retrieved.
-	Set(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error
-	// Add is used to store the given key-value pair if the key does not exist.
-	//
-	// Flags is an arbitrary 32-bit unsigned integer (written out in decimal) that
-	// the server stores along with the data and sends back when the item is retrieved.
-	Add(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error
-	// Replace is used to update the value of an existing item.
-	//
-	// Flags is an arbitrary 32-bit unsigned integer (written out in decimal) that
-	// the server stores along with the data and sends back when the item is retrieved.
-	Replace(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error
-	// Append is used to append the value to an existing item.
-	//
-	// Flags is an arbitrary 32-bit unsigned integer (written out in decimal) that
-	// the server stores along with the data and sends back when the item is retrieved.
-	Append(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error
-	// Prepend is used to prepend the value to an existing item.
-	//
-	// Flags is an arbitrary 32-bit unsigned integer (written out in decimal) that
-	// the server stores along with the data and sends back when the item is retrieved.
-	Prepend(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error
-
-	// Cas is used to update the value of an existing item and also check-and-set operation.
-	//
-	// flags is an arbitrary 32-bit unsigned integer (written out in decimal) that
-	// the server stores along with the data and sends back when the item is retrieved.
-	Cas(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration, cas uint64) error
-
-	/**
-	Retrieval commands: get and gets
-	*/
-
-	// Get gets the value of the given key.
-	//
-	// This command would not return the <cas unique> value, using `Gets` instead.
-	Get(ctx context.Context, key string) (*Item, error)
-	// Gets the values of the given keys.
-	//
-	// BUT you must know that the cluster mode of memcached DOES NOT support this command,
-	// since keys are possible stored in different memcached instances.
-	// Be careful when using this command unless you are sure that
-	// all keys are stored in the same memcached instance.
-	//
-	// Gets will return the <cas unique> value which is used to check-and-set operation.
-	Gets(ctx context.Context, keys ...string) ([]*Item, error)
-	// GetAndTouch is used to get the value of the given key and update the expiration time of the key.
-	GetAndTouch(ctx context.Context, expiry time.Duration, key string) (*Item, error)
-	// GetAndTouches is used to get the values of the given keys and update the expiration time of the keys.
-	//
-	// BUT you must know that the cluster mode of memcached DOES NOT support this command,
-	// since keys are possible stored in different memcached instances.
-	// Be careful when using this command unless you are sure that
-	// all keys are stored in the same memcached instance.
-	GetAndTouches(ctx context.Context, expiry time.Duration, keys ...string) ([]*Item, error)
-	/**
-	Other commands: delete
-	*/
-
-	// Delete is used to delete the given key.
-	Delete(ctx context.Context, key string) error
-	// Incr is used to increment the value of the given key.
-	// If noReply mode is enabled, it will return 0.
-	Incr(ctx context.Context, key string, delta uint64) (uint64, error)
-	// Decr is used to decrement the value of the given key.
-	// If noReply mode is enabled, it will return 0.
-	Decr(ctx context.Context, key string, delta uint64) (uint64, error)
-	// Touch is used to update the expiration time of an existing item
-	// without fetching it.
-	Touch(ctx context.Context, key string, expiry time.Duration) error
-
-	// Version is used to get the version of the memcached server.
-	// TODO(@yeqown): auto-detect the version of the memcached server.
-	// 	to support limit some commands that are not supported by the server.
-	//  e.g. flags are uint16 only before 1.2.1
-	// 	e.g. SASL authentication is supported after 1.4.3
-	Version(ctx context.Context) (string, error)
-
-	// FlushAll is used to flush all data in the memcached server.
-	FlushAll(ctx context.Context) error
-}
-
-type metaTextProtocolCommander interface {
-	// MetaSet is used to store the given key-value pair with metadata.
-	// All available options start with MetaSetFlagXXX, such as MetaSetFlagBinaryKey
-	// and MetaSetFlagReturnCAS.
-	MetaSet(ctx context.Context, key, value []byte, options ...MetaSetOption) (*MetaItem, error)
-	// MetaGet is used to get the value of the given key with metadata.
-	// All available options start with MetaGetFlagXXX, such as MetaGetFlagReturnCAS
-	// and MetaGetFlagReturnClientFlags.
-	MetaGet(ctx context.Context, key []byte, options ...MetaGetOption) (*MetaItem, error)
-	// MetaDelete is used to delete the given key with metadata.
-	// All available options start with MetaDeleteFlagXXX, such as MetaDeleteFlagRemoveValueOnly
-	// and MetaDeleteFlagUpdateTTL.
-	MetaDelete(ctx context.Context, key []byte, options ...MetaDeleteOption) (*MetaItem, error)
-	// MetaArithmetic is used to increment or decrement the value of the given key with metadata.
-	// All available options start with MetaArithmeticFlagXXX, such as MetaArithmeticFlagReturnCAS
-	// and MetaArithmeticFlagReturnClientFlags.
-	MetaArithmetic(ctx context.Context, key []byte, delta uint64, options ...MetaArithmeticOption) (*MetaItem, error)
-	// MetaDebug is used to get the debug information of the given key with metadata.
-	// All available options start with MetaDebugFlagXXX, such as MetaDebugFlagBinaryKey
-	MetaDebug(ctx context.Context, key []byte, options ...MetaDebugOption) (*MetaItemDebug, error)
-	// MetaNoOp is used to do nothing but return OK.
-	MetaNoOp(ctx context.Context) error
-}
-
-type statisticsTextProtocolCommander interface {
-	Stats(ctx context.Context) (*Statistic, error)
-}
-
 /**
  * Storage commands: set, add, replace, append, prepend, cas
  */
 
-func (c *client) storageCommand(ctx context.Context, command, key string, value []byte, flag uint32, expiry time.Duration) error {
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
+func (c *Client) storageCommand(ctx context.Context, command, key string, value []byte, flag uint32, expiry time.Duration) error {
+	if err := validateKeyAndValue([]byte(key), value); err != nil {
 		return err
 	}
 
@@ -150,27 +32,33 @@ func (c *client) storageCommand(ctx context.Context, command, key string, value 
 	return nil
 }
 
-func (c *client) Set(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
+// Set stores the given key-value pair.
+func (c *Client) Set(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
 	return c.storageCommand(ctx, "set", key, value, flag, expiry)
 }
 
-func (c *client) Add(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
+// Add stores the pair only if the key does not exist.
+func (c *Client) Add(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
 	return c.storageCommand(ctx, "add", key, value, flag, expiry)
 }
 
-func (c *client) Replace(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
+// Replace updates an existing item.
+func (c *Client) Replace(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
 	return c.storageCommand(ctx, "replace", key, value, flag, expiry)
 }
 
-func (c *client) Append(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
+// Append appends value to an existing item.
+func (c *Client) Append(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
 	return c.storageCommand(ctx, "append", key, value, flag, expiry)
 }
 
-func (c *client) Prepend(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
+// Prepend prepends value to an existing item.
+func (c *Client) Prepend(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error {
 	return c.storageCommand(ctx, "prepend", key, value, flag, expiry)
 }
 
-func (c *client) Cas(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration, cas uint64) error {
+// Cas updates an existing item using check-and-set.
+func (c *Client) Cas(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration, cas uint64) error {
 	if err := validateKeyAndValue([]byte(key), value); err != nil {
 		return err
 	}
@@ -193,7 +81,8 @@ func (c *client) Cas(ctx context.Context, key string, value []byte, flag uint32,
  * Retrieval commands: get, gets, gat, gats
  */
 
-func (c *client) Get(ctx context.Context, key string) (*Item, error) {
+// Get returns the item for key. Use Gets if you need the CAS value.
+func (c *Client) Get(ctx context.Context, key string) (*Item, error) {
 	if err := validateKeyAndValue([]byte(key), nil); err != nil {
 		return nil, err
 	}
@@ -216,7 +105,8 @@ func (c *client) Get(ctx context.Context, key string) (*Item, error) {
 	return items[0], nil
 }
 
-func (c *client) Gets(ctx context.Context, keys ...string) ([]*Item, error) {
+// Gets returns items including CAS. In cluster mode all keys must live on one node.
+func (c *Client) Gets(ctx context.Context, keys ...string) ([]*Item, error) {
 	if len(keys) == 0 {
 		return []*Item{}, nil
 	}
@@ -239,7 +129,8 @@ func (c *client) Gets(ctx context.Context, keys ...string) ([]*Item, error) {
 	return items, nil
 }
 
-func (c *client) GetAndTouch(ctx context.Context, expiry time.Duration, key string) (*Item, error) {
+// GetAndTouch returns the item and updates its expiration.
+func (c *Client) GetAndTouch(ctx context.Context, expiry time.Duration, key string) (*Item, error) {
 	if err := validateKeyAndValue([]byte(key), nil); err != nil {
 		return nil, err
 	}
@@ -263,7 +154,8 @@ func (c *client) GetAndTouch(ctx context.Context, expiry time.Duration, key stri
 	return items[0], nil
 }
 
-func (c *client) GetAndTouches(ctx context.Context, expiry time.Duration, keys ...string) ([]*Item, error) {
+// GetAndTouches returns items, updates their expiration, and includes CAS.
+func (c *Client) GetAndTouches(ctx context.Context, expiry time.Duration, keys ...string) ([]*Item, error) {
 	if len(keys) == 0 {
 		return []*Item{}, nil
 	}
@@ -292,7 +184,8 @@ func (c *client) GetAndTouches(ctx context.Context, expiry time.Duration, keys .
  * Other commands: delete, incr, decr, touch, version, flush_all
  */
 
-func (c *client) Delete(ctx context.Context, key string) error {
+// Delete removes the key.
+func (c *Client) Delete(ctx context.Context, key string) error {
 	if err := validateKeyAndValue([]byte(key), nil); err != nil {
 		return err
 	}
@@ -312,7 +205,8 @@ func (c *client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-func (c *client) Incr(ctx context.Context, key string, delta uint64) (uint64, error) {
+// Incr increments the key. With no-reply it returns 0.
+func (c *Client) Incr(ctx context.Context, key string, delta uint64) (uint64, error) {
 	if err := validateKeyAndValue([]byte(key), nil); err != nil {
 		return 0, err
 	}
@@ -331,7 +225,8 @@ func (c *client) Incr(ctx context.Context, key string, delta uint64) (uint64, er
 	return value, nil
 }
 
-func (c *client) Decr(ctx context.Context, key string, delta uint64) (uint64, error) {
+// Decr decrements the key. With no-reply it returns 0.
+func (c *Client) Decr(ctx context.Context, key string, delta uint64) (uint64, error) {
 	if err := validateKeyAndValue([]byte(key), nil); err != nil {
 		return 0, err
 	}
@@ -350,7 +245,8 @@ func (c *client) Decr(ctx context.Context, key string, delta uint64) (uint64, er
 	return value, nil
 }
 
-func (c *client) Touch(ctx context.Context, key string, expiry time.Duration) error {
+// Touch updates expiration without fetching the item.
+func (c *Client) Touch(ctx context.Context, key string, expiry time.Duration) error {
 	if err := validateKeyAndValue([]byte(key), nil); err != nil {
 		return err
 	}
@@ -370,7 +266,8 @@ func (c *client) Touch(ctx context.Context, key string, expiry time.Duration) er
 	return nil
 }
 
-func (c *client) Version(ctx context.Context) (string, error) {
+// Version returns the server version string.
+func (c *Client) Version(ctx context.Context) (string, error) {
 	req, resp := buildVersionCommand()
 	defer releaseReqAndResp(req, resp)
 
@@ -388,7 +285,8 @@ func (c *client) Version(ctx context.Context) (string, error) {
 	return string(trimCRLF(line[8:])), nil
 }
 
-func (c *client) FlushAll(ctx context.Context) error {
+// FlushAll removes all items on every configured server.
+func (c *Client) FlushAll(ctx context.Context) error {
 	call := func(ctx context.Context, cn memcachedConn) error {
 		req, resp := buildFlushAllCommand(c.options.noReply)
 		defer releaseReqAndResp(req, resp)
@@ -422,8 +320,9 @@ func (c *client) FlushAll(ctx context.Context) error {
  * meta set(ms), meta get(mg), meta delete(md), meta arithmetic(ma), meta no-op(mn)
  */
 
-func (c *client) MetaSet(ctx context.Context, key, value []byte, msOptions ...MetaSetOption) (*MetaItem, error) {
-	if err := validateKeyAndValue(key, nil); err != nil {
+// MetaSet stores a key with meta flags.
+func (c *Client) MetaSet(ctx context.Context, key, value []byte, msOptions ...MetaSetOption) (*MetaItem, error) {
+	if err := validateKeyAndValue(key, value); err != nil {
 		return nil, err
 	}
 
@@ -455,7 +354,8 @@ func (c *client) MetaSet(ctx context.Context, key, value []byte, msOptions ...Me
 	return item, nil
 }
 
-func (c *client) MetaGet(ctx context.Context, key []byte, mgOptions ...MetaGetOption) (*MetaItem, error) {
+// MetaGet fetches a key with meta flags.
+func (c *Client) MetaGet(ctx context.Context, key []byte, mgOptions ...MetaGetOption) (*MetaItem, error) {
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return nil, err
 	}
@@ -482,7 +382,8 @@ func (c *client) MetaGet(ctx context.Context, key []byte, mgOptions ...MetaGetOp
 	return item, nil
 }
 
-func (c *client) MetaDelete(ctx context.Context, key []byte, options ...MetaDeleteOption) (*MetaItem, error) {
+// MetaDelete deletes a key with meta flags.
+func (c *Client) MetaDelete(ctx context.Context, key []byte, options ...MetaDeleteOption) (*MetaItem, error) {
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return nil, err
 	}
@@ -509,7 +410,8 @@ func (c *client) MetaDelete(ctx context.Context, key []byte, options ...MetaDele
 	return item, nil
 }
 
-func (c *client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, options ...MetaArithmeticOption) (*MetaItem, error) {
+// MetaArithmetic increments or decrements a key with meta flags.
+func (c *Client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, options ...MetaArithmeticOption) (*MetaItem, error) {
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return nil, err
 	}
@@ -548,7 +450,8 @@ func validateKeyAndValue(key, value []byte) error {
 	return nil
 }
 
-func (c *client) MetaDebug(ctx context.Context, key []byte, options ...MetaDebugOption) (*MetaItemDebug, error) {
+// MetaDebug returns debug metadata for a key.
+func (c *Client) MetaDebug(ctx context.Context, key []byte, options ...MetaDebugOption) (*MetaItemDebug, error) {
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return nil, err
 	}
@@ -576,8 +479,9 @@ func (c *client) MetaDebug(ctx context.Context, key []byte, options ...MetaDebug
 	return item, nil
 }
 
-func (c *client) MetaNoOp(ctx context.Context) error {
-	req, resp := buildMetaNoOpCommand()
+// MetaNoop sends a meta no-op and expects MN.
+func (c *Client) MetaNoop(ctx context.Context) error {
+	req, resp := buildMetaNoopCommand()
 	defer releaseReqAndResp(req, resp)
 
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
@@ -599,7 +503,8 @@ func (c *client) MetaNoOp(ctx context.Context) error {
  * stats [subcommand]\r\n
  */
 
-func (c *client) Stats(ctx context.Context) (*Statistic, error) {
+// Stats returns server statistics.
+func (c *Client) Stats(ctx context.Context) (*Statistic, error) {
 	req, resp := buildStatsCommand("")
 	defer releaseReqAndResp(req, resp)
 

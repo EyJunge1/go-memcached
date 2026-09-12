@@ -406,6 +406,7 @@ func Test_parseStats(t *testing.T) {
 					[]byte("STAT reserved_fds 1234567890"),
 					[]byte("STAT accepting_conns 1"),
 					[]byte("STAT hash_is_expanding 1"),
+					[]byte("STAT custom_ext_key 99"),
 				},
 			},
 			want: &Statistic{
@@ -422,6 +423,20 @@ func Test_parseStats(t *testing.T) {
 				ReservedFDs:          1234567890,
 				AcceptingConns:       true,
 				HashIsExpanding:      true,
+				Extra:                map[string]string{"custom_ext_key": "99"},
+			},
+		},
+		{
+			name: "unparseable known key goes to Extra",
+			args: args{
+				lines: [][]byte{
+					[]byte("STAT pid not-a-number"),
+					[]byte("STAT version 1.6.0 with build info"),
+				},
+			},
+			want: &Statistic{
+				Version: "1.6.0 with build info",
+				Extra:   map[string]string{"pid": "not-a-number"},
 			},
 		},
 	}
@@ -436,4 +451,12 @@ func Test_parseStats(t *testing.T) {
 			equal(t, tt.want, got)
 		})
 	}
+}
+
+func Test_validateKeyAndValue(t *testing.T) {
+	noError(t, validateKeyAndValue([]byte("key"), []byte("value")))
+	noError(t, validateKeyAndValue([]byte("key"), nil))
+	isErrorIs(t, validateKeyAndValue(nil, []byte("value")), ErrInvalidKey)
+	isErrorIs(t, validateKeyAndValue([]byte(""), []byte("value")), ErrInvalidKey)
+	isErrorIs(t, validateKeyAndValue(bytes.Repeat([]byte("a"), maxKeySize+1), nil), ErrInvalidKey)
 }

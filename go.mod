@@ -1,3 +1,3 @@
 module github.com/EyJunge1/gomemcached
 
-go 1.27.0
+go 1.27

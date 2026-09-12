@@ -2,9 +2,7 @@ package memcached
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"strconv"
 	"time"
@@ -38,7 +36,7 @@ type MetaItem struct {
 
 	/* Meta */
 	// CAS is a unique value that is used to check-and-set operation.
-	// use MetaGetFlagReturnCAS() or MetaGetFlagReturnCAS() to get this value.
+	// use MetaGetFlagReturnCAS() or MetaSetFlagReturnCAS() to get this value.
 	CAS uint64
 	// Flags is the client flags stored with the item when a value is returned.
 	// use MetaGetFlagReturnClientFlags() to request it from the server.
@@ -85,7 +83,7 @@ func (m *MetaItem) String() string {
 type MetaItemDebug struct {
 	Key            []byte // key
 	TTL            int64  // exp, expiration time in seconds, -1 means never expire
-	LastAssessTime int64  // la, time in seconds since last access
+	LastAccessTime int64  // la, time in seconds since last access
 	CAS            uint64 // cas
 	HitBefore      bool   // fetch
 	SlabClassID    uint64 // cls
@@ -310,12 +308,7 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 			continue
 		}
 
-		item := &Item{
-			Key:   "",
-			Value: nil,
-			Flags: 0,
-			CAS:   0,
-		}
+		item := &Item{}
 		dataLen, err = parseValueLine(line, item, withCAS)
 		if err != nil {
 			return nil, err
@@ -476,160 +469,370 @@ func parseArithmetic(line []byte) (uint64, error) {
 
 // Statistic represents the statistics of the memcached server.
 type Statistic struct {
-	PID                    int64   `json:"pid"`
-	Uptime                 int64   `json:"uptime"` // seconds since the server started
-	Time                   int64   `json:"time"`   // unix timestamp
-	Version                string  `json:"version"`
-	Libevent               string  `json:"libevent"`
-	PointerSize            int     `json:"pointer_size"`
-	RusageUser             float64 `json:"rusage_user"`   // seconds.microseconds
-	RusageSystem           float64 `json:"rusage_system"` // seconds.microseconds
-	MaxConnections         int64   `json:"max_connections"`
-	CurrConnections        int64   `json:"curr_connections"`
-	TotalConnections       int64   `json:"total_connections"`
-	RejectedConnections    int64   `json:"rejected_connections"`
-	ConnectionStructures   int64   `json:"connection_structures"`
-	ResponseObjOOM         int64   `json:"response_obj_oom"`
-	ResponseObjCount       int64   `json:"response_obj_count"`
-	ResponseObjBytes       int64   `json:"response_obj_bytes"`
-	ReadBufCount           int64   `json:"read_buf_count"`
-	ReadBufBytes           int64   `json:"read_buf_bytes"`
-	ReadBufBytesFree       int64   `json:"read_buf_bytes_free"`
-	ReadBufOOM             int64   `json:"read_buf_oom"`
-	ReservedFDs            int64   `json:"reserved_fds"`
-	CmdGet                 int64   `json:"cmd_get"`
-	CmdSet                 int64   `json:"cmd_set"`
-	CmdFlush               int64   `json:"cmd_flush"`
-	CmdTouch               int64   `json:"cmd_touch"`
-	CmdMeta                int64   `json:"cmd_meta"`
-	GetHits                int64   `json:"get_hits"`
-	GetMisses              int64   `json:"get_misses"`
-	GetExpired             int64   `json:"get_expired"`
-	GetFlushed             int64   `json:"get_flushed"`
-	DeleteMisses           int64   `json:"delete_misses"`
-	DeleteHits             int64   `json:"delete_hits"`
-	IncrMisses             int64   `json:"incr_misses"`
-	IncrHits               int64   `json:"incr_hits"`
-	DecrMisses             int64   `json:"decr_misses"`
-	DecrHits               int64   `json:"decr_hits"`
-	CasMisses              int64   `json:"cas_misses"`
-	CasHits                int64   `json:"cas_hits"`
-	CasBadval              int64   `json:"cas_badval"`
-	TouchHits              int64   `json:"touch_hits"`
-	TouchMisses            int64   `json:"touch_misses"`
-	StoreTooLarge          int64   `json:"store_too_large"`
-	StoreNoMemory          int64   `json:"store_no_memory"`
-	AuthCmds               int64   `json:"auth_cmds"`
-	AuthErrors             int64   `json:"auth_errors"`
-	BytesRead              int64   `json:"bytes_read"`
-	BytesWritten           int64   `json:"bytes_written"`
-	LimitMaxbytes          int64   `json:"limit_maxbytes"`
-	AcceptingConns         bool    `json:"accepting_conns"`
-	ListenDisabledNum      int64   `json:"listen_disabled_num"`
-	TimeInListenDisabledUs int64   `json:"time_in_listen_disabled_us"`
-	Threads                int64   `json:"threads"`
-	ConnYields             int64   `json:"conn_yields"`
-	HashPowerLevel         int64   `json:"hash_power_level"`
-	HashBytes              int64   `json:"hash_bytes"`
-	HashIsExpanding        bool    `json:"hash_is_expanding"`
+	PID                    int64
+	Uptime                 int64 // seconds since the server started
+	Time                   int64 // unix timestamp
+	Version                string
+	Libevent               string
+	PointerSize            int
+	RusageUser             float64 // seconds.microseconds
+	RusageSystem           float64 // seconds.microseconds
+	MaxConnections         int64
+	CurrConnections        int64
+	TotalConnections       int64
+	RejectedConnections    int64
+	ConnectionStructures   int64
+	ResponseObjOOM         int64
+	ResponseObjCount       int64
+	ResponseObjBytes       int64
+	ReadBufCount           int64
+	ReadBufBytes           int64
+	ReadBufBytesFree       int64
+	ReadBufOOM             int64
+	ReservedFDs            int64
+	CmdGet                 int64
+	CmdSet                 int64
+	CmdFlush               int64
+	CmdTouch               int64
+	CmdMeta                int64
+	GetHits                int64
+	GetMisses              int64
+	GetExpired             int64
+	GetFlushed             int64
+	DeleteMisses           int64
+	DeleteHits             int64
+	IncrMisses             int64
+	IncrHits               int64
+	DecrMisses             int64
+	DecrHits               int64
+	CasMisses              int64
+	CasHits                int64
+	CasBadval              int64
+	TouchHits              int64
+	TouchMisses            int64
+	StoreTooLarge          int64
+	StoreNoMemory          int64
+	AuthCmds               int64
+	AuthErrors             int64
+	BytesRead              int64
+	BytesWritten           int64
+	LimitMaxbytes          int64
+	AcceptingConns         bool
+	ListenDisabledNum      int64
+	TimeInListenDisabledUs int64
+	Threads                int64
+	ConnYields             int64
+	HashPowerLevel         int64
+	HashBytes              int64
+	HashIsExpanding        bool
 
-	SlabReassignRescues        int64 `json:"slab_reassign_rescues"`
-	SlabReassignChunkRescues   int64 `json:"slab_reassign_chunk_rescues"`
-	SlabReassignEvictionsNomem int64 `json:"slab_reassign_evictions_nomem"`
-	SlabReassignInlineReclaim  int64 `json:"slab_reassign_inline_reclaim"`
-	SlabReassignBusyItems      int64 `json:"slab_reassign_busy_items"`
-	SlabReassignBusyDeletes    int64 `json:"slab_reassign_busy_deletes"`
-	SlabReassignRunning        int64 `json:"slab_reassign_running"`
-	SlabsMoved                 int64 `json:"slabs_moved"`
+	SlabReassignRescues        int64
+	SlabReassignChunkRescues   int64
+	SlabReassignEvictionsNomem int64
+	SlabReassignInlineReclaim  int64
+	SlabReassignBusyItems      int64
+	SlabReassignBusyDeletes    int64
+	SlabReassignRunning        int64
+	SlabsMoved                 int64
 
-	LruCrawlerRunning    int64 `json:"lru_crawler_running"`
-	LruCrawlerStarts     int64 `json:"lru_crawler_starts"`
-	LruMaintainerJuggles int64 `json:"lru_maintainer_juggles"`
-	MallocFails          int64 `json:"malloc_fails"`
-	LogWorkerDropped     int64 `json:"log_worker_dropped"`
-	LogWorkerWritten     int64 `json:"log_worker_written"`
-	LogWatcherSkipped    int64 `json:"log_watcher_skipped"`
-	LogWatcherSent       int64 `json:"log_watcher_sent"`
-	LogWatchers          int64 `json:"log_watchers"`
-	UnexpectedNapiIDs    int64 `json:"unexpected_napi_ids"`
-	RoundRobinFallback   int64 `json:"round_robin_fallback"`
-	Bytes                int64 `json:"bytes"`
-	CurrItems            int64 `json:"curr_items"`
-	TotalItems           int64 `json:"total_items"`
-	SlabGlobalPagePool   int64 `json:"slab_global_page_pool"`
-	ExpiredUnfetched     int64 `json:"expired_unfetched"`
-	EvictedUnfetched     int64 `json:"evicted_unfetched"`
-	EvictedActive        int64 `json:"evicted_active"`
-	Evictions            int64 `json:"evictions"`
-	Reclaimed            int64 `json:"reclaimed"`
-	CrawlerReclaimed     int64 `json:"crawler_reclaimed"`
-	CrawlerItemsChecked  int64 `json:"crawler_items_checked"`
-	LrutailReflocked     int64 `json:"lrutail_reflocked"`
+	LruCrawlerRunning    int64
+	LruCrawlerStarts     int64
+	LruMaintainerJuggles int64
+	MallocFails          int64
+	LogWorkerDropped     int64
+	LogWorkerWritten     int64
+	LogWatcherSkipped    int64
+	LogWatcherSent       int64
+	LogWatchers          int64
+	UnexpectedNapiIDs    int64
+	RoundRobinFallback   int64
+	Bytes                int64
+	CurrItems            int64
+	TotalItems           int64
+	SlabGlobalPagePool   int64
+	ExpiredUnfetched     int64
+	EvictedUnfetched     int64
+	EvictedActive        int64
+	Evictions            int64
+	Reclaimed            int64
+	CrawlerReclaimed     int64
+	CrawlerItemsChecked  int64
+	LrutailReflocked     int64
 
-	MovesToCold    int64 `json:"moves_to_cold"`
-	MovesToWarm    int64 `json:"moves_to_warm"`
-	MovesWithinLRU int64 `json:"moves_within_lru"`
+	MovesToCold    int64
+	MovesToWarm    int64
+	MovesWithinLRU int64
 
-	DirectReclaims  int64 `json:"direct_reclaims"`
-	LruBumpsDropped int64 `json:"lru_bumps_dropped"`
+	DirectReclaims  int64
+	LruBumpsDropped int64
+
+	// Extra holds STAT keys that are not mapped to a typed field,
+	// and known keys whose value could not be parsed.
+	Extra map[string]string
 }
 
 func parseStats(lines [][]byte) (*Statistic, error) {
-	if len(lines) <= 0 {
+	if len(lines) == 0 {
 		return nil, fmt.Errorf("empty response: %w", ErrMalformedResponse)
 	}
 
-	transitionMap := make(map[string]any, len(lines))
+	stat := &Statistic{}
 	for _, line := range lines {
-		// STAT <key> <value>\r\n
-		fields := bytes.Fields(bytes.TrimSuffix(line, _CRLFBytes))
-		if len(fields) != 3 || !bytes.Equal(fields[0], []byte("STAT")) {
+		line = bytes.TrimSuffix(line, _CRLFBytes)
+		key, val, ok := cutStatLine(line)
+		if !ok {
 			continue
 		}
-
-		key := string(fields[1])
-
-		// parse the value into int64 as default, but there are some exceptions:
-		// string: version, libevent
-		// float: rusage_user, rusage_system
-		switch key {
-		case "version", "libevent":
-			transitionMap[key] = string(fields[2])
-		case "rusage_user", "rusage_system":
-			v, err := strconv.ParseFloat(string(fields[2]), 64)
-			if err != nil {
-				log.Printf("memcached: parse float failed: key=%q value=%q err=%v", key, string(fields[2]), err)
-				continue
+		if !assignStat(stat, key, val) {
+			if stat.Extra == nil {
+				stat.Extra = make(map[string]string)
 			}
-			transitionMap[key] = v
-		case "hash_is_expanding", "accepting_conns":
-			v, err := strconv.ParseBool(string(fields[2]))
-			if err != nil {
-				log.Printf("memcached: parse bool failed: key=%q value=%q err=%v", key, string(fields[2]), err)
-				continue
-			}
-			transitionMap[key] = v
-		default:
-			v, err := strconv.ParseInt(string(fields[2]), 10, 64)
-			if err != nil {
-				log.Printf("memcached: parse int failed: key=%q value=%q err=%v", key, string(fields[2]), err)
-				continue
-			}
-			transitionMap[key] = v
+			stat.Extra[key] = val
 		}
 	}
-
-	raw, err := json.Marshal(transitionMap)
-	if err != nil {
-		return nil, fmt.Errorf("parseStats marshal transition map failed: %w", err)
-	}
-
-	stat := &Statistic{}
-	if err = json.Unmarshal(raw, stat); err != nil {
-		return nil, fmt.Errorf("parseStats unmarshal failed: %w", err)
-	}
-
 	return stat, nil
+}
+
+func cutStatLine(line []byte) (key, val string, ok bool) {
+	const prefix = "STAT "
+	if !bytes.HasPrefix(line, []byte(prefix)) {
+		return "", "", false
+	}
+	rest := line[len(prefix):]
+	name, value, found := bytes.Cut(rest, []byte{' '})
+	if !found || len(name) == 0 {
+		return "", "", false
+	}
+	return string(name), string(value), true
+}
+
+func assignStat(stat *Statistic, key, val string) bool {
+	switch key {
+	case "version":
+		stat.Version = val
+		return true
+	case "libevent":
+		stat.Libevent = val
+		return true
+	case "rusage_user":
+		return setFloat(&stat.RusageUser, val)
+	case "rusage_system":
+		return setFloat(&stat.RusageSystem, val)
+	case "accepting_conns":
+		return setBool(&stat.AcceptingConns, val)
+	case "hash_is_expanding":
+		return setBool(&stat.HashIsExpanding, val)
+	case "pointer_size":
+		return setInt(&stat.PointerSize, val)
+	case "pid":
+		return setInt64(&stat.PID, val)
+	case "uptime":
+		return setInt64(&stat.Uptime, val)
+	case "time":
+		return setInt64(&stat.Time, val)
+	case "max_connections":
+		return setInt64(&stat.MaxConnections, val)
+	case "curr_connections":
+		return setInt64(&stat.CurrConnections, val)
+	case "total_connections":
+		return setInt64(&stat.TotalConnections, val)
+	case "rejected_connections":
+		return setInt64(&stat.RejectedConnections, val)
+	case "connection_structures":
+		return setInt64(&stat.ConnectionStructures, val)
+	case "response_obj_oom":
+		return setInt64(&stat.ResponseObjOOM, val)
+	case "response_obj_count":
+		return setInt64(&stat.ResponseObjCount, val)
+	case "response_obj_bytes":
+		return setInt64(&stat.ResponseObjBytes, val)
+	case "read_buf_count":
+		return setInt64(&stat.ReadBufCount, val)
+	case "read_buf_bytes":
+		return setInt64(&stat.ReadBufBytes, val)
+	case "read_buf_bytes_free":
+		return setInt64(&stat.ReadBufBytesFree, val)
+	case "read_buf_oom":
+		return setInt64(&stat.ReadBufOOM, val)
+	case "reserved_fds":
+		return setInt64(&stat.ReservedFDs, val)
+	case "cmd_get":
+		return setInt64(&stat.CmdGet, val)
+	case "cmd_set":
+		return setInt64(&stat.CmdSet, val)
+	case "cmd_flush":
+		return setInt64(&stat.CmdFlush, val)
+	case "cmd_touch":
+		return setInt64(&stat.CmdTouch, val)
+	case "cmd_meta":
+		return setInt64(&stat.CmdMeta, val)
+	case "get_hits":
+		return setInt64(&stat.GetHits, val)
+	case "get_misses":
+		return setInt64(&stat.GetMisses, val)
+	case "get_expired":
+		return setInt64(&stat.GetExpired, val)
+	case "get_flushed":
+		return setInt64(&stat.GetFlushed, val)
+	case "delete_misses":
+		return setInt64(&stat.DeleteMisses, val)
+	case "delete_hits":
+		return setInt64(&stat.DeleteHits, val)
+	case "incr_misses":
+		return setInt64(&stat.IncrMisses, val)
+	case "incr_hits":
+		return setInt64(&stat.IncrHits, val)
+	case "decr_misses":
+		return setInt64(&stat.DecrMisses, val)
+	case "decr_hits":
+		return setInt64(&stat.DecrHits, val)
+	case "cas_misses":
+		return setInt64(&stat.CasMisses, val)
+	case "cas_hits":
+		return setInt64(&stat.CasHits, val)
+	case "cas_badval":
+		return setInt64(&stat.CasBadval, val)
+	case "touch_hits":
+		return setInt64(&stat.TouchHits, val)
+	case "touch_misses":
+		return setInt64(&stat.TouchMisses, val)
+	case "store_too_large":
+		return setInt64(&stat.StoreTooLarge, val)
+	case "store_no_memory":
+		return setInt64(&stat.StoreNoMemory, val)
+	case "auth_cmds":
+		return setInt64(&stat.AuthCmds, val)
+	case "auth_errors":
+		return setInt64(&stat.AuthErrors, val)
+	case "bytes_read":
+		return setInt64(&stat.BytesRead, val)
+	case "bytes_written":
+		return setInt64(&stat.BytesWritten, val)
+	case "limit_maxbytes":
+		return setInt64(&stat.LimitMaxbytes, val)
+	case "listen_disabled_num":
+		return setInt64(&stat.ListenDisabledNum, val)
+	case "time_in_listen_disabled_us":
+		return setInt64(&stat.TimeInListenDisabledUs, val)
+	case "threads":
+		return setInt64(&stat.Threads, val)
+	case "conn_yields":
+		return setInt64(&stat.ConnYields, val)
+	case "hash_power_level":
+		return setInt64(&stat.HashPowerLevel, val)
+	case "hash_bytes":
+		return setInt64(&stat.HashBytes, val)
+	case "slab_reassign_rescues":
+		return setInt64(&stat.SlabReassignRescues, val)
+	case "slab_reassign_chunk_rescues":
+		return setInt64(&stat.SlabReassignChunkRescues, val)
+	case "slab_reassign_evictions_nomem":
+		return setInt64(&stat.SlabReassignEvictionsNomem, val)
+	case "slab_reassign_inline_reclaim":
+		return setInt64(&stat.SlabReassignInlineReclaim, val)
+	case "slab_reassign_busy_items":
+		return setInt64(&stat.SlabReassignBusyItems, val)
+	case "slab_reassign_busy_deletes":
+		return setInt64(&stat.SlabReassignBusyDeletes, val)
+	case "slab_reassign_running":
+		return setInt64(&stat.SlabReassignRunning, val)
+	case "slabs_moved":
+		return setInt64(&stat.SlabsMoved, val)
+	case "lru_crawler_running":
+		return setInt64(&stat.LruCrawlerRunning, val)
+	case "lru_crawler_starts":
+		return setInt64(&stat.LruCrawlerStarts, val)
+	case "lru_maintainer_juggles":
+		return setInt64(&stat.LruMaintainerJuggles, val)
+	case "malloc_fails":
+		return setInt64(&stat.MallocFails, val)
+	case "log_worker_dropped":
+		return setInt64(&stat.LogWorkerDropped, val)
+	case "log_worker_written":
+		return setInt64(&stat.LogWorkerWritten, val)
+	case "log_watcher_skipped":
+		return setInt64(&stat.LogWatcherSkipped, val)
+	case "log_watcher_sent":
+		return setInt64(&stat.LogWatcherSent, val)
+	case "log_watchers":
+		return setInt64(&stat.LogWatchers, val)
+	case "unexpected_napi_ids":
+		return setInt64(&stat.UnexpectedNapiIDs, val)
+	case "round_robin_fallback":
+		return setInt64(&stat.RoundRobinFallback, val)
+	case "bytes":
+		return setInt64(&stat.Bytes, val)
+	case "curr_items":
+		return setInt64(&stat.CurrItems, val)
+	case "total_items":
+		return setInt64(&stat.TotalItems, val)
+	case "slab_global_page_pool":
+		return setInt64(&stat.SlabGlobalPagePool, val)
+	case "expired_unfetched":
+		return setInt64(&stat.ExpiredUnfetched, val)
+	case "evicted_unfetched":
+		return setInt64(&stat.EvictedUnfetched, val)
+	case "evicted_active":
+		return setInt64(&stat.EvictedActive, val)
+	case "evictions":
+		return setInt64(&stat.Evictions, val)
+	case "reclaimed":
+		return setInt64(&stat.Reclaimed, val)
+	case "crawler_reclaimed":
+		return setInt64(&stat.CrawlerReclaimed, val)
+	case "crawler_items_checked":
+		return setInt64(&stat.CrawlerItemsChecked, val)
+	case "lrutail_reflocked":
+		return setInt64(&stat.LrutailReflocked, val)
+	case "moves_to_cold":
+		return setInt64(&stat.MovesToCold, val)
+	case "moves_to_warm":
+		return setInt64(&stat.MovesToWarm, val)
+	case "moves_within_lru":
+		return setInt64(&stat.MovesWithinLRU, val)
+	case "direct_reclaims":
+		return setInt64(&stat.DirectReclaims, val)
+	case "lru_bumps_dropped":
+		return setInt64(&stat.LruBumpsDropped, val)
+	default:
+		return false
+	}
+}
+
+func setInt64(dst *int64, val string) bool {
+	v, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return false
+	}
+	*dst = v
+	return true
+}
+
+func setInt(dst *int, val string) bool {
+	v, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return false
+	}
+	*dst = int(v)
+	return true
+}
+
+func setFloat(dst *float64, val string) bool {
+	v, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return false
+	}
+	*dst = v
+	return true
+}
+
+func setBool(dst *bool, val string) bool {
+	v, err := strconv.ParseBool(val)
+	if err != nil {
+		return false
+	}
+	*dst = v
+	return true
 }
 
 func buildStatsCommand(subCommand string) (*request, *response) {

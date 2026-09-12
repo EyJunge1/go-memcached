@@ -87,7 +87,6 @@ func (r defaultResolver) resolveAddr(address string) (network, addr string, err 
 	network = "tcp"
 	addr = address
 
-	// 检查地址格式并解析
 	if strings.HasPrefix(address, "unix://") {
 		network = "unix"
 		addr = strings.TrimPrefix(address, "unix://")
@@ -136,8 +135,8 @@ func (p *crc32HashPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error) {
 
 type crc32HashPickBuilder struct{}
 
-// NewCr32HashPickBuilder returns a crc32 hash picker builder.
-func NewCr32HashPickBuilder() Builder {
+// NewCRC32HashPickBuilder returns a crc32 hash picker builder.
+func NewCRC32HashPickBuilder() Builder {
 	return crc32HashPickBuilder{}
 }
 

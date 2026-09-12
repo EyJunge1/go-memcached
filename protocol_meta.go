@@ -762,7 +762,6 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 	for i := KeyIndex + 1; i < len(parts); i++ {
 		kv := bytes.Split(parts[i], []byte("="))
 		if len(kv) != 2 {
-			fmt.Printf("memcached: parseMetaItemDebug got invalid key-value pair: %s\n", parts[i])
 			continue
 		}
 
@@ -770,7 +769,7 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 		case "exp":
 			item.TTL, _ = strconv.ParseInt(string(kv[1]), 10, 64)
 		case "la":
-			item.LastAssessTime, _ = strconv.ParseInt(string(kv[1]), 10, 64)
+			item.LastAccessTime, _ = strconv.ParseInt(string(kv[1]), 10, 64)
 		case "cas":
 			item.CAS, _ = strconv.ParseUint(string(kv[1]), 10, 64)
 		case "fetch":
@@ -785,7 +784,7 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 	return nil
 }
 
-func buildMetaNoOpCommand() (*request, *response) {
+func buildMetaNoopCommand() (*request, *response) {
 	req := buildRequest([]byte("mn"), nil, []byte("noop\r\n"))
 	resp := buildLimitedLineResponse(1)
 	return req, resp

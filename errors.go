@@ -17,11 +17,6 @@ var (
 	ErrExists = errors.New("exists")
 	// ErrNotStored response by server "NOT_STORED"
 	ErrNotStored = errors.New("not stored")
-	// ErrAuthenticationUnSupported represents an authentication not supported error.
-	// no need to authenticate or the server does not support PLAIN mechanism.
-	ErrAuthenticationUnSupported = errors.New("authentication not supported")
-	// ErrAuthenticationFailed represents an authentication failed error.
-	ErrAuthenticationFailed = errors.New("authentication failed")
 	// ErrInvalidArgument represents an invalid arguments error.
 	ErrInvalidArgument = errors.New("invalid arguments")
 	// ErrNotSupported represents a not supported error.
@@ -40,8 +35,6 @@ var (
 	ErrInvalidKey = errors.New("invalid key empty or too long(over than 2^16)")
 	// ErrInvalidValue represents an invalid value error.
 	ErrInvalidValue = errors.New("invalid value too long(over than 2^32)")
-	// ErrInvalidBinaryProtocol represents an invalid binary protocol error.
-	ErrInvalidBinaryProtocol = errors.New("invalid binary protocol")
 	// ErrInvalidNetworkProtocol represents an invalid network protocol error.
 	ErrInvalidNetworkProtocol = errors.New("invalid network protocol")
 )
