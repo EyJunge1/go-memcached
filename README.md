@@ -133,23 +133,32 @@ Now, we have implemented some commands, and we will implement more commands in t
 
     pre-commit install
     ```
-3. Install golangci-lint:
-    ```bash
-    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-    ```
+3. Quality checks use the Makefile (`make lint` downloads golangci-lint via `go run`; no global install required).
+
+#### Make targets
+
+```bash
+make lint      # golangci-lint (gofumpt + gosec)
+make test      # go test -race
+make coverage  # tests + coverage.html
+make vuln      # govulncheck
+make check     # lint + test + vuln
+```
 
 #### Running Tests
 
 ```bash
-go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+make test
+# or with coverage
+make coverage
 ```
 
 #### Code Style
 
-This project follows the standard Go code style guidelines and uses golangci-lint for additional checks. The configuration can be found in [.golangci.yml](./.golangci.yml).
+This project follows the standard Go code style guidelines and uses golangci-lint for additional checks, including **gosec**. Formatting is enforced by **gofumpt**. The configuration can be found in [.golangci.yml](./.golangci.yml).
 
 Key points:
-- Follow Go standard formatting (enforced by gofmt )
+- Follow Go standard formatting (enforced by gofumpt)
 - Ensure all code is properly tested
 - Write clear commit messages
 - Document public APIs

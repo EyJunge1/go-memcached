@@ -325,7 +325,7 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 		if i+1 >= n {
 			return nil, fmt.Errorf("missing data block: %w", ErrMalformedResponse)
 		}
-		item.Value = trimCRLF(lines[i+1])
+		item.Value = trimCRLF(lines[i+1]) //nolint:gosec // G602: i+1 is bounds-checked above
 		if uint64(len(item.Value)) != dataLen {
 			return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
 		}

@@ -249,7 +249,6 @@ func Test_connPool_get_oversize(t *testing.T) {
 	wg := sync.WaitGroup{}
 	for range 10 {
 		wg.Go(func() {
-
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			cn, err := pool.get(ctx)

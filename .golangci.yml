@@ -1,34 +1,33 @@
-linters-settings:
-  revive:
-    disable:
-      - exported
-      - var-naming
-
-  staticcheck:
-    checks:
-      - QF1008
-    disabled:
-      - QF1008
+version: "2"
 
 linters:
+  default: standard
   enable:
     - revive
-    - govet
-    - errcheck
-    - ineffassign
+    - gosec
   disable:
     - unused
     - staticcheck
+  settings:
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: exported
+          disabled: true
+        - name: var-naming
+          disabled: true
+  exclusions:
+    rules:
+      - linters:
+          - revive
+        text: "var-naming: avoid package names that conflict with Go standard library"
+      - linters:
+          - revive
+        text: "could remove embedded field.*Mutex"
 
 formatters:
   enable:
     - gofumpt
 
 run:
-  deadline: 5m
-
-issues:
-  exclude-use-default: false
-  exclude:
-    - "var-naming: avoid package names that conflict with Go standard library"
-    - "could remove embedded field.*Mutex"
+  timeout: 5m

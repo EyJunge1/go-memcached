@@ -93,17 +93,17 @@ func contains(t *testing.T, s, sub string) {
 	}
 }
 
-func lessOrEqual[T int | int64](t *testing.T, got, max T) {
+func lessOrEqual[T int | int64](t *testing.T, got, wantMax T) {
 	t.Helper()
-	if got > max {
-		t.Fatalf("got %v, want <= %v", got, max)
+	if got > wantMax {
+		t.Fatalf("got %v, want <= %v", got, wantMax)
 	}
 }
 
-func greater[T ~int | ~int64](t *testing.T, got, min T) {
+func greater[T ~int | ~int64](t *testing.T, got, wantMin T) {
 	t.Helper()
-	if got <= min {
-		t.Fatalf("got %v, want > %v", got, min)
+	if got <= wantMin {
+		t.Fatalf("got %v, want > %v", got, wantMin)
 	}
 }
 

@@ -1,7 +1,8 @@
-.PHONY: lint test coverage pre-commit docker-up docker-down clean
+.PHONY: lint test coverage vuln check pre-commit docker-up docker-down clean
 
 lint:
-	@go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8 run ./...
+	@echo "Running golangci-lint"
+	@go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
 
 test:
 	@echo "Running tests"
@@ -11,6 +12,12 @@ coverage:
 	@echo "Running tests with coverage"
 	@go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 	@go tool cover -html=coverage.txt -o coverage.html
+
+vuln:
+	@echo "Running govulncheck"
+	@go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+check: lint test vuln
 
 pre-commit:
 	@echo "Running pre-commit"
