@@ -1,0 +1,34 @@
+linters-settings:
+  revive:
+    disable:
+      - exported
+      - var-naming
+
+  staticcheck:
+    checks:
+      - QF1008
+    disabled:
+      - QF1008
+
+linters:
+  enable:
+    - revive
+    - govet
+    - errcheck
+    - ineffassign
+  disable:
+    - unused
+    - staticcheck
+
+formatters:
+  enable:
+    - gofumpt
+
+run:
+  deadline: 5m
+
+issues:
+  exclude-use-default: false
+  exclude:
+    - "var-naming: avoid package names that conflict with Go standard library"
+    - "could remove embedded field.*Mutex"
