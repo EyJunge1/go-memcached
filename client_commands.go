@@ -105,28 +105,13 @@ func (c *Client) Get(ctx context.Context, key string) (*Item, error) {
 	return items[0], nil
 }
 
-// Gets returns items including CAS. In cluster mode all keys must live on one node.
+// Gets returns items including CAS. Keys are grouped by cluster node and fetched in parallel.
 func (c *Client) Gets(ctx context.Context, keys ...string) ([]*Item, error) {
 	if len(keys) == 0 {
 		return []*Item{}, nil
 	}
-
-	req, resp := buildGetsCommand("gets", keys...)
-	defer releaseReqAndResp(req, resp)
-
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-
-	items, err := parseValueItems(resp.rawLines, false, true)
-	if err != nil {
-		return nil, fmt.Errorf("parse values failed: %w", ErrMalformedResponse)
-	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("no items found: %w", ErrNotFound)
-	}
-
-	return items, nil
+	items, err := c.getFromNodes(ctx, "gets", 0, keys, true)
+	return clusterGetItems(items, err)
 }
 
 // GetAndTouch returns the item and updates its expiration.
@@ -155,29 +140,112 @@ func (c *Client) GetAndTouch(ctx context.Context, expiry time.Duration, key stri
 }
 
 // GetAndTouches returns items, updates their expiration, and includes CAS.
+// Keys are grouped by cluster node and fetched in parallel.
 func (c *Client) GetAndTouches(ctx context.Context, expiry time.Duration, keys ...string) ([]*Item, error) {
 	if len(keys) == 0 {
 		return []*Item{}, nil
 	}
+	items, err := c.getFromNodes(ctx, "gats", expiry, keys, true)
+	return clusterGetItems(items, err)
+}
 
-	req, resp := buildGetAndTouchesCommand("gats", expiry, keys...)
+func clusterGetItems(items []*Item, err error) ([]*Item, error) {
+	if len(items) == 0 {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("no items found: %w", ErrNotFound)
+	}
+	return items, err
+}
+
+// GetMulti fetches keys in parallel per cluster node. Missing keys are omitted.
+// A non-nil error is only returned for I/O or parse failures.
+func (c *Client) GetMulti(ctx context.Context, keys []string) (map[string]*Item, error) {
+	items, err := c.getFromNodes(ctx, "gets", 0, keys, true)
+	out := make(map[string]*Item, len(items))
+	for _, item := range items {
+		out[item.Key] = item
+	}
+	return out, err
+}
+
+func (c *Client) getFromAddr(ctx context.Context, addr *Addr, command string, expiry time.Duration, keys []string, withCAS bool) ([]*Item, error) {
+	var req *request
+	var resp *response
+	if command == "gats" || command == "gat" {
+		req, resp = buildGetAndTouchesCommand(command, expiry, keys...)
+	} else {
+		req, resp = buildGetsCommand(command, keys...)
+	}
 	defer releaseReqAndResp(req, resp)
 
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+	if err := c.dispatchToAddr(ctx, addr, req, resp); err != nil {
+		return nil, err
 	}
-
-	// parse response
-	items, err := parseValueItems(resp.rawLines, false, true)
+	items, err := parseValueItems(resp.rawLines, false, withCAS)
 	if err != nil {
 		return nil, fmt.Errorf("parse values failed: %w", ErrMalformedResponse)
 	}
+	return items, nil
+}
 
-	if len(items) == 0 {
-		return nil, fmt.Errorf("no items found: %w", ErrNotFound)
+func (c *Client) getFromNodes(ctx context.Context, command string, expiry time.Duration, keys []string, withCAS bool) ([]*Item, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return []*Item{}, nil
 	}
 
-	return items, nil
+	for _, key := range keys {
+		if err := validateKeyAndValue([]byte(key), nil); err != nil {
+			return nil, err
+		}
+	}
+
+	addrs, picker := c.snapshotCluster()
+	if picker == nil || len(addrs) == 0 {
+		return nil, errors.New("no servers configured")
+	}
+
+	groups := make(map[*Addr][]string, len(addrs))
+	for _, key := range keys {
+		addr, err := picker.Pick(addrs, []byte(command), []byte(key))
+		if err != nil {
+			return nil, fmt.Errorf("pick node failed: %w", err)
+		}
+		groups[addr] = append(groups[addr], key)
+	}
+
+	if len(groups) == 1 {
+		for addr, nodeKeys := range groups {
+			return c.getFromAddr(ctx, addr, command, expiry, nodeKeys, withCAS)
+		}
+	}
+
+	type nodeResult struct {
+		items []*Item
+		err   error
+	}
+	ch := make(chan nodeResult, len(groups))
+	for addr, nodeKeys := range groups {
+		go func(addr *Addr, nodeKeys []string) {
+			items, err := c.getFromAddr(ctx, addr, command, expiry, nodeKeys, withCAS)
+			ch <- nodeResult{items: items, err: err}
+		}(addr, nodeKeys)
+	}
+
+	var items []*Item
+	var errs []error
+	for range groups {
+		result := <-ch
+		items = append(items, result.items...)
+		if result.err != nil {
+			errs = append(errs, result.err)
+		}
+	}
+	return items, errors.Join(errs...)
 }
 
 /**
@@ -212,6 +280,8 @@ func (c *Client) Incr(ctx context.Context, key string, delta uint64) (uint64, er
 	}
 
 	req, resp := buildArithmeticCommand("incr", key, delta, c.options.noReply)
+	defer releaseReqAndResp(req, resp)
+
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		return 0, fmt.Errorf("request failed: %w", err)
 	}
@@ -232,6 +302,8 @@ func (c *Client) Decr(ctx context.Context, key string, delta uint64) (uint64, er
 	}
 
 	req, resp := buildArithmeticCommand("decr", key, delta, c.options.noReply)
+	defer releaseReqAndResp(req, resp)
+
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		return 0, fmt.Errorf("request failed: %w", err)
 	}
@@ -266,6 +338,32 @@ func (c *Client) Touch(ctx context.Context, key string, expiry time.Duration) er
 	return nil
 }
 
+// Ping sends version to every configured server and fails if any node is down.
+func (c *Client) Ping(ctx context.Context) error {
+	call := func(ctx context.Context, cn memcachedConn) error {
+		req, resp := buildVersionCommand()
+		defer releaseReqAndResp(req, resp)
+
+		c.autoSwitchToUDP(ctx, req, resp)
+
+		if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
+			return wrapTransport(fmt.Errorf("send failed: %w", err))
+		}
+		if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
+			return wrapTransport(fmt.Errorf("recv failed: %w", err))
+		}
+		if len(resp.rawLines) == 0 || !bytes.HasPrefix(resp.rawLines[0], _VersionBytes) {
+			return fmt.Errorf("unexpected ping response: %w", ErrMalformedResponse)
+		}
+		return nil
+	}
+
+	if err := c.broadcastRequest(ctx, call); err != nil {
+		return fmt.Errorf("ping failed: %w", err)
+	}
+	return nil
+}
+
 // Version returns the server version string.
 func (c *Client) Version(ctx context.Context) (string, error) {
 	req, resp := buildVersionCommand()
@@ -294,10 +392,10 @@ func (c *Client) FlushAll(ctx context.Context) error {
 		c.autoSwitchToUDP(ctx, req, resp)
 
 		if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
-			return fmt.Errorf("send failed: %w", err)
+			return wrapTransport(fmt.Errorf("send failed: %w", err))
 		}
 		if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
-			return fmt.Errorf("recv failed: %w", err)
+			return wrapTransport(fmt.Errorf("recv failed: %w", err))
 		}
 
 		// expect OK\r\n
@@ -322,13 +420,12 @@ func (c *Client) FlushAll(ctx context.Context) error {
 
 // MetaSet stores a key with meta flags.
 func (c *Client) MetaSet(ctx context.Context, key, value []byte, msOptions ...MetaSetOption) (*MetaItem, error) {
-	if err := validateKeyAndValue(key, value); err != nil {
-		return nil, err
-	}
-
 	msFlags := &metaSetFlags{}
 	for _, applyFn := range msOptions {
 		applyFn(msFlags)
+	}
+	if err := validateKeyAndValueFlags(key, value, msFlags.b); err != nil {
+		return nil, err
 	}
 	if msFlags.T > math.MaxInt64 {
 		return nil, fmt.Errorf("TTL exceeds int64: %w", ErrInvalidArgument)
@@ -356,13 +453,12 @@ func (c *Client) MetaSet(ctx context.Context, key, value []byte, msOptions ...Me
 
 // MetaGet fetches a key with meta flags.
 func (c *Client) MetaGet(ctx context.Context, key []byte, mgOptions ...MetaGetOption) (*MetaItem, error) {
-	if err := validateKeyAndValue(key, nil); err != nil {
-		return nil, err
-	}
-
 	mgFlags := &metaGetFlags{}
 	for _, applyFn := range mgOptions {
 		applyFn(mgFlags)
+	}
+	if err := validateKeyAndValueFlags(key, nil, mgFlags.b); err != nil {
+		return nil, err
 	}
 
 	req, resp := buildMetaGetCommand(key, mgFlags)
@@ -384,13 +480,12 @@ func (c *Client) MetaGet(ctx context.Context, key []byte, mgOptions ...MetaGetOp
 
 // MetaDelete deletes a key with meta flags.
 func (c *Client) MetaDelete(ctx context.Context, key []byte, options ...MetaDeleteOption) (*MetaItem, error) {
-	if err := validateKeyAndValue(key, nil); err != nil {
-		return nil, err
-	}
-
 	mdFlags := &metaDeleteFlags{}
 	for _, applyFn := range options {
 		applyFn(mdFlags)
+	}
+	if err := validateKeyAndValueFlags(key, nil, mdFlags.b); err != nil {
+		return nil, err
 	}
 
 	req, resp := buildMetaDeleteCommand(key, mdFlags)
@@ -412,13 +507,12 @@ func (c *Client) MetaDelete(ctx context.Context, key []byte, options ...MetaDele
 
 // MetaArithmetic increments or decrements a key with meta flags.
 func (c *Client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, options ...MetaArithmeticOption) (*MetaItem, error) {
-	if err := validateKeyAndValue(key, nil); err != nil {
-		return nil, err
-	}
-
 	maFlags := &metaArithmeticFlags{}
 	for _, applyFn := range options {
 		applyFn(maFlags)
+	}
+	if err := validateKeyAndValueFlags(key, nil, maFlags.b); err != nil {
+		return nil, err
 	}
 
 	req, resp := buildMetaArithmeticCommand(key, delta, maFlags)
@@ -439,8 +533,19 @@ func (c *Client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, o
 }
 
 func validateKeyAndValue(key, value []byte) error {
+	return validateKeyAndValueFlags(key, value, false)
+}
+
+func validateKeyAndValueFlags(key, value []byte, binaryKey bool) error {
 	if nKey := len(key); nKey == 0 || nKey > maxKeySize {
 		return ErrInvalidKey
+	}
+	if !binaryKey {
+		for _, b := range key {
+			if b <= ' ' || b == 0x7f {
+				return ErrInvalidKey
+			}
+		}
 	}
 
 	if nValue := len(value); nValue > maxValueSize {
@@ -452,13 +557,12 @@ func validateKeyAndValue(key, value []byte) error {
 
 // MetaDebug returns debug metadata for a key.
 func (c *Client) MetaDebug(ctx context.Context, key []byte, options ...MetaDebugOption) (*MetaItemDebug, error) {
-	if err := validateKeyAndValue(key, nil); err != nil {
-		return nil, err
-	}
-
 	mdFlags := &metaDebugFlags{}
 	for _, applyFn := range options {
 		applyFn(mdFlags)
+	}
+	if err := validateKeyAndValueFlags(key, nil, mdFlags.b); err != nil {
+		return nil, err
 	}
 
 	req, resp := buildMetaDebugCommand(key, mdFlags)

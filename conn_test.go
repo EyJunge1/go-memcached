@@ -528,3 +528,17 @@ func Test_connPool_get_closes_connection_created_during_close(t *testing.T) {
 	isTrue(t, createdConn.closed.Load())
 	equal(t, 0, int(pool.numOpen.Load()))
 }
+
+func Test_connPool_discard(t *testing.T) {
+	pool := newConnPool(5, 10, 0, 0, func(context.Context) (memcachedConn, error) {
+		return &closeTrackingConn{mockConn: newMockConn()}, nil
+	})
+	cn, err := pool.get(context.Background())
+	noError(t, err)
+	equal(t, 1, int(pool.numOpen.Load()))
+
+	noError(t, pool.discard(cn))
+	equal(t, 0, int(pool.numOpen.Load()))
+	equal(t, 0, pool.stats().IdleConns)
+	isTrue(t, cn.(*closeTrackingConn).closed.Load())
+}

@@ -35,8 +35,7 @@ func main() {
 	// e.g. "localhost:11211,localhost:11212,localhost:11213"
 	addrs := "localhost:11211"
 
-	// client support options, you can set the options to client.
-	// e.g. memcached.New(addrs, memcached.WithDialTimeout(3*time.Second))
+	// Options: WithDialTimeout, WithDialContext (e.g. TLS), WithPickBuilder, ...
 	client, err := memcached.New(addrs)
 	if err != nil {
 		panic(err)
@@ -75,6 +74,10 @@ func main() {
 
 The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode (JSON, Protobuf, …) or compress in your application before `Set`; decode after `Get`. The library does not pull serialization or compression dependencies.
 
+Keys must be 1–250 bytes and must not contain whitespace or control characters. Meta commands with a binary-key flag skip the whitespace check.
+
+`Gets`, `GetAndTouches`, and `GetMulti` split keys across cluster nodes and fetch in parallel. `Ping` checks every node. `SetServers` replaces the node list at runtime. `WithDialContext` lets you plug in TLS or a custom dialer.
+
 ### Support Commands
 
 The public API exposes typed text- and meta-protocol commands only. There is no
@@ -92,7 +95,8 @@ Now, we have implemented some commands, and we will implement more commands in t
 | Prepend        | ✅      | `Prepend(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration) error`               | Prepend a value to the key                                        |
 | Cas            | ✅      | `Cas(ctx context.Context, key string, value []byte, flag uint32, expiry time.Duration, cas uint64) error`       | Compare and set a key-value pair to memcached                     |
 | ----           | -----  | RETRIEVAL COMMANDS                                                                                                  | ---                                                               |
-| Gets           | ✅      | `Gets(ctx context.Context, keys ...string) ([]*Item, error)`                                                        | Get a value by key from memcached with cas value                  |
+| Gets           | ✅      | `Gets(ctx context.Context, keys ...string) ([]*Item, error)`                                                        | Get values with CAS; cluster keys are fetched per node            |
+| GetMulti       | ✅      | `GetMulti(ctx context.Context, keys []string) (map[string]*Item, error)`                                            | Get values as a map; missing keys are omitted                     |
 | Get            | ✅      | `Get(ctx context.Context, key string) (*Item, error)`                                                               | Get a value by key from memcached                                 |
 | GetAndTouch    | ✅      | `GetAndTouch(ctx context.Context, expiry time.Duration, key string) (*Item, error)`                                 | Get a value by key from memcached and touch the key's expire time |
 | GetAndTouches  | ✅      | `GetAndTouches(ctx context.Context, expiry time.Duration, keys ...string) ([]*Item, error)`                         | Get a value by key from memcached and touch the key's expire time |
@@ -109,7 +113,9 @@ Now, we have implemented some commands, and we will implement more commands in t
 | MetaDebug      | ✅      | `MetaDebug(ctx context.Context, key []byte, options ...MetaDebugOption) (*MetaItemDebug, error)`                    | Debug a key's meta information                                    |
 | MetaNoop       | ✅      | `MetaNoop(ctx context.Context) error`                                                                               | Noop a key's meta information                                     |
 | Version        | ✅      | `Version(ctx context.Context) (string, error)`                                                                      | Get memcached server version                                      |
+| Ping           | ✅      | `Ping(ctx context.Context) error`                                                                                   | Check that every configured server responds                       |
 | FlushAll       | ✅      | `FlushAll(ctx context.Context) error`                                                                               | Flush all keys in memcached server                                |
+| SetServers     | ✅      | `SetServers(addr string) error`                                                                                     | Replace the cluster address list at runtime                       |
 
 ### Development Guide
 

@@ -459,4 +459,9 @@ func Test_validateKeyAndValue(t *testing.T) {
 	isErrorIs(t, validateKeyAndValue(nil, []byte("value")), ErrInvalidKey)
 	isErrorIs(t, validateKeyAndValue([]byte(""), []byte("value")), ErrInvalidKey)
 	isErrorIs(t, validateKeyAndValue(bytes.Repeat([]byte("a"), maxKeySize+1), nil), ErrInvalidKey)
+	isErrorIs(t, validateKeyAndValue([]byte("has space"), nil), ErrInvalidKey)
+	isErrorIs(t, validateKeyAndValue([]byte("has\ttab"), nil), ErrInvalidKey)
+	isErrorIs(t, validateKeyAndValue([]byte{0x7f}, nil), ErrInvalidKey)
+	noError(t, validateKeyAndValueFlags([]byte("has space"), nil, true))
+	equal(t, 250, maxKeySize)
 }

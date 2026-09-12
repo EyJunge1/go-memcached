@@ -32,7 +32,7 @@ var (
 	// It is returned when the given address is invalid.
 	ErrInvalidAddress = errors.New("invalid address")
 	// ErrInvalidKey represents an invalid key error.
-	ErrInvalidKey = errors.New("invalid key empty or too long(over than 2^16)")
+	ErrInvalidKey = errors.New("invalid key: empty, longer than 250 bytes, or contains whitespace/control")
 	// ErrInvalidValue represents an invalid value error.
 	ErrInvalidValue = errors.New("invalid value too long(over than 2^32)")
 	// ErrInvalidNetworkProtocol represents an invalid network protocol error.

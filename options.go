@@ -1,8 +1,13 @@
 package memcached
 
 import (
+	"context"
+	"net"
 	"time"
 )
+
+// DialContextFunc dials a memcached server. Use a tls.Dialer to speak TLS.
+type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 // ClientOption is the option set pattern for the client.
 type ClientOption func(*clientOptions)
@@ -51,6 +56,8 @@ type clientOptions struct {
 
 	// enableUDP means whether the client should use UDP datagram to send the request.
 	enableUDP bool
+
+	dialContext DialContextFunc
 }
 
 func newClientOptions() *clientOptions {
@@ -179,5 +186,16 @@ func WithNoReply() ClientOption {
 func WithUDPEnabled() ClientOption {
 	return func(o *clientOptions) {
 		o.enableUDP = true
+	}
+}
+
+// WithDialContext sets a custom dialer. The request context is additionally
+// bounded by DialTimeout so a custom dialer cannot hang forever.
+func WithDialContext(fn DialContextFunc) ClientOption {
+	return func(o *clientOptions) {
+		if fn == nil {
+			return
+		}
+		o.dialContext = fn
 	}
 }

@@ -60,7 +60,19 @@ func (a *Addr) Add(mdKey string, mdValue any) {
 	a.metadata[mdKey] = mdValue
 }
 
-func (a *Addr) dial(ctx context.Context, dialTimeout time.Duration) (net.Conn, error) {
+func (a *Addr) id() string {
+	return a.Network + "\x00" + a.Address
+}
+
+func (a *Addr) dial(ctx context.Context, dialTimeout time.Duration, dialFn DialContextFunc) (net.Conn, error) {
+	if dialFn != nil {
+		if dialTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, dialTimeout)
+			defer cancel()
+		}
+		return dialFn(ctx, a.Network, a.Address)
+	}
 	return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, a.Network, a.Address)
 }
 
@@ -112,8 +124,8 @@ type conn struct {
 }
 
 // newConnWithContext dials a TCP connection
-func newConnContext(ctx context.Context, addr *Addr, dialTimeout time.Duration) (*conn, error) {
-	rawConn, err := addr.dial(ctx, dialTimeout)
+func newConnContext(ctx context.Context, addr *Addr, dialTimeout time.Duration, dialFn DialContextFunc) (*conn, error) {
+	rawConn, err := addr.dial(ctx, dialTimeout, dialFn)
 	if err != nil {
 		return nil, fmt.Errorf("dialContext: %w", err)
 	}
@@ -366,6 +378,15 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 	p.numOpen.Add(1)
 	p.mu.Unlock()
 	return cn, nil
+}
+
+func (p *connPool) discard(cn memcachedConn) error {
+	if cn == nil {
+		return nil
+	}
+	err := cn.Close()
+	p.numOpen.Add(-1)
+	return err
 }
 
 func (p *connPool) put(cn memcachedConn) error {

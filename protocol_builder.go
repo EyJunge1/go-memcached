@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	maxKeySize   = math.MaxUint16
+	maxKeySize   = 250
 	maxValueSize = math.MaxUint32
 )
 
