@@ -1,0 +1,37 @@
+version: "2"
+
+# Aligned with https://github.com/uber-go/guide lint recommendations:
+# errcheck, goimports, revive, govet, staticcheck (via golangci-lint).
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - revive
+    - gosec
+    - unused
+    - staticcheck
+  settings:
+    revive:
+      enable-default-rules: true
+    staticcheck:
+      checks:
+        - all
+        - "-QF1008"
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/EyJunge1/go-memcached

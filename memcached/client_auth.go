@@ -1,0 +1,159 @@
+package memcached
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+	"unicode"
+)
+
+const _authProbeKeyPrefix = "__mc_auth_"
+
+// newAuthProbeKey returns a unique key used only for the token-auth handshake probe.
+func newAuthProbeKey() ([]byte, error) {
+	return newAuthProbeKeyWith(rand.Read)
+}
+
+// newAuthProbeKeyWith mints a probe key using read for entropy (tests inject failures).
+func newAuthProbeKeyWith(read func([]byte) (int, error)) ([]byte, error) {
+	var b [8]byte
+	if _, err := read(b[:]); err != nil {
+		return nil, fmt.Errorf("auth probe entropy: %w", err)
+	}
+	return []byte(_authProbeKeyPrefix + hex.EncodeToString(b[:])), nil
+}
+
+// isAuthProbeKey reports whether key was minted by newAuthProbeKey.
+func isAuthProbeKey(key string) bool {
+	return strings.HasPrefix(key, _authProbeKeyPrefix)
+}
+
+// validAuthSecret rejects credentials that contain whitespace or ASCII controls.
+func validAuthSecret(s string) error {
+	if strings.IndexFunc(s, func(r rune) bool {
+		return r <= 0x20 || r == 0x7f || unicode.IsSpace(r)
+	}) >= 0 {
+		return fmt.Errorf("auth credential invalid: %w", ErrInvalidArgument)
+	}
+	return nil
+}
+
+// validateAuthPeer verifies the actual standard-dial peer when plaintext auth
+// relies on the loopback exception. Custom dialers are an explicit trust boundary.
+func validateAuthPeer(cn wireConn, node *addr, rt *runtime) error {
+	if rt == nil || rt.tlsSet || rt.authAllowPlain || rt.customDial ||
+		node == nil || strings.HasPrefix(node.Network, "unix") {
+		return nil
+	}
+	c, ok := cn.(*conn)
+	if !ok || c.addr == nil {
+		return fmt.Errorf("cannot verify plaintext auth peer: %w", ErrInvalidArgument)
+	}
+	var ip net.IP
+	switch a := c.addr.(type) {
+	case *net.TCPAddr:
+		ip = a.IP
+	default:
+		host, _, err := net.SplitHostPort(c.addr.String())
+		if err == nil {
+			ip = net.ParseIP(host)
+		}
+	}
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("plaintext auth peer is not loopback: %w", ErrInvalidArgument)
+	}
+	return nil
+}
+
+// buildAuthCommand encodes the set used to plant the -Y token-auth probe item.
+func buildAuthCommand(username, password string, key []byte) (*request, *response, error) {
+	payload := []byte(username + " " + password)
+	return buildStorageCommand(_SetBytes, key, payload, 0, ExptimeNever, nil, false /* noReply */)
+}
+
+// authHandshake runs -Y token auth on a new connection and fails if the probe item remains.
+func authHandshake(
+	ctx context.Context,
+	cn wireConn,
+	user, pass string,
+	writeTimeout, readTimeout time.Duration,
+) error {
+	payload := []byte(user + " " + pass)
+	probeKey, err := newAuthProbeKey()
+	if err != nil {
+		return err
+	}
+	req, resp, err := buildAuthCommand(user, pass, probeKey)
+	if err != nil {
+		return err
+	}
+	defer releaseReqAndResp(req, resp)
+	resp.afterRecv = mapStorageReply
+	if err := req.send(ctx, cn, writeTimeout); err != nil {
+		return wrapTransport(fmt.Errorf("auth send: %w", err))
+	}
+	if err := resp.recv(ctx, cn, readTimeout); err != nil {
+		return wrapRecvError(fmt.Errorf("auth recv: %w", err))
+	}
+	if resp.afterRecv != nil {
+		if err := wrapRecvError(resp.afterRecv(resp)); err != nil {
+			return err
+		}
+	}
+
+	greq, gresp, err := buildGetsCommand("get", probeKey)
+	if err != nil {
+		return err
+	}
+	defer releaseReqAndResp(greq, gresp)
+	var leftover []Item
+	gresp.afterRecv = func(r *response) error {
+		items, err := parseValueItems(r.rawLines, false /* withCAS */)
+		if err != nil {
+			return fmt.Errorf("parse values: %w", err)
+		}
+		leftover = items
+		return nil
+	}
+	if err := greq.send(ctx, cn, writeTimeout); err != nil {
+		return wrapTransport(fmt.Errorf("auth verify send: %w", err))
+	}
+	if err := gresp.recv(ctx, cn, readTimeout); err != nil {
+		return wrapRecvError(fmt.Errorf("auth verify recv: %w", err))
+	}
+	if gresp.afterRecv != nil {
+		if err := wrapRecvError(gresp.afterRecv(gresp)); err != nil {
+			return err
+		}
+	}
+	if len(leftover) == 0 {
+		return nil
+	}
+	// A different body means the key already existed; -Y ate our set.
+	if !bytes.Equal(leftover[0].Value, payload) {
+		return nil
+	}
+
+	dreq, dresp, err := buildDeleteCommand(probeKey, nil, false /* noReply */)
+	if err != nil {
+		return errors.Join(
+			fmt.Errorf("auth left credential item: %w", ErrInvalidArgument),
+			err,
+		)
+	}
+	defer releaseReqAndResp(dreq, dresp)
+	dresp.afterRecv = mapDeletedReply
+	sendErr := dreq.send(ctx, cn, writeTimeout)
+	recvErr := dresp.recv(ctx, cn, readTimeout)
+	return errors.Join(
+		fmt.Errorf("auth left credential item: %w", ErrInvalidArgument),
+		sendErr,
+		recvErr,
+	)
+}
