@@ -41,8 +41,8 @@ var (
 // EXISTS\r\n
 // NOT_STORED\r\n
 func forecastCommonFaultLine(line []byte) error {
-	hit := MapWireLine(line, WireApp)
-	if hit.Class != WireFault || errors.Is(hit.Err, ErrMalformedResponse) {
+	hit := mapWireLine(line, wireApp)
+	if hit.Class != wireFault || errors.Is(hit.Err, ErrMalformedResponse) {
 		return nil
 	}
 	return hit.Err

@@ -12,8 +12,7 @@ func TestUDPGetRoundTrip(t *testing.T) {
 	srv.items["k"] = []byte("v")
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	item, err := client.GetOne(context.Background(), []byte("k"))
-	noError(t, err)
+	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("v"), item.Value)
 	ver, err := client.Version(context.Background())
 	noError(t, err)
@@ -23,20 +22,20 @@ func TestUDPGetRoundTrip(t *testing.T) {
 func TestUDPRejectsMutation(t *testing.T) {
 	srv := startFakeMemcachedUDP(t)
 	client := testClient(t, srv.Addr())
-	err := client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	err := client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.MetaGet(context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.StatsAll(context.Background())
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.MetaPipeline(context.Background(), []MetaOp{
-		{Op: MetaOpGet, Key: []byte("a"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
-		{Op: MetaOpSet, Key: []byte("b"), Body: []byte("v"), Flags: MetaSet{}},
+		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Key: []byte("b"), Body: []byte("v"), Set: &MetaSet{}},
 	})
 	isErrorIs(t, err, ErrNotSupported)
 }
 
-func TestUDPMetaGetAndPingAllowed(t *testing.T) {
+func TestUDPMetaGetAndVersionAllAllowed(t *testing.T) {
 	srv := startFakeMemcachedUDP(t)
 	srv.mu.Lock()
 	srv.items["k"] = []byte("v")
@@ -45,7 +44,8 @@ func TestUDPMetaGetAndPingAllowed(t *testing.T) {
 	got, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), got.Item.Value)
-	noError(t, client.Ping(context.Background()))
+	_, errVer := client.VersionAll(context.Background())
+	noError(t, errVer)
 }
 
 func TestUDPMetaDebugAllowed(t *testing.T) {
@@ -74,8 +74,7 @@ func TestUDPLateResponseWithOldIDIgnored(t *testing.T) {
 	srv.spoofFirst = true
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	item, err := client.GetOne(context.Background(), []byte("k"))
-	noError(t, err)
+	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("v"), item.Value)
 }
 
@@ -86,7 +85,7 @@ func TestUDPReservedIsMalformed(t *testing.T) {
 	srv.reserved = true
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	_, err := client.GetOne(context.Background(), []byte("k"))
+	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 
@@ -96,7 +95,7 @@ func TestUDPRejectsFlushAll(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	err := mustAdmin(t, client).FlushAll(context.Background(), FlushOpts{})
+	err := mustAdmin(t, client).All().FlushAll(context.Background(), FlushOpts{})
 	isErrorIs(t, err, ErrNotSupported)
 }
 

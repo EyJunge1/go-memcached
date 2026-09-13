@@ -38,7 +38,7 @@ func validFreeStatsArgs(args []string) error {
 	return nil
 }
 
-func (c *Client) statsMapOnAddr(ctx context.Context, addr *Addr, args []string) (map[string]string, error) {
+func (c *Client) statsMapOnAddr(ctx context.Context, node *addr, args []string) (map[string]string, error) {
 	sub := strings.Join(args, " ")
 	req, resp := buildStatsCommand(sub)
 	defer releaseReqAndResp(req, resp)
@@ -48,37 +48,13 @@ func (c *Client) statsMapOnAddr(ctx context.Context, addr *Addr, args []string) 
 		out, err = parseStatsMap(r.rawLines)
 		return err
 	}
-	if err := c.dispatchToAddr(ctx, addr, req, resp); err != nil {
+	if err := c.dispatchToAddr(ctx, node, req, resp); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// Stats returns STAT key/value pairs from one hashed node.
-// reset and sizes are only allowed on Admin(). detail is rejected
-// (OK/PREFIX replies); use Admin().On().StatsDetail.
-func (c *Client) Stats(ctx context.Context, args ...string) (map[string]string, error) {
-	if err := validFreeStatsArgs(args); err != nil {
-		return nil, err
-	}
-	if statsArgsRestricted(args) {
-		return nil, fmt.Errorf("stats %q requires Admin: %w", strings.Join(args, " "), ErrAdminNotEnabled)
-	}
-	req, resp := buildStatsCommand(strings.Join(args, " "))
-	defer releaseReqAndResp(req, resp)
-	var out map[string]string
-	resp.afterRecv = func(r *response) error {
-		var err error
-		out, err = parseStatsMap(r.rawLines)
-		return err
-	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	return out, nil
-}
-
-// StatsAll returns stats for every node keyed by Addr.id().
+// StatsAll returns stats for every node keyed by network + address.
 func (c *Client) StatsAll(ctx context.Context, args ...string) (map[string]map[string]string, error) {
 	if err := validFreeStatsArgs(args); err != nil {
 		return nil, err
@@ -88,10 +64,10 @@ func (c *Client) StatsAll(ctx context.Context, args ...string) (map[string]map[s
 	}
 	out := make(map[string]map[string]string)
 	var mu sync.Mutex
-	err := c.broadcastRequest(ctx, func(ctx context.Context, addr *Addr, cn memcachedConn) error {
+	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn memcachedConn) error {
 		req, resp := buildStatsCommand(strings.Join(args, " "))
 		defer releaseReqAndResp(req, resp)
-		if err := c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
+		if err := c.sendOnConn(ctx, node, cn, req, resp); err != nil {
 			return err
 		}
 		m, err := parseStatsMap(resp.rawLines)
@@ -99,7 +75,7 @@ func (c *Client) StatsAll(ctx context.Context, args ...string) (map[string]map[s
 			return wrapRecvError(err)
 		}
 		mu.Lock()
-		out[addr.id()] = m
+		out[node.id()] = m
 		mu.Unlock()
 		return nil
 	})
@@ -107,18 +83,4 @@ func (c *Client) StatsAll(ctx context.Context, args ...string) (map[string]map[s
 		return out, fmt.Errorf("StatsAll: %w", err)
 	}
 	return out, nil
-}
-
-// ParseGeneralStats maps a raw STAT map onto Statistic. Unknown keys go to Extra.
-func ParseGeneralStats(m map[string]string) Statistic {
-	stat := Statistic{}
-	for k, v := range m {
-		if !assignStat(&stat, k, v) {
-			if stat.Extra == nil {
-				stat.Extra = make(map[string]string)
-			}
-			stat.Extra[k] = v
-		}
-	}
-	return stat
 }

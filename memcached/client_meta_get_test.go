@@ -59,11 +59,11 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	equal(t, []byte("v"), changed.Item.Value)
 	isFalse(t, changed.Item.CASMatched)
 
-	noError(t, storeOK(client.Set(ctx, []byte("a"), []byte("1"), 0, 0)))
-	noError(t, storeOK(client.Set(ctx, []byte("b"), []byte("2"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a"), Value: []byte("1")}))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("b"), Value: []byte("2")}))
 	items, err := client.MetaPipeline(ctx, []MetaOp{
-		{Op: MetaOpGet, Key: []byte("a"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
-		{Op: MetaOpGet, Key: []byte("b"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Key: []byte("b"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 	})
 	noError(t, err)
 	equal(t, 2, len(items))
@@ -71,7 +71,7 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	equal(t, []byte("2"), items[1].Item.Value)
 
 	piped, err := client.MetaPipeline(ctx, []MetaOp{
-		{Op: MetaOpGet, Key: []byte("k"), Flags: MetaGet{Return: MetaGetReturn{Value: true}, CheckCAS: &cas}},
+		{Key: []byte("k"), Get: &MetaGet{Return: MetaGetReturn{Value: true}, CheckCAS: &cas}},
 	})
 	noError(t, err)
 	hasLen(t, piped, 1)
@@ -100,10 +100,20 @@ func TestMetaGetReturnsWireKey(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("foo"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("foo"), Value: []byte("v")}))
 	got, err := client.MetaGet(ctx, []byte("foo"), MetaGet{Return: MetaGetReturn{Key: true, Value: true}})
 	noError(t, err)
 	equal(t, []byte("foo"), got.WireKey)
 	equal(t, []byte("foo"), got.Item.Key)
 	isFalse(t, got.KeyBase64)
+}
+
+func TestMetaPipelineRejectsInvalidOp(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	_, err := client.MetaPipeline(ctx, []MetaOp{{Key: []byte("k")}})
+	isErrorIs(t, err, ErrInvalidArgument)
+	_, err = client.MetaPipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}, Set: &MetaSet{}}})
+	isErrorIs(t, err, ErrInvalidArgument)
 }

@@ -43,8 +43,8 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
 	}
 
-	hit := MapWireLine(lines[0], WireMeta)
-	if hit.Class == WireFault {
+	hit := mapWireLine(lines[0], wireMeta)
+	if hit.Class == wireFault {
 		if errors.Is(hit.Err, ErrNotFound) {
 			item.Status = hit.Status
 			return ErrNotFound

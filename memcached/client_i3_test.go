@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-func TestPipelineSetUsesItemExp(t *testing.T) {
+func TestPipelineStoreUsesItemExp(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	err := client.Pipeline().
-		Set(&Item{Key: []byte("k"), Value: []byte("v"), Exp: Rel(30 * time.Second)}).
-		Flush(context.Background())
+		Store(Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v"), Exp: Rel(30 * time.Second)}).
+		Run(context.Background())
 	noError(t, err)
 	srv.mu.Lock()
 	cmd := srv.lastCmd
@@ -24,37 +24,36 @@ func TestPipelineSetUsesItemExp(t *testing.T) {
 	contains(t, cmd, "set k 0 30 1")
 }
 
-func TestPipelineSetThenDelete(t *testing.T) {
+func TestPipelineStoreThenDelete(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 
 	err := client.Pipeline().
-		Set(&Item{Key: []byte("k"), Value: []byte("v")}).
+		Store(Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}).
 		Delete([]byte("k")).
-		Flush(ctx)
+		Run(ctx)
 	noError(t, err)
-	_, err = client.GetOne(ctx, []byte("k"))
-	isErrorIs(t, err, ErrNotFound)
+	items, err := client.Get(ctx, GetOpts{}, []byte("k"))
+	noError(t, err)
+	hasLen(t, items, 0)
 }
 
 func TestPipelineAcrossNodes(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
 	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
-		cfg.Cluster.PickBuilder = prefixPickBuilder{}
+		cfg.Cluster.pickBuilder = prefixPickBuilder{}
 	})
 	ctx := context.Background()
 	err := client.Pipeline().
-		Set(&Item{Key: []byte("a-one"), Value: []byte("1")}).
-		Set(&Item{Key: []byte("b-two"), Value: []byte("2")}).
-		Flush(ctx)
+		Store(Item{Mode: StoreSet, Key: []byte("a-one"), Value: []byte("1")}).
+		Store(Item{Mode: StoreSet, Key: []byte("b-two"), Value: []byte("2")}).
+		Run(ctx)
 	noError(t, err)
-	item, err := client.GetOne(ctx, []byte("a-one"))
-	noError(t, err)
+	item := mustGet(t, client, ctx, []byte("a-one"))
 	equal(t, []byte("1"), item.Value)
-	item, err = client.GetOne(ctx, []byte("b-two"))
-	noError(t, err)
+	item = mustGet(t, client, ctx, []byte("b-two"))
 	equal(t, []byte("2"), item.Value)
 }
 
@@ -108,14 +107,14 @@ func TestUnixSocketAnyModeAllowsWorldWritable(t *testing.T) {
 	equal(t, "fake-1.0", ver)
 }
 
-func TestPingClearsDeadServer(t *testing.T) {
+func TestVersionAllClearsDeadServer(t *testing.T) {
 	good := startFakeMemcached(t)
 	var dead atomic.Bool
 	dead.Store(true)
 	client := testClient(t, "127.0.0.1:1,"+good.Addr(), func(cfg *Config) {
-		cfg.Cluster.PickBuilder = firstAddrPickBuilder{}
+		cfg.Cluster.pickBuilder = firstAddrPickBuilder{}
 		cfg.Transport.RetryAttempts = 1
-		cfg.Failover = &Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
+		cfg.Failover = Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
 		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			if address == "127.0.0.1:1" && dead.Load() {
 				return nil, errors.New("dead")
@@ -126,10 +125,11 @@ func TestPingClearsDeadServer(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	greater(t, len(client.DeadServers()), 0)
 	dead.Store(false)
-	noError(t, client.Ping(context.Background()))
+	_, errVer := client.VersionAll(context.Background())
+	noError(t, errVer)
 	equal(t, 0, len(client.DeadServers()))
 }
 
@@ -147,7 +147,7 @@ func TestStatsAllPartialNodeFailure(t *testing.T) {
 	}()
 
 	client := testClient(t, good.Addr()+","+ln.Addr().String(), func(cfg *Config) {
-		cfg.Failover = &Failover{}
+		cfg.Failover = Failover{}
 	})
 	stats, err := client.StatsAll(context.Background())
 	isError(t, err)
@@ -168,11 +168,11 @@ func TestGetCASPartialNodeFailure(t *testing.T) {
 	}()
 
 	client := testClient(t, good.Addr()+","+ln.Addr().String(), func(cfg *Config) {
-		cfg.Cluster.PickBuilder = prefixPickBuilder{}
-		cfg.Failover = &Failover{}
+		cfg.Cluster.pickBuilder = prefixPickBuilder{}
+		cfg.Failover = Failover{}
 	})
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("a-good"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-good"), Value: []byte("v")}))
 	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte("a-good"), []byte("b-dead"))
 	isError(t, err)
 	hasLen(t, items, 1)
@@ -190,7 +190,7 @@ func TestTouchNotFoundKeepsConnection(t *testing.T) {
 		}
 	})
 	isErrorIs(t, client.Touch(context.Background(), []byte("missing"), Rel(time.Second), MutateOpts{}), ErrNotFound)
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	equal(t, int32(1), dials.Load())
 }
 
@@ -198,7 +198,7 @@ func TestFakeGatStoresExpiry(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	exp := Rel(5 * time.Second)
 	items, err := client.Get(ctx, GetOpts{Touch: &exp}, []byte("k"))
 	noError(t, err)
@@ -215,10 +215,10 @@ func TestMetaPipelineMissIsEmptyItem(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("hit"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("hit"), Value: []byte("v")}))
 	items, err := client.MetaPipeline(ctx, []MetaOp{
-		{Op: MetaOpGet, Key: []byte("hit"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
-		{Op: MetaOpGet, Key: []byte("miss"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Key: []byte("hit"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Key: []byte("miss"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 	})
 	noError(t, err)
 	hasLen(t, items, 2)
@@ -226,11 +226,4 @@ func TestMetaPipelineMissIsEmptyItem(t *testing.T) {
 	equal(t, MetaStatusEN, items[1].Status)
 	isErrorIs(t, items[1].Err(), ErrNotFound)
 	isNil(t, items[1].Item.Value)
-}
-
-func TestMurmur3Hash2MatchesConcat(t *testing.T) {
-	h := newMurmur3(42)
-	a, b := []byte("tcp-127.0.0.1:112110"), []byte("user:1")
-	joined := append(append([]byte{}, a...), b...)
-	equal(t, h.hash(joined), h.hash2(a, b))
 }

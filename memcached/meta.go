@@ -206,24 +206,17 @@ type MetaArithmetic struct {
 	L           string
 }
 
-// MetaOpKind selects a pipeline command.
-type MetaOpKind uint8
-
-const (
-	MetaOpGet MetaOpKind = iota
-	MetaOpSet
-	MetaOpDelete
-	MetaOpArith
-	MetaOpNoop
-)
-
 // MetaOp is one entry in MetaPipeline.
+// Exactly one of Get, Set, Del, Arith, Noop must be non-nil.
 type MetaOp struct {
-	Op    MetaOpKind
 	Key   []byte
 	Body  []byte
 	Delta uint64
-	Flags any // MetaGet, MetaSet, MetaDelete, or MetaArithmetic
+	Get   *MetaGet
+	Set   *MetaSet
+	Del   *MetaDelete
+	Arith *MetaArithmetic
+	Noop  *MetaNoop
 }
 
 func applyOpaque(token string, flagsO *uint64, flagsOset *bool, flagsTok *string, flagsTokSet *bool) {

@@ -70,15 +70,11 @@ func TestAdminAllBroadcast(t *testing.T) {
 	b := startFakeMemcached(t)
 	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
 		cfg.AllowAdmin = true
-		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
 	})
 	all := mustAdmin(t, client).All()
 	ctx := context.Background()
 	noError(t, all.Verbosity(ctx, 1, AdminOpts{}))
 	noError(t, all.CacheMemLimit(ctx, 32, AdminOpts{}))
-	stats, err := all.Stats(ctx)
-	noError(t, err)
-	equal(t, 2, len(stats))
 }
 
 func TestAdminWatchAndDumps(t *testing.T) {

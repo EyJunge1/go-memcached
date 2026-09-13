@@ -31,19 +31,13 @@ type metaArithmeticFlags struct {
 type metaArithmeticMode string
 
 const (
-	// MetaArithmeticModeIncr means increment the item. also alias for "+".
 	MetaArithmeticModeIncr metaArithmeticMode = "I"
-	// MetaArithmeticModeDecr means decrement the item. also alias for "-".
 	MetaArithmeticModeDecr metaArithmeticMode = "D"
-	// MetaArithmeticModeIncrPlus is the documented + alias for increment.
-	MetaArithmeticModeIncrPlus metaArithmeticMode = "+"
-	// MetaArithmeticModeDecrMinus is the documented - alias for decrement.
-	MetaArithmeticModeDecrMinus metaArithmeticMode = "-"
 )
 
 func validMetaArithmeticMode(m metaArithmeticMode) bool {
 	switch m {
-	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr, MetaArithmeticModeIncrPlus, MetaArithmeticModeDecrMinus:
+	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr:
 		return true
 	default:
 		return false

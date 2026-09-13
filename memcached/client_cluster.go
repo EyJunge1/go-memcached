@@ -2,8 +2,6 @@ package memcached
 
 import (
 	"fmt"
-	"hash/crc32"
-	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -11,56 +9,34 @@ import (
 )
 
 var (
-	_ Resolver = defaultResolver{}
-
-	_ Builder = crc32HashPickBuilder{}
-	_ Builder = murmur3HashPickBuilder{}
-	_ Builder = rendezvousHashPickBuilder{}
-	_ Builder = ketamaPickBuilder{}
-
-	_ Picker = &crc32HashPicker{}
-	_ Picker = &murmur3HashPicker{}
-	_ Picker = &rendezvousHashPicker{}
-	_ Picker = &ketamaPicker{}
+	_ resolver = defaultResolver{}
+	_ builder  = ketamaPickBuilder{}
+	_ picker   = &ketamaPicker{}
 )
 
-// Resolver is responsible for resolving a given address
-// to a list of Addr, and also support custom address format.
-//
-// TODO: resolver should be periodically refreshed, so that we can
-// eliminate the dead Addr from the cluster. But this is an optional feature.
-type Resolver interface {
-	Resolve(addr string) ([]*Addr, error)
+type resolver interface {
+	Resolve(spec string) ([]*addr, error)
 }
 
-// Picker is responsible for picking a given key to a specific Addr
-// while considering the cluster state.
-type Picker interface {
-	Pick(addrs []*Addr, key []byte) (*Addr, error)
+type picker interface {
+	Pick(addrs []*addr, key []byte) (*addr, error)
 }
 
-// Builder is responsible for building a Picker from a given list of Addr.
-type Builder interface {
-	Build(addrs []*Addr) Picker
+type builder interface {
+	Build(addrs []*addr) picker
 }
 
-// The defaultResolver is the default implementation of Resolver.
-// It will resolve the given address to a list of Addr.
-// For example, if the given address is "localhost:11211",
-// it will return a list of Addr with only one Addr.
-// If the given address is "localhost:11211,localhost:11212",
-// it will return a list of Addr with two Addr.
 type defaultResolver struct{}
 
-func (r defaultResolver) Resolve(addr string) ([]*Addr, error) {
-	if addr == "" {
+func (r defaultResolver) Resolve(spec string) ([]*addr, error) {
+	if spec == "" {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 	}
 
-	addrs := strings.Split(addr, ",")
-	result := make([]*Addr, 0, len(addrs))
+	addrs := strings.Split(spec, ",")
+	result := make([]*addr, 0, len(addrs))
 
-	for idx, address := range addrs {
+	for _, address := range addrs {
 		address = strings.TrimSpace(address)
 		if address == "" {
 			continue
@@ -76,7 +52,7 @@ func (r defaultResolver) Resolve(addr string) ([]*Addr, error) {
 			return nil, err
 		}
 
-		result = append(result, NewAddrWeighted(network, resolvedAddr, idx, weight))
+		result = append(result, newAddrWeighted(network, resolvedAddr, weight))
 	}
 
 	if len(result) == 0 {
@@ -93,7 +69,7 @@ func splitAddrWeight(address string) (raw string, weight uint32, err error) {
 		return address, 0, nil
 	}
 	raw, query := address[:q], address[q+1:]
-	// libmemcached --SERVER=host:port/?weight; accept the extra slash.
+	// Accept an extra slash before ?weight=.
 	raw = strings.TrimSuffix(raw, "/")
 	if raw == "" {
 		return "", 0, fmt.Errorf("empty address: %w", ErrInvalidAddress)
@@ -117,7 +93,6 @@ func splitAddrWeight(address string) (raw string, weight uint32, err error) {
 	return raw, uint32(n), nil
 }
 
-// resolveAddr resolves single network address, supports tcp, udp and unix socket format.
 func (r defaultResolver) resolveAddr(address string) (network, addr string, err error) {
 	address = strings.TrimSpace(address)
 	if address == "" {
@@ -149,155 +124,4 @@ func (r defaultResolver) resolveAddr(address string) (network, addr string, err 
 	}
 
 	return network, addr, nil
-}
-
-// The crc32HashPicker is the default implementation of Picker.
-// It will pick an Addr by using the crc32 hash algorithm.
-type crc32HashPicker struct{}
-
-func (p *crc32HashPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
-	n := len(addrs)
-	if n == 0 {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
-	}
-	if n == 1 {
-		return addrs[0], nil
-	}
-
-	sum := crc32.ChecksumIEEE(key)
-	index64 := uint64(sum) % uint64(n)
-	if index64 > math.MaxInt {
-		return nil, fmt.Errorf("hash index exceeds int: %w", ErrInvalidAddress)
-	}
-	index := int(index64)
-	return addrs[index], nil
-}
-
-type crc32HashPickBuilder struct{}
-
-// NewCRC32HashPickBuilder returns a crc32 hash picker builder.
-func NewCRC32HashPickBuilder() Builder {
-	return crc32HashPickBuilder{}
-}
-
-func (b crc32HashPickBuilder) Build(_ []*Addr) Picker {
-	return &crc32HashPicker{}
-}
-
-// The murmur3HashPicker is the implementation of Picker using murmur3 hash algorithm.
-type murmur3HashPicker struct {
-	hash func([]byte) uint64
-}
-
-func (p *murmur3HashPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
-	n := len(addrs)
-	if n == 0 {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
-	}
-	if n == 1 {
-		return addrs[0], nil
-	}
-
-	sum := p.hash(key)
-	return addrs[sum%uint64(n)], nil
-}
-
-type murmur3HashPickBuilder struct {
-	seed uint64
-}
-
-// NewMurmur3HashPickBuilder creates a new Builder with the given seed.
-func NewMurmur3HashPickBuilder(seed uint64) Builder {
-	return murmur3HashPickBuilder{
-		seed: seed,
-	}
-}
-
-func (b murmur3HashPickBuilder) Build(_ []*Addr) Picker {
-	return &murmur3HashPicker{
-		hash: newMurmur3(b.seed).hash,
-	}
-}
-
-// The rendezvousHashPicker is the implementation of Picker using rendezvous hash algorithm.
-// It is also known as HRW (Highest Random Weight) hash algorithm which
-// is used to select a node in a distributed system.
-//
-// Its advantage is that if we have one more node offline, the data to be 'rebalance' would
-// affect less than the other hash algorithms.
-//
-// For example, if we have 3 nodes, before one node offline, the data distribution is:
-// key1(hash=0, node1), key2(hash=1, node2), key3(hash=2, node3)
-//
-// Once node1 offline, the data distribution is:
-// key1(hash=0, node2), key2(hash=1, node3), key3(hash=2, node1)
-// about 2/3 keys was affected.
-//
-// But if we use HRW hash algorithm, the data distribution would be:
-// key1(node2 highest, node2) key2(node2 highest, node2), key3(node3 highest, node3)
-// only 1/3 keys was affected.
-type rendezvousHashPicker struct {
-	hash2 func(addrKey, itemKey []byte) uint64
-}
-
-func (p *rendezvousHashPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
-	n := len(addrs)
-	if n == 0 {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
-	}
-	if n == 1 {
-		return addrs[0], nil
-	}
-	highest := uint64(0)
-	var winner int
-
-	for idx, addr := range addrs {
-		_addr := addr
-		score := p.score(_addr, key)
-
-		if score > highest {
-			highest = score
-			winner = idx
-		} else if score == highest {
-			// if the score is the same, we choose the one with the smaller address.
-			highest = score
-			// FIXED: use the higher priority address, to keep the highest score is stable.
-			//  normally, the score can decide the winner, this case is rare.
-			if _addr.Priority > addrs[winner].Priority {
-				winner = idx
-			}
-		}
-	}
-
-	return addrs[winner], nil
-}
-
-func (p *rendezvousHashPicker) score(addr *Addr, key []byte) uint64 {
-	return p.hash2(addr.shortcut(), key)
-}
-
-type rendezvousHashPickBuilder struct {
-	hash2 func(addrKey, itemKey []byte) uint64
-}
-
-// NewRendezvousHashPickBuilder creates a new Builder with the given seed and hash function.
-func NewRendezvousHashPickBuilder(seed uint64) Builder {
-	m := newMurmur3(seed)
-	return rendezvousHashPickBuilder{hash2: m.hash2}
-}
-
-// NewRendezvousHashPickBuilderWithHash creates a new Builder with the given hash function.
-func NewRendezvousHashPickBuilderWithHash(hash func(key []byte) uint64) Builder {
-	return rendezvousHashPickBuilder{
-		hash2: func(addrKey, itemKey []byte) uint64 {
-			buf := make([]byte, 0, len(addrKey)+len(itemKey))
-			buf = append(buf, addrKey...)
-			buf = append(buf, itemKey...)
-			return hash(buf)
-		},
-	}
-}
-
-func (b rendezvousHashPickBuilder) Build(_ []*Addr) Picker {
-	return &rendezvousHashPicker{hash2: b.hash2}
 }

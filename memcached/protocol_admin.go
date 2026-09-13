@@ -133,8 +133,8 @@ func adminStreamLineError(s string) error {
 	if s == "" {
 		return nil
 	}
-	hit := MapWireLine([]byte(s), WireDump)
-	if hit.Class == WireFault {
+	hit := mapWireLine([]byte(s), wireDump)
+	if hit.Class == wireFault {
 		return hit.Err
 	}
 	return nil
@@ -148,11 +148,11 @@ func parseAdminReply(resp *response) error {
 }
 
 func mapAdminStatus(line []byte) error {
-	hit := MapWireLine(line, WireAdmin)
-	if hit.Class == WireFault {
+	hit := mapWireLine(line, wireAdmin)
+	if hit.Class == wireFault {
 		return hit.Err
 	}
-	if hit.Class == WireNominal {
+	if hit.Class == wireNominal {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", trimCRLF(line), ErrMalformedResponse)

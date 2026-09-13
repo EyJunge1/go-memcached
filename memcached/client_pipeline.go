@@ -26,58 +26,39 @@ func (c *Client) Pipeline() *Pipeline {
 	return &Pipeline{c: c}
 }
 
-func (p *Pipeline) addStorage(mode StoreMode, item *Item) *Pipeline {
+func (p *Pipeline) Store(item Item) *Pipeline {
 	if p == nil || p.c == nil {
 		return p
 	}
-	if item == nil {
-		p.errs = append(p.errs, fmt.Errorf("nil item: %w", ErrInvalidArgument))
+	if item.Quiet {
+		p.errs = append(p.errs, fmt.Errorf("pipeline Quiet: %w", ErrInvalidArgument))
 		return p
 	}
-	req := StoreRequest{Key: item.Key, Value: item.Value, Flags: item.Flags, Exp: item.Exp, CAS: item.CAS}
-	command, err := storeCommand(mode)
+	command, err := storeCommand(item.Mode)
 	if err != nil {
 		p.errs = append(p.errs, err)
 		return p
 	}
-	key := p.c.nsBytes(req.Key)
-	if err := p.c.checkKeyValue(key, req.Value); err != nil {
+	key := p.c.nsBytes(item.Key)
+	if err := p.c.checkKeyValue(key, item.Value); err != nil {
 		p.errs = append(p.errs, err)
 		return p
 	}
+	flags, exp := item.Flags, item.Exp
+	if item.Mode == StoreAppend || item.Mode == StorePrepend {
+		flags, exp = 0, 0
+	}
 	var request *request
 	var resp *response
-	if mode == StoreCAS {
-		request, resp = buildCasCommand(key, req.Value, req.Flags, req.Exp, req.CAS, false)
+	if item.Mode == StoreCAS {
+		request, resp = buildCasCommand(key, item.Value, flags, exp, item.CAS, false)
 	} else {
-		if mode == StoreAppend || mode == StorePrepend {
-			req.Flags = 0
-			req.Exp = 0
-		}
-		request, resp = buildStorageCommand(command, key, req.Value, req.Flags, req.Exp, false)
+		request, resp = buildStorageCommand(command, key, item.Value, flags, exp, false)
 	}
 	resp.afterRecv = mapStorageReply
 	p.ops = append(p.ops, pipeOp{req: request, resp: resp, key: key})
 	return p
 }
-
-// Set queues a text set. Expiration comes from item.Exp.
-func (p *Pipeline) Set(item *Item) *Pipeline { return p.addStorage(StoreSet, item) }
-
-// Add queues a text add.
-func (p *Pipeline) Add(item *Item) *Pipeline { return p.addStorage(StoreAdd, item) }
-
-// Replace queues a text replace.
-func (p *Pipeline) Replace(item *Item) *Pipeline { return p.addStorage(StoreReplace, item) }
-
-// Append queues a text append.
-func (p *Pipeline) Append(item *Item) *Pipeline { return p.addStorage(StoreAppend, item) }
-
-// Prepend queues a text prepend.
-func (p *Pipeline) Prepend(item *Item) *Pipeline { return p.addStorage(StorePrepend, item) }
-
-// Cas queues a text cas.
-func (p *Pipeline) Cas(item *Item) *Pipeline { return p.addStorage(StoreCAS, item) }
 
 // Delete queues a text delete.
 func (p *Pipeline) Delete(key []byte) *Pipeline {
@@ -122,8 +103,8 @@ func shouldDiscardPipelineConn(err error) bool {
 	return shouldDiscardConn(err)
 }
 
-// Flush writes all queued frames, then reads all replies. Cluster nodes run in parallel.
-func (p *Pipeline) Flush(ctx context.Context) error {
+// Run writes all queued frames, then reads all replies. Cluster nodes run in parallel.
+func (p *Pipeline) Run(ctx context.Context) error {
 	if p == nil || p.c == nil {
 		return fmt.Errorf("nil pipeline: %w", ErrInvalidArgument)
 	}
@@ -141,9 +122,9 @@ func (p *Pipeline) Flush(ctx context.Context) error {
 	}
 	addrs = p.c.liveAddrs(addrs)
 
-	groups := make(map[*Addr][]pipeOp, len(addrs))
+	groups := make(map[*addr][]pipeOp, len(addrs))
 	for _, op := range p.ops {
-		addr, err := picker.Pick(addrs, p.c.hashKey(op.key))
+		addr, err := picker.Pick(addrs, op.key)
 		if err != nil {
 			p.errs = append(p.errs, fmt.Errorf("pick node failed: %w", err))
 			continue
@@ -156,8 +137,8 @@ func (p *Pipeline) Flush(ctx context.Context) error {
 		errs []error
 		wg   sync.WaitGroup
 	)
-	flushNode := func(addr *Addr, ops []pipeOp) {
-		if err := p.flushAddr(ctx, addr, ops); err != nil {
+	runNode := func(node *addr, ops []pipeOp) {
+		if err := p.runAddr(ctx, node, ops); err != nil {
 			mu.Lock()
 			errs = append(errs, err)
 			mu.Unlock()
@@ -165,22 +146,22 @@ func (p *Pipeline) Flush(ctx context.Context) error {
 	}
 	if len(groups) == 1 {
 		for addr, ops := range groups {
-			flushNode(addr, ops)
+			runNode(addr, ops)
 		}
 	} else {
 		for addr, ops := range groups {
-			wg.Go(func() { flushNode(addr, ops) })
+			wg.Go(func() { runNode(addr, ops) })
 		}
 		wg.Wait()
 	}
 	return errors.Join(append(p.errs, errs...)...)
 }
 
-func (p *Pipeline) flushAddr(ctx context.Context, addr *Addr, ops []pipeOp) error {
-	if isUDPNetwork(addr.Network) {
+func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error {
+	if isUDPNetwork(node.Network) {
 		return fmt.Errorf("udp pipeline: %w", ErrNotSupported)
 	}
-	cn, err := p.c.getConn(ctx, addr)
+	cn, err := p.c.getConn(ctx, node)
 	if err != nil {
 		return wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
 	}
@@ -205,13 +186,13 @@ func (p *Pipeline) flushAddr(ctx context.Context, addr *Addr, ops []pipeOp) erro
 	for _, op := range ops {
 		if err = op.req.write(cn); err != nil {
 			opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
-			p.c.noteFailure(addr)
+			p.c.noteFailure(node)
 			return opErr
 		}
 	}
 	if err = cn.Flush(); err != nil {
 		opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
-		p.c.noteFailure(addr)
+		p.c.noteFailure(node)
 		return opErr
 	}
 	_ = cn.setWriteDeadline(zeroTime)
@@ -227,7 +208,7 @@ func (p *Pipeline) flushAddr(ctx context.Context, addr *Addr, ops []pipeOp) erro
 		if err = op.resp.recv(ctx, cn, p.c.options.readTimeout); err != nil {
 			opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 			if shouldDiscardPipelineConn(opErr) {
-				p.c.noteFailure(addr)
+				p.c.noteFailure(node)
 				return errors.Join(append(joined, opErr)...)
 			}
 			joined = append(joined, opErr)
@@ -238,13 +219,13 @@ func (p *Pipeline) flushAddr(ctx context.Context, addr *Addr, ops []pipeOp) erro
 			if err = wrapRecvError(op.resp.afterRecv(op.resp)); err != nil {
 				if shouldDiscardPipelineConn(err) {
 					opErr = err
-					p.c.noteFailure(addr)
+					p.c.noteFailure(node)
 					return errors.Join(append(joined, err)...)
 				}
 				joined = append(joined, err)
 			}
 		}
 	}
-	p.c.noteSuccess(addr)
+	p.c.noteSuccess(node)
 	return errors.Join(joined...)
 }

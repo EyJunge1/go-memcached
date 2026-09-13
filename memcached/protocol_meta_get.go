@@ -201,8 +201,8 @@ func forecastCollectedMeta(lines [][]byte) error {
 		if isMetaNoopLine(lines[i]) {
 			continue
 		}
-		hit := MapWireLine(lines[i], WireMeta)
-		if hit.Class == WireFault && isChargeMetaFault(hit.Err) {
+		hit := mapWireLine(lines[i], wireMeta)
+		if hit.Class == wireFault && isChargeMetaFault(hit.Err) {
 			return hit.Err
 		}
 		if hit.Status == MetaStatusVA {
@@ -310,8 +310,8 @@ func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
 			i++
 			continue
 		}
-		hit := MapWireLine(lines[i], WireMeta)
-		if hit.Class == WireFault && isChargeMetaFault(hit.Err) {
+		hit := mapWireLine(lines[i], wireMeta)
+		if hit.Class == wireFault && isChargeMetaFault(hit.Err) {
 			if charge == nil {
 				charge = hit.Err
 			}

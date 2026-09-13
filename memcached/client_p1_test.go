@@ -28,14 +28,13 @@ func TestReplaceAppendPrependNotStored(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	noError(t, expectStore(ErrNotStored)(client.Replace(ctx, []byte("missing"), []byte("x"), 0, 0)))
-	noError(t, expectStore(ErrNotStored)(client.Append(ctx, []byte("missing"), []byte("x"))))
-	noError(t, expectStore(ErrNotStored)(client.Prepend(ctx, []byte("missing"), []byte("x"))))
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("mid"), 0, 0)))
-	noError(t, storeOK(client.Append(ctx, []byte("k"), []byte("end"))))
-	noError(t, storeOK(client.Prepend(ctx, []byte("k"), []byte("pre"))))
-	item, err := client.GetOne(ctx, []byte("k"))
-	noError(t, err)
+	noError(t, expectStore(ErrNotStored)(client.Store(ctx, Item{Mode: StoreReplace, Key: []byte("missing"), Value: []byte("x")})))
+	noError(t, expectStore(ErrNotStored)(client.Store(ctx, Item{Mode: StoreAppend, Key: []byte("missing"), Value: []byte("x")})))
+	noError(t, expectStore(ErrNotStored)(client.Store(ctx, Item{Mode: StorePrepend, Key: []byte("missing"), Value: []byte("x")})))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("mid")}))
+	noError(t, client.Store(ctx, Item{Mode: StoreAppend, Key: []byte("k"), Value: []byte("end")}))
+	noError(t, client.Store(ctx, Item{Mode: StorePrepend, Key: []byte("k"), Value: []byte("pre")}))
+	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, []byte("premidend"), item.Value)
 	equal(t, int32(1), dials.Load())
 }
@@ -45,17 +44,17 @@ func TestIncrNonNumericDecrUnderflowWrap(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 
-	noError(t, storeOK(client.Set(ctx, []byte("word"), []byte("abc"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("word"), Value: []byte("abc")}))
 	_, err := client.Incr(ctx, []byte("word"), 1, MutateOpts{})
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "non-numeric")
 
-	noError(t, storeOK(client.Set(ctx, []byte("n"), []byte("2"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("2")}))
 	got, err := client.Decr(ctx, []byte("n"), 5, MutateOpts{})
 	noError(t, err)
 	equal(t, uint64(0), got)
 
-	noError(t, storeOK(client.Set(ctx, []byte("w"), []byte("18446744073709551615"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("w"), Value: []byte("18446744073709551615")}))
 	got, err = client.Incr(ctx, []byte("w"), 1, MutateOpts{})
 	noError(t, err)
 	equal(t, uint64(0), got)
@@ -139,7 +138,7 @@ func TestCancelDuringValueBodyDiscardsConn(t *testing.T) {
 		cfg.Transport.ReadTimeout = time.Second
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
-	_, err = client.GetOne(ctx, []byte("k"))
+	_, err = client.Get(ctx, GetOpts{}, []byte("k"))
 	cancel()
 	isError(t, err)
 	_, err = client.Version(context.Background())
@@ -159,26 +158,20 @@ func TestStoreQuietDiscardsConn(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	err := client.Store(ctx, StoreSet, StoreRequest{Key: []byte("k"), Value: []byte("v"), Quiet: true})
+	err := client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v"), Quiet: true})
 	noError(t, err)
-	noError(t, storeOK(client.Set(ctx, []byte("k2"), []byte("v2"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k2"), Value: []byte("v2")}))
 	if dials.Load() < 2 {
 		t.Fatalf("quiet store should discard conn; dials=%d", dials.Load())
 	}
 }
 
-func TestParseGeneralStats(t *testing.T) {
-	st := ParseGeneralStats(map[string]string{"pid": "1", "version": "fake-1.0", "custom": "x"})
-	equal(t, "fake-1.0", st.Version)
-	equal(t, "x", st.Extra["custom"])
-}
-
 func TestStatsDetailOnAllowedOnAppClient(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
-	_, err := client.Stats(context.Background(), "sizes_enable")
+	_, err := client.StatsAll(context.Background(), "sizes_enable")
 	noError(t, err)
-	_, err = client.Stats(context.Background(), "detail", "on")
+	_, err = client.StatsAll(context.Background(), "detail", "on")
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	admin := mustAdminOn(t, client)
@@ -206,10 +199,10 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("a"), []byte("1"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a"), Value: []byte("1")}))
 	got, err := client.MetaPipeline(ctx, []MetaOp{
-		{Op: MetaOpGet, Key: []byte("a"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
-		{Op: MetaOpNoop, Flags: MetaNoop{P: "hint", L: "/path"}},
+		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Noop: &MetaNoop{P: "hint", L: "/path"}},
 	})
 	noError(t, err)
 	hasLen(t, got, 2)
@@ -341,11 +334,12 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	err = client.Store(ctx, StoreSet, StoreRequest{Key: []byte("k"), Value: []byte("v"), Quiet: true})
+	err = client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v"), Quiet: true})
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad command line")
-	_, err = client.GetOne(ctx, []byte("missing"))
-	isErrorIs(t, err, ErrNotFound)
+	items, err := client.Get(ctx, GetOpts{}, []byte("missing"))
+	noError(t, err)
+	hasLen(t, items, 0)
 	ver, err := client.Version(ctx)
 	noError(t, err)
 	equal(t, "after-quiet", ver)
@@ -358,8 +352,8 @@ func TestMetaPipelineRejectsDuplicateOpaque(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	_, err := client.MetaPipeline(context.Background(), []MetaOp{
-		{Op: MetaOpGet, Key: []byte("a"), Flags: MetaGet{Opaque: "same"}},
-		{Op: MetaOpGet, Key: []byte("b"), Flags: MetaGet{Opaque: "same"}},
+		{Key: []byte("a"), Get: &MetaGet{Opaque: "same"}},
+		{Key: []byte("b"), Get: &MetaGet{Opaque: "same"}},
 	})
 	isErrorIs(t, err, ErrInvalidArgument)
 }

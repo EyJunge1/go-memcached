@@ -205,7 +205,7 @@ func (resp *response) recv(ctx context.Context, rr memcachedConn, readTimeout ti
 	default:
 	}
 
-	return ErrUnknownIndicator
+	return fmt.Errorf("unknown end indicator: %w", ErrMalformedResponse)
 }
 
 func selectProximateDeadline(

@@ -20,7 +20,7 @@ func setupLiveClient(t *testing.T) *Client {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if err := c.Ping(ctx); err != nil {
+	if _, err := c.VersionAll(ctx); err != nil {
 		_ = c.Close()
 		t.Skip("no memcached on localhost:11211")
 	}
@@ -37,7 +37,7 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 	key := "Test_concurrent_dispatchRequest"
 	ctx := context.Background()
 
-	err := client.Set(ctx, []byte(key), []byte("Test_concurrent_dispatchRequest"), 0, 0)
+	err := client.Store(ctx, Item{Mode: StoreSet, Key: []byte(key), Value: []byte("Test_concurrent_dispatchRequest")})
 	noError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -104,16 +104,12 @@ func Test_concurrent(t *testing.T) {
 		counter := 0
 
 		for counter <= 200 {
-			item, err := client.GetOne(ctx, []byte(key))
-			if errors.Is(err, ErrNotFound) {
+			items, err := client.Get(ctx, GetOpts{}, []byte(key))
+			noError(t, err)
+			if len(items) == 0 {
 				goto next
 			}
-			noError(t, err)
-			if err != nil {
-				return
-			}
-
-			equal(t, value, string(item.Value))
+			equal(t, value, string(items[0].Value))
 			counter++
 
 		next:
@@ -160,8 +156,8 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 	key1 := "Test_classicReadCommandsRoundTrip_1"
 	key2 := "Test_classicReadCommandsRoundTrip_2"
 
-	noError(t, storeOK(client.Set(ctx, []byte(key1), value, flag, 0)))
-	noError(t, storeOK(client.Set(ctx, []byte(key2), value, flag, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte(key1), Value: value, Flags: flag}))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte(key2), Value: value, Flags: flag}))
 
 	assertItem := func(item *Item) {
 		notNil(t, item)
@@ -169,8 +165,7 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 		equal(t, flag, item.Flags)
 	}
 
-	item, err := client.GetOne(ctx, []byte(key1))
-	noError(t, err)
+	item := mustGet(t, client, ctx, []byte(key1))
 	assertItem(item)
 
 	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte(key1), []byte(key2))
@@ -248,7 +243,7 @@ func Test_unix(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if err := c.Ping(ctx); err != nil {
+	if _, err := c.VersionAll(ctx); err != nil {
 		_ = c.Close()
 		t.Skip("no unix memcached at /tmp/memcached.sock")
 	}

@@ -1,9 +1,8 @@
 package memcached
 
 import (
-	"crypto/md5" //nolint:gosec // G501: Ketama/libmemcached interop requires MD5
+	"crypto/md5" //nolint:gosec // G501: Ketama requires MD5
 	"fmt"
-	"hash/crc32"
 	"math"
 	"net"
 	"sort"
@@ -12,63 +11,20 @@ import (
 	"sync/atomic"
 )
 
-// libmemcached-awesome 1.1.4 continuum constants (hosts.cc / constants).
 const (
 	ketamaDefaultPort              = 11211
-	ketamaPointsPerServer          = 100
 	ketamaPointsPerServerW         = 160
 	ketamaWeightedEpsilon  float32 = 0.0000000001
 )
 
-// KetamaHash selects the hashkit algorithm used for unweighted continuum
-// points and for hashing item keys. Weighted continuum points always use MD5
-// (ketama_server_hash), matching libmemcached 1.1.4.
-type KetamaHash int
+type ketamaPickBuilder struct{}
 
-const (
-	// KetamaHashMD5 is the libmemcached KETAMA default (interop with php-memcached).
-	KetamaHashMD5 KetamaHash = iota
-	// KetamaHashCRC is hashkit CRC (not IEEE CRC-32).
-	KetamaHashCRC
-	// KetamaHashFNV1A is hashkit FNV-1a 32-bit.
-	KetamaHashFNV1A
-)
-
-// KetamaOptions configures NewKetamaPickBuilder.
-//
-// The default picker of this package is weighted Ketama/MD5.
-// php-memcached OPT_LIBKETAMA_COMPATIBLE is Weighted: true and Hash MD5.
-type KetamaOptions struct {
-	Hash            KetamaHash
-	Weighted        bool
-	PointsPerServer int // 0 → 100 unweighted / 160 weighted
+func defaultPickBuilder() builder {
+	return ketamaPickBuilder{}
 }
 
-type ketamaPickBuilder struct {
-	opts KetamaOptions
-}
-
-// NewKetamaPickBuilder returns a picker compatible with libmemcached-awesome
-// 1.1.4 MEMCACHED_DISTRIBUTION_CONSISTENT_KETAMA (and KETAMA_WEIGHTED).
-// It is not compatible with Ketama-SPY (Spymemcached).
-func NewKetamaPickBuilder(o KetamaOptions) Builder {
-	return ketamaPickBuilder{opts: o}
-}
-
-func (b ketamaPickBuilder) Build(_ []*Addr) Picker {
-	points := b.opts.PointsPerServer
-	if points <= 0 {
-		if b.opts.Weighted {
-			points = ketamaPointsPerServerW
-		} else {
-			points = ketamaPointsPerServer
-		}
-	}
-	return &ketamaPicker{
-		hash:     b.opts.Hash,
-		weighted: b.opts.Weighted,
-		points:   points,
-	}
+func (b ketamaPickBuilder) Build(_ []*addr) picker {
+	return &ketamaPicker{points: ketamaPointsPerServerW}
 }
 
 type ketamaPoint struct {
@@ -82,13 +38,11 @@ type ketamaHot struct {
 }
 
 type ketamaPicker struct {
-	hash     KetamaHash
-	weighted bool
-	points   int
-	hot      atomic.Pointer[ketamaHot]
+	points int
+	hot    atomic.Pointer[ketamaHot]
 }
 
-func (p *ketamaPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
+func (p *ketamaPicker) Pick(addrs []*addr, key []byte) (*addr, error) {
 	n := len(addrs)
 	if n == 0 {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
@@ -105,7 +59,7 @@ func (p *ketamaPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}
 
-	h := ketamaDigest(p.hash, key)
+	h := ketamaDigest(key)
 	idx := cont[ketamaLookup(cont, h)].index
 	if idx < 0 || idx >= n {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
@@ -113,12 +67,12 @@ func (p *ketamaPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
 	return addrs[idx], nil
 }
 
-func (p *ketamaPicker) continuumFor(addrs []*Addr) ([]ketamaPoint, error) {
+func (p *ketamaPicker) continuumFor(addrs []*addr) ([]ketamaPoint, error) {
 	key := ketamaCacheKey(addrs)
 	if h := p.hot.Load(); h != nil && h.cacheKey == key && h.continuum != nil {
 		return h.continuum, nil
 	}
-	cont, err := buildKetamaContinuum(addrs, p.hash, p.weighted, p.points)
+	cont, err := buildKetamaContinuum(addrs, p.points)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +80,7 @@ func (p *ketamaPicker) continuumFor(addrs []*Addr) ([]ketamaPoint, error) {
 	return cont, nil
 }
 
-func ketamaCacheKey(addrs []*Addr) string {
+func ketamaCacheKey(addrs []*addr) string {
 	var b strings.Builder
 	for i, a := range addrs {
 		if i > 0 {
@@ -142,47 +96,34 @@ func ketamaCacheKey(addrs []*Addr) string {
 	return b.String()
 }
 
-func buildKetamaContinuum(addrs []*Addr, hash KetamaHash, weighted bool, pointsPerServer int) ([]ketamaPoint, error) {
+func buildKetamaContinuum(addrs []*addr, pointsPerServer int) ([]ketamaPoint, error) {
 	live := len(addrs)
 	if live == 0 {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}
 
 	var totalWeight uint64
-	if weighted {
-		for _, a := range addrs {
-			totalWeight += uint64(a.ketamaWeight())
-		}
-		if totalWeight == 0 {
-			return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
-		}
+	for _, a := range addrs {
+		totalWeight += uint64(a.ketamaWeight())
+	}
+	if totalWeight == 0 {
+		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}
 
 	cont := make([]ketamaPoint, 0, live*pointsPerServer)
 	for hostIndex, addr := range addrs {
-		pointerPerServer := uint32(pointsPerServer) //nolint:gosec // G115: continuum points are a small config value
-		pointerPerHash := uint32(1)
-		if weighted {
-			// hosts.cc 1.1.4: floor((float)(pct * 160 / 4 * live + 0.0000000001F)) * 4
-			pct := float32(addr.ketamaWeight()) / float32(totalWeight)
-			inner := float32(pct*float32(ketamaPointsPerServerW)/4*float32(live) + ketamaWeightedEpsilon)
-			pointerPerServer = uint32(math.Floor(float64(inner))) * 4
-			pointerPerHash = 4
-		}
+		// hosts.cc 1.1.4: floor((float)(pct * 160 / 4 * live + 0.0000000001F)) * 4
+		pct := float32(addr.ketamaWeight()) / float32(totalWeight)
+		inner := float32(pct*float32(ketamaPointsPerServerW)/4*float32(live) + ketamaWeightedEpsilon)
+		pointerPerServer := uint32(math.Floor(float64(inner))) * 4
+		pointerPerHash := uint32(4)
 
 		hashes := pointerPerServer / pointerPerHash
 		for pointerIndex := uint32(1); pointerIndex <= hashes; pointerIndex++ {
 			hostKey := ketamaHostKey(addr, pointerIndex-1)
-			if weighted {
-				for x := uint32(0); x < pointerPerHash; x++ {
-					cont = append(cont, ketamaPoint{
-						value: ketamaServerHash(hostKey, x),
-						index: hostIndex,
-					})
-				}
-			} else {
+			for x := uint32(0); x < pointerPerHash; x++ {
 				cont = append(cont, ketamaPoint{
-					value: ketamaDigest(hash, []byte(hostKey)),
+					value: ketamaServerHash(hostKey, x),
 					index: hostIndex,
 				})
 			}
@@ -198,24 +139,24 @@ func buildKetamaContinuum(addrs []*Addr, hash KetamaHash, weighted bool, pointsP
 	return cont, nil
 }
 
-func ketamaHostKey(addr *Addr, pointer uint32) string {
-	host, port := ketamaHostPort(addr)
+func ketamaHostKey(node *addr, pointer uint32) string {
+	host, port := ketamaHostPort(node)
 	if port == ketamaDefaultPort {
 		return host + "-" + strconv.FormatUint(uint64(pointer), 10)
 	}
 	return host + ":" + strconv.FormatUint(uint64(port), 10) + "-" + strconv.FormatUint(uint64(pointer), 10)
 }
 
-func ketamaHostPort(addr *Addr) (host string, port uint32) {
-	if addr == nil {
+func ketamaHostPort(node *addr) (host string, port uint32) {
+	if node == nil {
 		return "", 0
 	}
-	if strings.HasPrefix(addr.Network, "unix") {
-		return addr.Address, 0
+	if strings.HasPrefix(node.Network, "unix") {
+		return node.Address, 0
 	}
-	h, p, err := net.SplitHostPort(addr.Address)
+	h, p, err := net.SplitHostPort(node.Address)
 	if err != nil {
-		return addr.Address, 0
+		return node.Address, 0
 	}
 	n, err := strconv.ParseUint(p, 10, 32)
 	if err != nil {
@@ -224,8 +165,6 @@ func ketamaHostPort(addr *Addr) (host string, port uint32) {
 	return h, uint32(n)
 }
 
-// ketamaLookup is libmemcached dispatch_host: first continuum point with
-// value >= h, wrapping to index 0 when the hash sits past the last point.
 func ketamaLookup(cont []ketamaPoint, h uint32) int {
 	i := sort.Search(len(cont), func(i int) bool {
 		return cont[i].value >= h
@@ -237,7 +176,7 @@ func ketamaLookup(cont []ketamaPoint, h uint32) int {
 }
 
 func ketamaServerHash(key string, alignment uint32) uint32 {
-	sum := md5.Sum([]byte(key)) //nolint:gosec // G401: Ketama/libmemcached interop requires MD5
+	sum := md5.Sum([]byte(key)) //nolint:gosec // G401: Ketama requires MD5
 	off := alignment * 4
 	return uint32(sum[off]) |
 		uint32(sum[off+1])<<8 |
@@ -245,33 +184,7 @@ func ketamaServerHash(key string, alignment uint32) uint32 {
 		uint32(sum[off+3])<<24
 }
 
-func ketamaDigest(h KetamaHash, key []byte) uint32 {
-	switch h {
-	case KetamaHashCRC:
-		return hashkitCRC32(key)
-	case KetamaHashFNV1A:
-		return hashkitFNV1A32(key)
-	default:
-		sum := md5.Sum(key) //nolint:gosec // G401: Ketama/libmemcached interop requires MD5
-		return uint32(sum[0]) | uint32(sum[1])<<8 | uint32(sum[2])<<16 | uint32(sum[3])<<24
-	}
-}
-
-// hashkitCRC32 matches libhashkit_crc32: IEEE CRC-32, then ((~crc)>>16)&0x7fff.
-func hashkitCRC32(key []byte) uint32 {
-	return (crc32.ChecksumIEEE(key) >> 16) & 0x7fff
-}
-
-func hashkitFNV1A32(key []byte) uint32 {
-	hash := uint32(2166136261)
-	for _, b := range key {
-		// libhashkit sign-extends char before XOR (Linux/macOS signed char).
-		v := uint32(b)
-		if b&0x80 != 0 {
-			v |= 0xffffff00
-		}
-		hash ^= v
-		hash *= 16777619
-	}
-	return hash
+func ketamaDigest(key []byte) uint32 {
+	sum := md5.Sum(key) //nolint:gosec // G401: Ketama requires MD5
+	return uint32(sum[0]) | uint32(sum[1])<<8 | uint32(sum[2])<<16 | uint32(sum[3])<<24
 }

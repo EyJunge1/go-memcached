@@ -6,13 +6,14 @@ import (
 	"testing"
 )
 
-func TestPingAndSetServers(t *testing.T) {
+func TestVersionAllAndSetServers(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
 	client := testClient(t, a.Addr(), func(cfg *Config) { cfg.AllowSetServers = true })
 
 	ctx := context.Background()
-	noError(t, client.Ping(ctx))
+	_, errVer := client.VersionAll(ctx)
+	noError(t, errVer)
 
 	dead, err := net.Listen("tcp", "127.0.0.1:0")
 	noError(t, err)
@@ -22,17 +23,20 @@ func TestPingAndSetServers(t *testing.T) {
 	servers, err := ParseServers(a.Addr() + "," + deadAddr)
 	noError(t, err)
 	noError(t, client.SetServers(servers))
-	isError(t, client.Ping(ctx))
+	_, errVer = client.VersionAll(ctx)
+	isError(t, errVer)
 
 	servers, err = ParseServers(a.Addr() + "," + b.Addr())
 	noError(t, err)
 	noError(t, client.SetServers(servers))
-	noError(t, client.Ping(ctx))
+	_, errVer = client.VersionAll(ctx)
+	noError(t, errVer)
 
 	servers, err = ParseServers(a.Addr())
 	noError(t, err)
 	noError(t, client.SetServers(servers))
-	noError(t, client.Ping(ctx))
+	_, errVer = client.VersionAll(ctx)
+	noError(t, errVer)
 }
 
 func TestSetServersRequiresPrivilege(t *testing.T) {
@@ -47,7 +51,6 @@ func TestVersionAllStatsAllAndServers(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
 	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
-		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
 	})
 
 	ctx := context.Background()
@@ -70,7 +73,7 @@ func TestVersionAllStatsAllAndServers(t *testing.T) {
 		equal(t, "fake-1.0", st["version"])
 	}
 
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	ps := client.PoolStats()
 	greater(t, len(ps), 0)
 	greater(t, ps[0].Total, 0)
@@ -83,8 +86,7 @@ func TestUnixSocketRoundTrip(t *testing.T) {
 	ver, err := client.Version(context.Background())
 	noError(t, err)
 	equal(t, "fake-1.0", ver)
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
-	item, err := client.GetOne(context.Background(), []byte("k"))
-	noError(t, err)
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
+	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("v"), item.Value)
 }

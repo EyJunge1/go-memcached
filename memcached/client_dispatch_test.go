@@ -21,7 +21,7 @@ func TestDialContextUsed(t *testing.T) {
 		}
 	})
 
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	greater(t, int(dials.Load()), 0)
 }
 
@@ -48,9 +48,9 @@ func TestTransportErrorDiscardsConnection(t *testing.T) {
 		}
 	})
 
-	err = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	err = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isError(t, err)
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	equal(t, int32(2), dials.Load())
 }
 
@@ -63,7 +63,7 @@ func TestDialContextHonorsDialTimeout(t *testing.T) {
 		}
 	})
 
-	err := client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	err := client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isErrorIs(t, err, context.DeadlineExceeded)
 }
 
@@ -96,7 +96,7 @@ func TestRetryOnDialFailure(t *testing.T) {
 		}
 	})
 
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	equal(t, int32(2), n.Load())
 }
 
@@ -104,9 +104,9 @@ func TestFailoverEjectsDeadNode(t *testing.T) {
 	good := startFakeMemcached(t)
 	var n atomic.Int32
 	client := testClient(t, "127.0.0.1:1,"+good.Addr(), func(cfg *Config) {
-		cfg.Cluster.PickBuilder = firstAddrPickBuilder{}
+		cfg.Cluster.pickBuilder = firstAddrPickBuilder{}
 		cfg.Transport.RetryAttempts = 1
-		cfg.Failover = &Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
+		cfg.Failover = Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
 		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			if address == "127.0.0.1:1" {
 				n.Add(1)
@@ -116,8 +116,8 @@ func TestFailoverEjectsDeadNode(t *testing.T) {
 		}
 	})
 
-	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
-	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
+	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isTrue(t, len(client.DeadServers()) > 0 || n.Load() > 0)
 }
 
@@ -125,9 +125,9 @@ func TestSetServersDropsRemovedHealth(t *testing.T) {
 	good := startFakeMemcached(t)
 	client := testClient(t, "127.0.0.1:1,"+good.Addr(), func(cfg *Config) {
 		cfg.AllowSetServers = true
-		cfg.Cluster.PickBuilder = firstAddrPickBuilder{}
+		cfg.Cluster.pickBuilder = firstAddrPickBuilder{}
 		cfg.Transport.RetryAttempts = 1
-		cfg.Failover = &Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
+		cfg.Failover = Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
 		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			if address == "127.0.0.1:1" {
 				return nil, fmt.Errorf("dead")
@@ -135,7 +135,7 @@ func TestSetServersDropsRemovedHealth(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	greater(t, len(client.DeadServers()), 0)
 
 	onlyGood, err := ParseServers(good.Addr())
@@ -175,7 +175,7 @@ func TestDispatchHonorsCancelWithoutDeadline(t *testing.T) {
 		cancel()
 	}()
 	start := time.Now()
-	err = client.Set(ctx, []byte("k"), []byte("v"), 0, 0)
+	err = client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isError(t, err)
 	isTrue(t, time.Since(start) < 2*time.Second)
 }
@@ -184,9 +184,8 @@ func TestUDPEnabledDoesNotFrameTCP(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
-	item, err := client.GetOne(context.Background(), []byte("k"))
-	noError(t, err)
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
+	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("v"), item.Value)
 }
 
@@ -203,26 +202,31 @@ func TestNewRejectsResolverRefreshWithoutAllowSetServers(t *testing.T) {
 	isErrorIs(t, err, ErrSetServersNotAllowed)
 }
 
-func TestNewDefaultsToKetamaAndFailover(t *testing.T) {
+func TestNewUsesKetamaAndFailoverOff(t *testing.T) {
 	cfg, err := testConfig("127.0.0.1:11211,10.0.0.1:11211")
 	noError(t, err)
 	c, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	b, ok := c.options.pickBuilder.(ketamaPickBuilder)
+	_, ok := c.options.pickBuilder.(ketamaPickBuilder)
 	isTrue(t, ok)
-	isTrue(t, b.opts.Weighted)
-	equal(t, KetamaHashMD5, b.opts.Hash)
-	equal(t, 2, c.options.failover.FailureLimit)
-	equal(t, time.Second, c.options.failover.RetryAfter)
-	equal(t, 30*time.Second, c.options.failover.DeadAfter)
-	isTrue(t, c.options.failover.Eject)
+	equal(t, Failover{}, c.options.failover)
+}
+
+func TestNewAppliesDefaultFailover(t *testing.T) {
+	cfg, err := testConfig("127.0.0.1:11211,10.0.0.1:11211")
+	noError(t, err)
+	cfg.Failover = DefaultFailover()
+	c, err := New(cfg)
+	noError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	equal(t, DefaultFailover(), c.options.failover)
 }
 
 func TestNewExplicitEmptyFailoverDisables(t *testing.T) {
 	cfg, err := testConfig("127.0.0.1:11211,10.0.0.1:11211")
 	noError(t, err)
-	cfg.Failover = &Failover{}
+	cfg.Failover = Failover{}
 	c, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
@@ -237,14 +241,13 @@ func TestNamespacePrefixesWireKey(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	srv.mu.Lock()
 	cmd := srv.lastCmd
 	srv.mu.Unlock()
 	contains(t, cmd, "ns:k")
 
-	item, err := client.GetOne(ctx, []byte("k"))
-	noError(t, err)
+	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, []byte("v"), item.Value)
 	equal(t, []byte("ns:k"), item.Key)
 }
@@ -256,7 +259,7 @@ func TestMinIdleWarmsPool(t *testing.T) {
 		cfg.Pool.MaxIdle = 4
 		cfg.Pool.MaxOpen = 100
 	})
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	ps := client.PoolStats()
 	hasLen(t, ps, 1)
 	greater(t, ps[0].Total, 1)
@@ -267,22 +270,21 @@ type countingResolver struct {
 	n     atomic.Int32
 }
 
-func (r *countingResolver) Resolve(addr string) ([]*Addr, error) {
+func (r *countingResolver) Resolve(spec string) ([]*addr, error) {
 	r.n.Add(1)
-	return r.inner.Resolve(addr)
+	return r.inner.Resolve(spec)
 }
 
-func TestNamespaceHashWithPrefixChangesPick(t *testing.T) {
+func TestNamespaceIsIncludedInPick(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
 	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
 		cfg.Cluster.Namespace = "b-"
-		cfg.Cluster.HashWithPrefix = true
-		cfg.Cluster.PickBuilder = prefixPickBuilder{}
+		cfg.Cluster.pickBuilder = prefixPickBuilder{}
 	})
 
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("foo"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("foo"), Value: []byte("v")}))
 	b.mu.Lock()
 	_, onB := b.items["b-foo"]
 	b.mu.Unlock()
@@ -294,7 +296,7 @@ func TestResolverRefreshRecallsResolve(t *testing.T) {
 	r := &countingResolver{}
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.AllowSetServers = true
-		cfg.Cluster.Resolver = r
+		cfg.Cluster.resolver = r
 		cfg.Cluster.ResolverRefresh = 20 * time.Millisecond
 		cfg.Cluster.ResolveSpec = srv.Addr()
 	})
@@ -309,7 +311,7 @@ type failResolver struct {
 	n atomic.Int32
 }
 
-func (r *failResolver) Resolve(string) ([]*Addr, error) {
+func (r *failResolver) Resolve(string) ([]*addr, error) {
 	r.n.Add(1)
 	return nil, errors.New("resolve failed")
 }
@@ -319,7 +321,7 @@ func TestResolverRefreshKeepsStandAndRecordsError(t *testing.T) {
 	r := &failResolver{}
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.AllowSetServers = true
-		cfg.Cluster.Resolver = r
+		cfg.Cluster.resolver = r
 		cfg.Cluster.ResolverRefresh = 20 * time.Millisecond
 		cfg.Cluster.ResolveSpec = srv.Addr()
 	})
@@ -340,7 +342,7 @@ type recordingResolver struct {
 	specs  []string
 }
 
-func (r *recordingResolver) Resolve(spec string) ([]*Addr, error) {
+func (r *recordingResolver) Resolve(spec string) ([]*addr, error) {
 	r.mu.Lock()
 	r.specs = append(r.specs, spec)
 	r.mu.Unlock()
@@ -353,7 +355,7 @@ func TestResolverRefreshKeepsResolveSpec(t *testing.T) {
 	r := &recordingResolver{target: srv.Addr()}
 	_ = testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.AllowSetServers = true
-		cfg.Cluster.Resolver = r
+		cfg.Cluster.resolver = r
 		cfg.Cluster.ResolverRefresh = 20 * time.Millisecond
 		cfg.Cluster.ResolveSpec = keep
 	})

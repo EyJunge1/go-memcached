@@ -26,8 +26,6 @@ var (
 	// when the response is not expected. Debug the server response to see whether it is
 	// correct, if it is correct, please report this issue.
 	ErrMalformedResponse = errors.New("malformed response")
-	// ErrUnknownIndicator internal error represents an unknown indicator, please report this issue.
-	ErrUnknownIndicator = errors.New("unknown indicator")
 	// ErrInvalidAddress represents an invalid address error.
 	// It is returned when the given address is invalid.
 	ErrInvalidAddress = errors.New("invalid address")
@@ -49,9 +47,9 @@ var (
 	ErrBadClass = errors.New("bad class")
 	// ErrNoSpare is the server NOSPARE reply.
 	ErrNoSpare = errors.New("no spare")
-	// ErrNotFull is the server NOTFULL reply.
+	// ErrNotFull is the Spec NOTFULL reply.
 	ErrNotFull = errors.New("not full")
-	// ErrUnsafe is the server UNSAFE reply.
+	// ErrUnsafe is the Spec UNSAFE reply.
 	ErrUnsafe = errors.New("unsafe")
 	// ErrSame is the server SAME reply (slabs reassign src == dest).
 	ErrSame = errors.New("same")
@@ -76,5 +74,5 @@ var (
 	// ErrTransport marks dial, send, and recv failures.
 	ErrTransport = errors.New("memcached transport")
 	// ErrAdminTargetRequired is returned when a node-local admin op has no On() target.
-	ErrAdminTargetRequired = errors.New("admin command requires On(addr)")
+	ErrAdminTargetRequired = errors.New("admin command requires On(server)")
 )

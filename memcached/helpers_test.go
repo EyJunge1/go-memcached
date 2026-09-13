@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -53,8 +54,19 @@ func noError(t *testing.T, err error) {
 	}
 }
 
-func storeOK(err error) error {
-	return err
+func mustStore(t *testing.T, c *Client, ctx context.Context, key, value []byte) {
+	t.Helper()
+	noError(t, c.Store(ctx, Item{Mode: StoreSet, Key: key, Value: value}))
+}
+
+func mustGet(t *testing.T, c *Client, ctx context.Context, key []byte) *Item {
+	t.Helper()
+	items, err := c.Get(ctx, GetOpts{}, key)
+	noError(t, err)
+	if len(items) == 0 {
+		t.Fatalf("get miss for %q", key)
+	}
+	return items[0]
 }
 
 func expectStore(want error) func(error) error {

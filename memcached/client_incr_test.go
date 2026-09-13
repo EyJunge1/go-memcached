@@ -10,7 +10,7 @@ func TestIncrDecr(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("n"), []byte("10"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("10")}))
 	got, err := client.Incr(ctx, []byte("n"), 5, MutateOpts{})
 	noError(t, err)
 	equal(t, uint64(15), got)

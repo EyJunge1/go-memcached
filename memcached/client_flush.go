@@ -9,38 +9,35 @@ import (
 )
 
 // FlushOpts controls flush_all delay, cluster stagger, and noreply.
-// Exp, when non-zero, is sent as the delay token (including ExptimeImmediate).
-// Delay is used only when Exp is 0 and maps through Rel; 0 omits the token (immediate).
-// Delay < 0 is invalid (not ExptimeImmediate); immediate flush is Delay 0 or Exp: ExptimeImmediate.
-// Exp cannot be combined with Delay or Stagger.
+// Delay 0 omits the token (immediate). ExptimeImmediate sends wire -1.
+// Stagger applies only when Delay is 0: node i uses Rel(i*Stagger).
 type FlushOpts struct {
-	Delay   time.Duration // used when Exp == 0; 0 omits the delay token; negative is ErrInvalidArgument
-	Exp     Exptime       // when != 0, sent as the flush_all delay token
+	Delay   Exptime
 	Stagger time.Duration
 	Quiet   bool
 }
 
 func flushDelayFor(o FlushOpts) func(int) Exptime {
 	return func(i int) Exptime {
-		if o.Exp != 0 {
-			return o.Exp
+		if o.Delay != 0 {
+			return o.Delay
 		}
-		return Rel(o.Delay + time.Duration(i)*o.Stagger)
+		return Rel(time.Duration(i) * o.Stagger)
 	}
 }
 
 func flushOptsValid(o FlushOpts) error {
-	if o.Delay < 0 || o.Stagger < 0 {
+	if o.Stagger < 0 {
 		return fmt.Errorf("flush_all: %w", ErrInvalidArgument)
 	}
-	if o.Exp != 0 && (o.Delay != 0 || o.Stagger != 0) {
-		return fmt.Errorf("flush_all Exp excludes Delay/Stagger: %w", ErrInvalidArgument)
+	if o.Delay != 0 && o.Stagger != 0 {
+		return fmt.Errorf("flush_all Delay excludes Stagger: %w", ErrInvalidArgument)
 	}
 	return nil
 }
 
-// FlushAll invalidates items on every configured server when the handle is
-// unbound. On(addr).FlushAll hits only that node. Requires Config.AllowFlushAll.
+// FlushAll invalidates items on the On() node. Requires Config.AllowFlushAll.
+// Broadcast is All().FlushAll.
 func (a *AdminClient) FlushAll(ctx context.Context, o FlushOpts) error {
 	if a == nil || a.c == nil {
 		return ErrAdminNotEnabled
@@ -48,17 +45,17 @@ func (a *AdminClient) FlushAll(ctx context.Context, o FlushOpts) error {
 	if err := flushOptsValid(o); err != nil {
 		return err
 	}
-	if a.target != nil {
-		addr, err := a.resolveTarget()
-		if err != nil {
-			return err
-		}
-		if !a.c.options.allowFlushAll {
-			return ErrFlushAllNotAllowed
-		}
-		return a.c.flushAllOnAddr(ctx, addr, flushDelayFor(o)(0), o.Quiet)
+	if a.target == nil {
+		return ErrAdminTargetRequired
 	}
-	return a.c.flushAllBroadcast(ctx, flushDelayFor(o), o.Quiet)
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return err
+	}
+	if !a.c.options.allowFlushAll {
+		return ErrFlushAllNotAllowed
+	}
+	return a.c.flushAllOnAddr(ctx, addr, flushDelayFor(o)(0), o.Quiet)
 }
 
 // FlushAll invalidates items on every configured server.
@@ -99,44 +96,44 @@ func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) Expti
 	return nil
 }
 
-func (c *Client) flushAllOnAddr(ctx context.Context, addr *Addr, delay Exptime, quiet bool) error {
-	if addr != nil && isUDPNetwork(addr.Network) {
+func (c *Client) flushAllOnAddr(ctx context.Context, node *addr, delay Exptime, quiet bool) error {
+	if node != nil && isUDPNetwork(node.Network) {
 		return fmt.Errorf("udp flush_all: %w", ErrNotSupported)
 	}
 	req, resp := buildFlushAllCommand(delay, quiet)
 	defer releaseReqAndResp(req, resp)
 	if quiet {
-		return c.sendQuietToAddr(ctx, addr, req, resp, true)
+		return c.sendQuietToAddr(ctx, node, req, resp, true)
 	}
 
-	cn, err := c.getConn(ctx, addr)
+	cn, err := c.getConn(ctx, node)
 	if err != nil {
-		c.noteFailure(addr)
+		c.noteFailure(node)
 		return err
 	}
 	var opErr error
 	defer func() { finishConn(cn, opErr) }()
 
-	c.enableUDPFraming(addr, req, resp)
+	c.enableUDPFraming(node, req, resp)
 	if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
 		opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
-		c.noteFailure(addr)
+		c.noteFailure(node)
 		return opErr
 	}
 	if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
 		opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
-		c.noteFailure(addr)
+		c.noteFailure(node)
 		return opErr
 	}
 	if err := mapStatusLine(resp, _OKCRLFBytes); err != nil {
 		opErr = wrapRecvError(err)
 		if isKeepaliveProtocolError(opErr) {
-			c.noteSuccess(addr)
+			c.noteSuccess(node)
 		} else {
-			c.noteFailure(addr)
+			c.noteFailure(node)
 		}
 		return opErr
 	}
-	c.noteSuccess(addr)
+	c.noteSuccess(node)
 	return nil
 }

@@ -1,29 +1,15 @@
 package memcached
 
-import "strconv"
-
-// Item represents a key-value pair to be got or stored.
+// Item is a get result and the input for Store / Pipeline.Store.
+// Get fills Key, Value, Flags, and CAS; Mode and Quiet stay zero.
 type Item struct {
+	Mode  StoreMode
 	Key   []byte
 	Value []byte
-
-	// Flags is the client flags stored with the item.
 	Flags uint32
-	// CAS is a unique value that is used to check-and-set operation.
-	// It is set when GetOpts.CAS is true (gets/gats).
-	CAS uint64
-	// Exp is the expiration used by Pipeline.Set/Add/Replace/Cas.
-	// Retrieval leaves it 0.
-	Exp Exptime
-}
-
-func (i *Item) String() string {
-	return "Item{" +
-		"Key:" + string(i.Key) +
-		" Value:" + string(i.Value) +
-		" Flags:" + strconv.FormatUint(uint64(i.Flags), 10) +
-		" CAS:" + strconv.FormatUint(i.CAS, 10) +
-		"}"
+	Exp   Exptime
+	CAS   uint64
+	Quiet bool
 }
 
 // MetaItem represents a key-value pair with meta information.
@@ -69,25 +55,6 @@ type MetaItem struct {
 	KeyBase64 bool
 	Status    MetaStatus
 	gotHD     bool
-}
-
-func (m *MetaItem) String() string {
-	return "MetaItem{" +
-		"Key:" + string(m.Key) +
-		" Value:" + string(m.Value) +
-		" CAS:" + strconv.FormatUint(m.CAS, 10) +
-		" Flags:" + strconv.FormatUint(uint64(m.Flags), 10) +
-		" TTL:" + strconv.FormatInt(m.TTL, 10) +
-		" LastAccessedTime:" + strconv.FormatInt(m.LastAccessedTime, 10) +
-		" Size:" + strconv.FormatUint(m.Size, 10) +
-		" Opaque:" + strconv.FormatUint(m.Opaque, 10) +
-		" OpaqueToken:" + m.OpaqueToken +
-		" HitBefore:" + strconv.FormatBool(m.HitBefore) +
-		" Won:" + strconv.FormatBool(m.Won) +
-		" Stale:" + strconv.FormatBool(m.Stale) +
-		" RecacheBusy:" + strconv.FormatBool(m.RecacheBusy) +
-		" CASMatched:" + strconv.FormatBool(m.CASMatched) +
-		"}"
 }
 
 // MetaItemDebug represents a key-value pair with meta information for debug.

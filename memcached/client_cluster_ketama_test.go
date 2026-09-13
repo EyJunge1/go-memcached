@@ -77,66 +77,26 @@ func Test_defaultResolver_Resolve_weight(t *testing.T) {
 }
 
 func Test_ketamaHostKey_defaultPortOmitsPort(t *testing.T) {
-	equal(t, "10.0.0.1-0", ketamaHostKey(NewAddr("tcp", "10.0.0.1:11211", 0), 0))
-	equal(t, "10.0.0.1:11212-3", ketamaHostKey(NewAddr("tcp", "10.0.0.1:11212", 0), 3))
-	equal(t, "/tmp/memcached.sock:0-0", ketamaHostKey(NewAddr("unix", "/tmp/memcached.sock", 0), 0))
-	equal(t, "::1-0", ketamaHostKey(NewAddr("tcp", "[::1]:11211", 0), 0))
-	equal(t, "::1:11212-1", ketamaHostKey(NewAddr("tcp", "[::1]:11212", 0), 1))
+	equal(t, "10.0.0.1-0", ketamaHostKey(newAddrWeighted("tcp", "10.0.0.1:11211", 0), 0))
+	equal(t, "10.0.0.1:11212-3", ketamaHostKey(newAddrWeighted("tcp", "10.0.0.1:11212", 0), 3))
+	equal(t, "/tmp/memcached.sock:0-0", ketamaHostKey(newAddrWeighted("unix", "/tmp/memcached.sock", 0), 0))
+	equal(t, "::1-0", ketamaHostKey(newAddrWeighted("tcp", "[::1]:11211", 0), 0))
+	equal(t, "::1:11212-1", ketamaHostKey(newAddrWeighted("tcp", "[::1]:11212", 0), 1))
 }
 
-func Test_ketamaDigest_md5MatchesHashkit(t *testing.T) {
+func Test_ketamaDigest_md5LittleEndian(t *testing.T) {
 	sum := md5.Sum([]byte("10.0.0.1-0"))
 	want := uint32(sum[0]) | uint32(sum[1])<<8 | uint32(sum[2])<<16 | uint32(sum[3])<<24
-	equal(t, want, ketamaDigest(KetamaHashMD5, []byte("10.0.0.1-0")))
+	equal(t, want, ketamaDigest([]byte("10.0.0.1-0")))
 	equal(t, want, ketamaServerHash("10.0.0.1-0", 0))
 }
 
-func Test_hashkitCRC32_matchesLibhashkit(t *testing.T) {
-	equal(t, uint32(0x3610), hashkitCRC32([]byte("hello")))
-	equal(t, uint32(0), hashkitCRC32(nil))
-	equal(t, uint32(0x7125), hashkitCRC32([]byte("10.0.0.1-0")))
-}
-
-func Test_hashkitFNV1A32_matchesLibhashkitSignedChar(t *testing.T) {
-	equal(t, uint32(0x4f9f2cab), hashkitFNV1A32([]byte("hello")))
-	// key[x] high bit: libhashkit sign-extends char before XOR.
-	equal(t, uint32(0x04f3b29f), hashkitFNV1A32([]byte{0x80}))
-}
-
-func Test_ketamaPick_goldenUnweightedThreeNodes(t *testing.T) {
-	addrs := []*Addr{
-		NewAddr("tcp", "10.0.0.1:11211", 0),
-		NewAddr("tcp", "10.0.0.2:11211", 1),
-		NewAddr("tcp", "10.0.0.3:11211", 2),
-	}
-	picker := NewKetamaPickBuilder(KetamaOptions{}).Build(addrs)
-
-	// Locked against an independent 1.1.4 reconstruction (MD5 LE, host-i, 100 points).
-	fixtures := map[string]string{
-		"hello":       "10.0.0.1:11211",
-		"user:1":      "10.0.0.2:11211",
-		"session:abc": "10.0.0.3:11211",
-		"a":           "10.0.0.2:11211",
-		"zzzzzzzz":    "10.0.0.1:11211",
-		"":            "10.0.0.1:11211",
-		"foo":         "10.0.0.2:11211",
-		"bar":         "10.0.0.3:11211",
-		"ketama":      "10.0.0.2:11211",
-		"ns:key":      "10.0.0.1:11211",
-	}
-	for key, want := range fixtures {
-		got, err := picker.Pick(addrs, []byte(key))
-		noError(t, err)
-		equal(t, want, got.Address)
-	}
-}
-
 func Test_ketamaPick_goldenWeightedTwoNodes(t *testing.T) {
-	addrs := []*Addr{
-		NewAddrWeighted("tcp", "10.0.0.1:11211", 0, 1),
-		NewAddrWeighted("tcp", "10.0.0.2:11211", 1, 2),
+	addrs := []*addr{
+		newAddrWeighted("tcp", "10.0.0.1:11211", 1),
+		newAddrWeighted("tcp", "10.0.0.2:11211", 2),
 	}
-	picker := NewKetamaPickBuilder(KetamaOptions{Weighted: true}).Build(addrs)
+	picker := defaultPickBuilder().Build(addrs)
 
 	fixtures := map[string]string{
 		"hello":       "10.0.0.2:11211",
@@ -157,24 +117,6 @@ func Test_ketamaPick_goldenWeightedTwoNodes(t *testing.T) {
 	}
 }
 
-func Test_ketamaPick_goldenMixedPorts(t *testing.T) {
-	addrs := []*Addr{
-		NewAddr("tcp", "10.0.0.1:11211", 0),
-		NewAddr("tcp", "10.0.0.2:11212", 1),
-	}
-	picker := NewKetamaPickBuilder(KetamaOptions{}).Build(addrs)
-	fixtures := map[string]string{
-		"hello":       "10.0.0.2:11212",
-		"user:1":      "10.0.0.2:11212",
-		"session:abc": "10.0.0.2:11212",
-	}
-	for key, want := range fixtures {
-		got, err := picker.Pick(addrs, []byte(key))
-		noError(t, err)
-		equal(t, want, got.Address)
-	}
-}
-
 func Test_ketamaLookup_wrapsPastLastPoint(t *testing.T) {
 	cont := []ketamaPoint{{value: 10, index: 1}, {value: 20, index: 0}}
 	equal(t, 0, ketamaLookup(cont, 0))
@@ -185,11 +127,11 @@ func Test_ketamaLookup_wrapsPastLastPoint(t *testing.T) {
 }
 
 func Test_ketamaWeighted_morePointsOnHeavierNode(t *testing.T) {
-	addrs := []*Addr{
-		NewAddrWeighted("tcp", "10.0.0.1:11211", 0, 1),
-		NewAddrWeighted("tcp", "10.0.0.2:11211", 1, 2),
+	addrs := []*addr{
+		newAddrWeighted("tcp", "10.0.0.1:11211", 1),
+		newAddrWeighted("tcp", "10.0.0.2:11211", 2),
 	}
-	cont, err := buildKetamaContinuum(addrs, KetamaHashMD5, true, ketamaPointsPerServerW)
+	cont, err := buildKetamaContinuum(addrs, ketamaPointsPerServerW)
 	noError(t, err)
 	var c0, c1 int
 	for _, p := range cont {
@@ -202,36 +144,18 @@ func Test_ketamaWeighted_morePointsOnHeavierNode(t *testing.T) {
 	if c1 <= c0 {
 		t.Fatalf("weight=2 node should have more points: light=%d heavy=%d", c0, c1)
 	}
-	// 1.1.4 float32: pct*160/4*live + 1e-10, floor, *4
-	// light: 1/3 * 160/4 * 2 → 104; heavy: 2/3 * 160/4 * 2 → 212
 	equal(t, 104, c0)
 	equal(t, 212, c1)
 }
 
-func Test_ketamaWeighted_continuumIgnoresNonMD5Hash(t *testing.T) {
-	addrs := []*Addr{
-		NewAddrWeighted("tcp", "10.0.0.1:11211", 0, 1),
-		NewAddrWeighted("tcp", "10.0.0.2:11211", 1, 2),
-	}
-	md5Cont, err := buildKetamaContinuum(addrs, KetamaHashMD5, true, ketamaPointsPerServerW)
-	noError(t, err)
-	crcCont, err := buildKetamaContinuum(addrs, KetamaHashCRC, true, ketamaPointsPerServerW)
-	noError(t, err)
-	hasLen(t, crcCont, len(md5Cont))
-	for i := range md5Cont {
-		equal(t, md5Cont[i].value, crcCont[i].value)
-		equal(t, md5Cont[i].index, crcCont[i].index)
-	}
-}
-
 func Test_ketamaEject_onlyDeadNodeKeysMove(t *testing.T) {
-	full := []*Addr{
-		NewAddr("tcp", "10.0.0.1:11211", 0),
-		NewAddr("tcp", "10.0.0.2:11211", 1),
-		NewAddr("tcp", "10.0.0.3:11211", 2),
+	full := []*addr{
+		newAddrWeighted("tcp", "10.0.0.1:11211", 0),
+		newAddrWeighted("tcp", "10.0.0.2:11211", 0),
+		newAddrWeighted("tcp", "10.0.0.3:11211", 0),
 	}
-	live := []*Addr{full[0], full[2]}
-	picker := NewKetamaPickBuilder(KetamaOptions{}).Build(full)
+	live := []*addr{full[0], full[2]}
+	picker := defaultPickBuilder().Build(full)
 
 	moved, stayed := 0, 0
 	for i := 0; i < 200; i++ {
@@ -255,19 +179,8 @@ func Test_ketamaEject_onlyDeadNodeKeysMove(t *testing.T) {
 	}
 }
 
-func Test_ketamaContinuum_pointCountUnweighted(t *testing.T) {
-	addrs := []*Addr{
-		NewAddr("tcp", "10.0.0.1:11211", 0),
-		NewAddr("tcp", "10.0.0.2:11211", 1),
-	}
-	cont, err := buildKetamaContinuum(addrs, KetamaHashMD5, false, ketamaPointsPerServer)
-	noError(t, err)
-	equal(t, 200, len(cont))
-}
-
 func Test_ketamaWeight_zeroMeansOne(t *testing.T) {
-	equal(t, uint32(1), (*Addr)(nil).ketamaWeight())
-	equal(t, uint32(1), NewAddr("tcp", "10.0.0.1:11211", 0).ketamaWeight())
-	equal(t, uint32(1), NewAddrWeighted("tcp", "10.0.0.1:11211", 0, 0).ketamaWeight())
-	equal(t, uint32(3), NewAddrWeighted("tcp", "10.0.0.1:11211", 0, 3).ketamaWeight())
+	equal(t, uint32(1), (*addr)(nil).ketamaWeight())
+	equal(t, uint32(1), newAddrWeighted("tcp", "10.0.0.1:11211", 0).ketamaWeight())
+	equal(t, uint32(3), newAddrWeighted("tcp", "10.0.0.1:11211", 3).ketamaWeight())
 }

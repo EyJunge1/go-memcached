@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// MutateOpts selects optional tokens for delete, incr, decr, and touch.
+// MutateOpts selects optional noreply for delete, touch, incr, and decr.
 type MutateOpts struct {
 	Quiet bool
 }

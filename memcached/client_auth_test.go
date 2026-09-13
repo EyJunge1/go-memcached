@@ -45,9 +45,8 @@ func TestOpaqueTokenRejectedAndAuth(t *testing.T) {
 	_, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
 
-	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
-	item, err := client.GetOne(context.Background(), []byte("k"))
-	noError(t, err)
+	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
+	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("v"), item.Value)
 }
 
@@ -56,7 +55,7 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
-	err := client.Ping(context.Background())
+	_, err := client.VersionAll(context.Background())
 	isErrorIs(t, err, ErrInvalidArgument)
 	srv.mu.Lock()
 	line := srv.lastSet
@@ -74,8 +73,9 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 		}
 	}
 	srv.mu.Unlock()
-	_, err = plain.GetOne(context.Background(), []byte("__mc_auth"))
-	isErrorIs(t, err, ErrNotFound)
+	items, err := plain.Get(context.Background(), GetOpts{}, []byte("__mc_auth"))
+	noError(t, err)
+	hasLen(t, items, 0)
 }
 
 func TestAuthLeavesUnrelatedProbeKey(t *testing.T) {
@@ -87,9 +87,9 @@ func TestAuthLeavesUnrelatedProbeKey(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
-	noError(t, client.Ping(context.Background()))
-	item, err := client.GetOne(context.Background(), appKey)
-	noError(t, err)
+	_, errVer := client.VersionAll(context.Background())
+	noError(t, errVer)
+	item := mustGet(t, client, context.Background(), appKey)
 	equal(t, []byte("app-data"), item.Value)
 }
 
@@ -99,13 +99,13 @@ func TestAuthHitsEveryNode(t *testing.T) {
 	var dials atomic.Int32
 	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
-		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
 		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			dials.Add(1)
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	noError(t, client.Ping(context.Background()))
+	_, errVer := client.VersionAll(context.Background())
+	noError(t, errVer)
 	equal(t, int32(2), dials.Load())
 	a.mu.Lock()
 	aSets := a.authSets
@@ -157,7 +157,8 @@ func TestAuthAllowsUnix(t *testing.T) {
 	client := testClient(t, "unix://"+path, func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
-	noError(t, client.Ping(context.Background()))
+	_, errVer := client.VersionAll(context.Background())
+	noError(t, errVer)
 }
 
 func TestSetServersRejectsAuthBypass(t *testing.T) {

@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 )
 
 // AdminClient exposes destructive and operational server commands.
 // Obtain it via Client.Admin after Config.AllowAdmin.
-// Node-local commands require On(addr). Shutdown cannot run without On.
+// Node-local commands require On(server). Shutdown cannot run without On.
 type AdminClient struct {
 	c      *Client
 	target *Server
@@ -36,12 +35,12 @@ func (c *Client) Admin() (*AdminClient, error) {
 }
 
 // On binds the admin handle to one configured server.
-func (a *AdminClient) On(addr Server) *AdminClient {
+func (a *AdminClient) On(server Server) *AdminClient {
 	if a == nil {
 		return nil
 	}
 	cp := *a
-	s := addr
+	s := server
 	cp.target = &s
 	return &cp
 }
@@ -54,7 +53,7 @@ func (a *AdminClient) All() *AdminBroadcast {
 	return &AdminBroadcast{c: a.c}
 }
 
-func (a *AdminClient) resolveTarget() (*Addr, error) {
+func (a *AdminClient) resolveTarget() (*addr, error) {
 	if a == nil || a.c == nil {
 		return nil, ErrAdminNotEnabled
 	}
@@ -98,10 +97,10 @@ func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *res
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
 	}
-	return b.c.broadcastRequest(ctx, func(ctx context.Context, addr *Addr, cn memcachedConn) error {
+	return b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn memcachedConn) error {
 		req, resp := build()
 		defer releaseReqAndResp(req, resp)
-		if err := b.c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
+		if err := b.c.sendOnConn(ctx, node, cn, req, resp); err != nil {
 			return err
 		}
 		return parseAdminReply(resp)
@@ -243,34 +242,6 @@ func (a *AdminClient) Stats(ctx context.Context, args ...string) (map[string]str
 		return nil, err
 	}
 	return a.c.statsMapOnAddr(ctx, addr, args)
-}
-
-// Stats returns STAT pairs from every node.
-func (b *AdminBroadcast) Stats(ctx context.Context, args ...string) (map[string]map[string]string, error) {
-	if b == nil || b.c == nil {
-		return nil, ErrAdminNotEnabled
-	}
-	if err := validFreeStatsArgs(args); err != nil {
-		return nil, err
-	}
-	out := make(map[string]map[string]string)
-	var mu sync.Mutex
-	err := b.c.broadcastRequest(ctx, func(ctx context.Context, addr *Addr, cn memcachedConn) error {
-		req, resp := buildStatsCommand(strings.Join(args, " "))
-		defer releaseReqAndResp(req, resp)
-		if err := b.c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
-			return err
-		}
-		m, err := parseStatsMap(resp.rawLines)
-		if err != nil {
-			return wrapRecvError(err)
-		}
-		mu.Lock()
-		out[addr.id()] = m
-		mu.Unlock()
-		return nil
-	})
-	return out, err
 }
 
 // SlabsReassign moves memory from source to dest slab class. source -1 means any.

@@ -202,10 +202,10 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 }
 
 type prefixPicker struct {
-	addrs []*Addr
+	addrs []*addr
 }
 
-func (p prefixPicker) Pick(_ []*Addr, key []byte) (*Addr, error) {
+func (p prefixPicker) Pick(_ []*addr, key []byte) (*addr, error) {
 	if len(p.addrs) == 0 {
 		return nil, ErrInvalidAddress
 	}
@@ -217,7 +217,7 @@ func (p prefixPicker) Pick(_ []*Addr, key []byte) (*Addr, error) {
 
 type firstAddrPicker struct{}
 
-func (firstAddrPicker) Pick(addrs []*Addr, _ []byte) (*Addr, error) {
+func (firstAddrPicker) Pick(addrs []*addr, _ []byte) (*addr, error) {
 	if len(addrs) == 0 {
 		return nil, ErrInvalidAddress
 	}
@@ -226,12 +226,12 @@ func (firstAddrPicker) Pick(addrs []*Addr, _ []byte) (*Addr, error) {
 
 type firstAddrPickBuilder struct{}
 
-func (firstAddrPickBuilder) Build([]*Addr) Picker {
+func (firstAddrPickBuilder) Build([]*addr) picker {
 	return firstAddrPicker{}
 }
 
 type prefixPickBuilder struct{}
 
-func (prefixPickBuilder) Build(addrs []*Addr) Picker {
+func (prefixPickBuilder) Build(addrs []*addr) picker {
 	return prefixPicker{addrs: addrs}
 }

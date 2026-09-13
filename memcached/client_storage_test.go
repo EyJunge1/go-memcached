@@ -12,9 +12,8 @@ func TestFakeServerRoundTrip(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("foo"), []byte("bar"), 7, 0)))
-	item, err := client.GetOne(ctx, []byte("foo"))
-	noError(t, err)
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("foo"), Value: []byte("bar"), Flags: 7}))
+	item := mustGet(t, client, ctx, []byte("foo"))
 	equal(t, []byte("bar"), item.Value)
 	equal(t, uint32(7), item.Flags)
 
@@ -35,9 +34,9 @@ func TestAddNotStoredKeepsConnection(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
-	noError(t, expectStore(ErrNotStored)(client.Add(ctx, []byte("k"), []byte("other"), 0, 0)))
-	noError(t, storeOK(client.Set(ctx, []byte("k2"), []byte("v2"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
+	noError(t, expectStore(ErrNotStored)(client.Store(ctx, Item{Mode: StoreAdd, Key: []byte("k"), Value: []byte("other")})))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k2"), Value: []byte("v2")}))
 	equal(t, int32(1), dials.Load())
 }
 
@@ -52,10 +51,10 @@ func TestCasExistsKeepsConnection(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
-	noError(t, expectStore(ErrExists)(client.Cas(ctx, []byte("k"), []byte("other"), 0, 0, 99)))
-	noError(t, expectStore(ErrNotFound)(client.Cas(ctx, []byte("missing"), []byte("x"), 0, 0, 1)))
-	noError(t, storeOK(client.Set(ctx, []byte("k2"), []byte("v2"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
+	noError(t, expectStore(ErrExists)(client.Store(ctx, Item{Mode: StoreCAS, Key: []byte("k"), Value: []byte("other"), CAS: 99})))
+	noError(t, expectStore(ErrNotFound)(client.Store(ctx, Item{Mode: StoreCAS, Key: []byte("missing"), Value: []byte("x"), CAS: 1})))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k2"), Value: []byte("v2")}))
 	equal(t, int32(1), dials.Load())
 }
 
@@ -71,11 +70,11 @@ func TestDeleteNotFoundKeepsConnection(t *testing.T) {
 
 	ctx := context.Background()
 	isErrorIs(t, client.Delete(ctx, []byte("missing"), MutateOpts{}), ErrNotFound)
-	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
+	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	equal(t, int32(1), dials.Load())
 }
 
-func TestSetRejectsCRLFKey(t *testing.T) {
+func TestStoreRejectsCRLFKey(t *testing.T) {
 	srv := startFakeMemcached(t)
 	var writes atomic.Int32
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
@@ -84,7 +83,7 @@ func TestSetRejectsCRLFKey(t *testing.T) {
 			return net.Dial(network, address)
 		}
 	})
-	err := client.Set(context.Background(), []byte("a\r\nb"), []byte("v"), 0, 0)
+	err := client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("a\r\nb"), Value: []byte("v")})
 	isErrorIs(t, err, ErrInvalidKey)
 	equal(t, int32(0), writes.Load())
 }

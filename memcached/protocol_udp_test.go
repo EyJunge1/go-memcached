@@ -68,11 +68,11 @@ func Test_enableUDPFramingOnlyOnUDP(t *testing.T) {
 	c := &Client{}
 	req := buildRequest([]byte("version"), nil, []byte("version\r\n"))
 	resp := buildLimitedLineResponse(1)
-	c.enableUDPFraming(&Addr{Network: "tcp", Address: "127.0.0.1:11211"}, req, resp)
+	c.enableUDPFraming(&addr{Network: "tcp", Address: "127.0.0.1:11211"}, req, resp)
 	isFalse(t, req.udpEnabled)
 	isFalse(t, resp.udpEnabled)
 
-	c.enableUDPFraming(&Addr{Network: "udp", Address: "127.0.0.1:11211"}, req, resp)
+	c.enableUDPFraming(&addr{Network: "udp", Address: "127.0.0.1:11211"}, req, resp)
 	isTrue(t, req.udpEnabled)
 	isTrue(t, resp.udpEnabled)
 	notZero(t, req.udpReqID)

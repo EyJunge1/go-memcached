@@ -80,13 +80,3 @@ func Test_buildMetaArithmeticCommand_omitsInjectedMode(t *testing.T) {
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("ma foo D1\r\n"), req.raw)
 }
-
-func Test_buildMetaArithmeticCommand_modeAliases(t *testing.T) {
-	req, resp := buildMetaArithmeticCommand([]byte("foo"), 1, &metaArithmeticFlags{M: MetaArithmeticModeIncrPlus})
-	defer releaseReqAndResp(req, resp)
-	equal(t, []byte("ma foo D1 M+\r\n"), req.raw)
-
-	req, resp = buildMetaArithmeticCommand([]byte("foo"), 2, &metaArithmeticFlags{M: MetaArithmeticModeDecrMinus})
-	defer releaseReqAndResp(req, resp)
-	equal(t, []byte("ma foo D2 M-\r\n"), req.raw)
-}

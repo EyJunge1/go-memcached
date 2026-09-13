@@ -12,47 +12,47 @@ import (
 
 func Test_connPool_new(t *testing.T) {
 	tests := []struct {
-		name           string
-		maxIdle        int
-		maxConn        int
-		maxLifeTime    time.Duration
-		maxIdleTimeout time.Duration
-		wantErr        bool
+		name        string
+		maxIdle     int
+		maxOpen     int
+		maxLifetime time.Duration
+		maxIdleTime time.Duration
+		wantErr     bool
 	}{
 		{
-			name:           "basic initialization",
-			maxIdle:        5,
-			maxConn:        10,
-			maxLifeTime:    time.Hour,
-			maxIdleTimeout: 5 * time.Minute,
-			wantErr:        false,
+			name:        "basic initialization",
+			maxIdle:     5,
+			maxOpen:     10,
+			maxLifetime: time.Hour,
+			maxIdleTime: 5 * time.Minute,
+			wantErr:     false,
 		},
 		{
-			name:           "zero max connections",
-			maxIdle:        0,
-			maxConn:        0,
-			maxLifeTime:    time.Hour,
-			maxIdleTimeout: time.Minute,
-			wantErr:        false,
+			name:        "zero max connections",
+			maxIdle:     0,
+			maxOpen:     0,
+			maxLifetime: time.Hour,
+			maxIdleTime: time.Minute,
+			wantErr:     false,
 		},
 		{
-			name:           "maxIdle equals maxConn",
-			maxIdle:        10,
-			maxConn:        10,
-			maxLifeTime:    time.Hour,
-			maxIdleTimeout: time.Minute,
-			wantErr:        false,
+			name:        "maxIdle equals maxOpen",
+			maxIdle:     10,
+			maxOpen:     10,
+			maxLifetime: time.Hour,
+			maxIdleTime: time.Minute,
+			wantErr:     false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := newConnPool(tt.maxIdle, tt.maxConn, tt.maxLifeTime, tt.maxIdleTimeout, createConn)
+			pool := newConnPool(tt.maxIdle, tt.maxOpen, tt.maxLifetime, tt.maxIdleTime, createConn)
 
 			notNil(t, pool)
 			equal(t, tt.maxIdle, pool.maxIdle)
-			equal(t, tt.maxConn, pool.maxConns)
-			equal(t, tt.maxIdleTimeout, pool.maxIdleTime)
+			equal(t, tt.maxOpen, pool.maxOpen)
+			equal(t, tt.maxIdleTime, pool.maxIdleTime)
 			equal(t, 0, pool.stats().IdleConns)
 			equal(t, 0, int(pool.numOpen.Load()))
 			isFalse(t, pool.closed)
@@ -60,7 +60,7 @@ func Test_connPool_new(t *testing.T) {
 			isNil(t, pool.cleanerCh)
 			equal(t, int64(0), pool.maxIdleClosed)
 			equal(t, int64(0), pool.maxIdleTimeClosed)
-			equal(t, int64(0), pool.maxLifeTimeClosed)
+			equal(t, int64(0), pool.maxLifetimeClosed)
 		})
 	}
 }
@@ -191,11 +191,11 @@ func Test_connPool_get_oversize(t *testing.T) {
 }
 
 // Test_connPool_cleanup_maxIdle tests the case that connection sits in
-// idle list for more than maxIdleTimeout, it should be closed.
+// idle list for more than maxIdleTime, it should be closed.
 func Test_connPool_cleanup_maxIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// maxLifeTime = 3600s
-		// maxIdleTimeout = 1s
+		// maxLifetime = 3600s
+		// maxIdleTime = 1s
 		pool := newConnPool(5, 10, time.Hour, time.Second, createConn)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
@@ -218,10 +218,10 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		t.Logf("Before cleanup: %+v", stat)
 		equal(t, 10, stat.TotalConns)
 		equal(t, 0, stat.IdleConns)
-		equal(t, 10, stat.MaxConns)
+		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
 		equal(t, int64(0), stat.maxIdleClosed)
-		equal(t, int64(0), stat.maxLifeTimeClosed)
+		equal(t, int64(0), stat.maxLifetimeClosed)
 		equal(t, int64(0), stat.maxIdleTimeClosed)
 
 		// wait for the cleaner to clean up the idle connection, decrease the numOpen
@@ -235,21 +235,21 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		t.Logf("After cleanup: %+v", stat)
 		equal(t, 0, stat.TotalConns)
 		equal(t, 0, stat.IdleConns) // since all connections are cleaned up(idle=1s)
-		equal(t, 10, stat.MaxConns)
+		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
 		equal(t, int64(5), stat.maxIdleClosed)
-		equal(t, int64(0), stat.maxLifeTimeClosed)
+		equal(t, int64(0), stat.maxLifetimeClosed)
 		equal(t, int64(5), stat.maxIdleTimeClosed)
 		noError(t, pool.close())
 	})
 }
 
 // Test_connPool_cleanup_maxLife tests the case that connection sits in
-// idle list for more than maxLifeTime, it should be closed.
+// idle list for more than maxLifetime, it should be closed.
 func Test_connPool_cleanup_maxLife(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// maxLifeTime = 1s
-		// maxIdleTimeout = 3600s
+		// maxLifetime = 1s
+		// maxIdleTime = 3600s
 		pool := newConnPool(5, 10, 2*time.Second, time.Hour, createConn)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
@@ -272,10 +272,10 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		t.Logf("Before cleanup: %+v", stat)
 		equal(t, 10, stat.TotalConns)
 		equal(t, 0, stat.IdleConns)
-		equal(t, 10, stat.MaxConns)
+		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
 		equal(t, int64(0), stat.maxIdleClosed)
-		equal(t, int64(0), stat.maxLifeTimeClosed)
+		equal(t, int64(0), stat.maxLifetimeClosed)
 		equal(t, int64(0), stat.maxIdleTimeClosed)
 
 		// wait for the cleaner to clean up the idle connection, decrease the numOpen
@@ -289,10 +289,10 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		t.Logf("After cleanup: %+v", stat)
 		equal(t, 0, stat.TotalConns)
 		equal(t, 0, stat.IdleConns) // since all connections are cleaned up(life=2s)
-		equal(t, 10, stat.MaxConns)
+		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
 		equal(t, int64(5), stat.maxIdleClosed)
-		equal(t, int64(5), stat.maxLifeTimeClosed)
+		equal(t, int64(5), stat.maxLifetimeClosed)
 		equal(t, int64(0), stat.maxIdleTimeClosed)
 		noError(t, pool.close())
 	})
@@ -324,7 +324,7 @@ func Test_connectionCleanerRunLocked_both_limits(t *testing.T) {
 	connsBefore := pool.conns
 
 	pool.maxIdleTime = time.Hour
-	pool.maxLifeTime = time.Hour
+	pool.maxLifetime = time.Hour
 
 	d, closing := pool.connectionCleanerRunLocked(time.Hour)
 	if connsBefore != pool.conns {
@@ -332,7 +332,7 @@ func Test_connectionCleanerRunLocked_both_limits(t *testing.T) {
 	}
 	hasLen(t, closing, 2)
 	equal(t, int64(1), pool.maxIdleTimeClosed)
-	equal(t, int64(1), pool.maxLifeTimeClosed)
+	equal(t, int64(1), pool.maxLifetimeClosed)
 	equal(t, 1, len(pool.conns))
 	greater(t, d, time.Duration(0))
 
@@ -522,7 +522,7 @@ func TestMinIdleDoesNotRetainIdleExpired(t *testing.T) {
 	}
 }
 
-func TestCleanerDoesNotExceedMaxConnsUnderGet(t *testing.T) {
+func TestCleanerDoesNotExceedMaxOpenUnderGet(t *testing.T) {
 	pool := newConnPool(2, 2, 0, 50*time.Millisecond, createConn)
 	pool.minIdle = 2
 	ctx := context.Background()
@@ -548,5 +548,5 @@ func TestCleanerDoesNotExceedMaxConnsUnderGet(t *testing.T) {
 	}
 	pool.ensureMinIdle(ctx)
 	<-done
-	lessOrEqual(t, int(pool.numOpen.Load()), pool.maxConns)
+	lessOrEqual(t, int(pool.numOpen.Load()), pool.maxOpen)
 }

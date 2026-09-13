@@ -5,46 +5,46 @@ import (
 	"testing"
 )
 
-func TestMapWireLineGlobalAndAdmin(t *testing.T) {
+func Test_mapWireLineGlobalAndAdmin(t *testing.T) {
 	cases := []struct {
 		line    string
-		kind    WireKind
+		kind    wireKind
 		want    error
 		discard bool
 		end     bool
 	}{
-		{"ERROR\r\n", WireApp, ErrNonexistentCommand, false, false},
-		{"ERROR bad args\r\n", WireApp, ErrCommandError, false, false},
-		{"ERROR: shutdown not enabled\r\n", WireApp, ErrCommandError, false, false},
-		{"CLIENT_ERROR bad flags\r\n", WireApp, ErrClientError, false, false},
-		{"SERVER_ERROR oom\r\n", WireApp, ErrServerError, true, false},
-		{"SERVER_ERROR: shutdown not enabled\r\n", WireAdmin, ErrServerError, true, false},
-		{"NOT_STORED\r\n", WireApp, ErrNotStored, false, false},
-		{"EXISTS\r\n", WireApp, ErrExists, false, false},
-		{"NOT_FOUND\r\n", WireApp, ErrNotFound, false, false},
-		{"BUSY crawler\r\n", WireAdmin, ErrBusy, false, false},
-		{"NOSPARE source class has no spare pages\r\n", WireAdmin, ErrNoSpare, false, false},
-		{"WATCHER_TOO_MANY log watcher limit reached\r\n", WireAdmin, ErrWatcherTooMany, false, false},
-		{"WATCHER_FAILED failed to add log watcher\r\n", WireAdmin, ErrWatcherFailed, false, false},
-		{"MEMLIMIT_TOO_SMALL cannot set maxbytes to less than 8m\r\n", WireAdmin, ErrMemlimitTooSmall, false, false},
-		{"MEMLIMIT_ADJUST_FAILED out of bounds\r\n", WireAdmin, ErrMemlimitAdjustFailed, false, false},
-		{"PREFIX name get 1 hit 0 set 0 del 0\r\n", WireStats, nil, false, false},
-		{"OK\r\n", WireStats, nil, false, false},
-		{"END\r\n", WireMeta, ErrMalformedResponse, true, false},
-		{"ENTRY\r\n", WireMeta, ErrMalformedResponse, true, false},
-		{"NOTSTARTED no items to crawl\r\n", WireAdmin, ErrNotStarted, false, false},
-		{"ERROR bad args\r\n", WireStats, ErrCommandError, false, false},
-		{"ERROR bad args\r\n", WireMeta, ErrCommandError, false, false},
-		{"EN\r\n", WireDump, nil, false, true},
-		{"END\r\n", WireDump, nil, false, true},
-		{"XX\r\n", WireMeta, ErrMalformedResponse, true, false},
-		{"ST\r\n", WireMeta, ErrMalformedResponse, true, false},
-		{"DE\r\n", WireMeta, ErrMalformedResponse, true, false},
+		{"ERROR\r\n", wireApp, ErrNonexistentCommand, false, false},
+		{"ERROR bad args\r\n", wireApp, ErrCommandError, false, false},
+		{"ERROR: shutdown not enabled\r\n", wireApp, ErrCommandError, false, false},
+		{"CLIENT_ERROR bad flags\r\n", wireApp, ErrClientError, false, false},
+		{"SERVER_ERROR oom\r\n", wireApp, ErrServerError, true, false},
+		{"SERVER_ERROR: shutdown not enabled\r\n", wireAdmin, ErrServerError, true, false},
+		{"NOT_STORED\r\n", wireApp, ErrNotStored, false, false},
+		{"EXISTS\r\n", wireApp, ErrExists, false, false},
+		{"NOT_FOUND\r\n", wireApp, ErrNotFound, false, false},
+		{"BUSY crawler\r\n", wireAdmin, ErrBusy, false, false},
+		{"NOSPARE source class has no spare pages\r\n", wireAdmin, ErrNoSpare, false, false},
+		{"WATCHER_TOO_MANY log watcher limit reached\r\n", wireAdmin, ErrWatcherTooMany, false, false},
+		{"WATCHER_FAILED failed to add log watcher\r\n", wireAdmin, ErrWatcherFailed, false, false},
+		{"MEMLIMIT_TOO_SMALL cannot set maxbytes to less than 8m\r\n", wireAdmin, ErrMemlimitTooSmall, false, false},
+		{"MEMLIMIT_ADJUST_FAILED out of bounds\r\n", wireAdmin, ErrMemlimitAdjustFailed, false, false},
+		{"PREFIX name get 1 hit 0 set 0 del 0\r\n", wireStats, nil, false, false},
+		{"OK\r\n", wireStats, nil, false, false},
+		{"END\r\n", wireMeta, ErrMalformedResponse, true, false},
+		{"ENTRY\r\n", wireMeta, ErrMalformedResponse, true, false},
+		{"NOTSTARTED no items to crawl\r\n", wireAdmin, ErrNotStarted, false, false},
+		{"ERROR bad args\r\n", wireStats, ErrCommandError, false, false},
+		{"ERROR bad args\r\n", wireMeta, ErrCommandError, false, false},
+		{"EN\r\n", wireDump, nil, false, true},
+		{"END\r\n", wireDump, nil, false, true},
+		{"XX\r\n", wireMeta, ErrMalformedResponse, true, false},
+		{"ST\r\n", wireMeta, ErrMalformedResponse, true, false},
+		{"DE\r\n", wireMeta, ErrMalformedResponse, true, false},
 	}
 	for _, tc := range cases {
-		hit := MapWireLine([]byte(tc.line), tc.kind)
+		hit := mapWireLine([]byte(tc.line), tc.kind)
 		if tc.end {
-			equal(t, WireStreamEnd, hit.Class)
+			equal(t, wireStreamEnd, hit.Class)
 			isNil(t, hit.Err)
 			continue
 		}
@@ -53,26 +53,26 @@ func TestMapWireLineGlobalAndAdmin(t *testing.T) {
 	}
 }
 
-func TestMapWireLineKeepsMessage(t *testing.T) {
-	err := MapWireLine([]byte("CLIENT_ERROR bad flags\r\n"), WireApp).Err
+func Test_mapWireLineKeepsMessage(t *testing.T) {
+	err := mapWireLine([]byte("CLIENT_ERROR bad flags\r\n"), wireApp).Err
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad flags")
-	err = MapWireLine([]byte("SERVER_ERROR oom\r\n"), WireApp).Err
+	err = mapWireLine([]byte("SERVER_ERROR oom\r\n"), wireApp).Err
 	isErrorIs(t, err, ErrServerError)
 	contains(t, err.Error(), "oom")
 	isFalse(t, errors.Is(err, ErrTransport))
 }
 
-func TestMapWireLineMetaStatus(t *testing.T) {
-	equal(t, MetaStatusEN, MapWireLine([]byte("EN kfoo\r\n"), WireMeta).Status)
-	equal(t, MetaStatusNF, MapWireLine([]byte("NF\r\n"), WireMeta).Status)
-	equal(t, MetaStatusNS, MapWireLine([]byte("NS\r\n"), WireMeta).Status)
-	equal(t, MetaStatusEX, MapWireLine([]byte("EX\r\n"), WireMeta).Status)
-	equal(t, MetaStatusHD, MapWireLine([]byte("HD\r\n"), WireMeta).Status)
-	isErrorIs(t, MapWireLine([]byte("EN\r\n"), WireMeta).Err, ErrNotFound)
-	isErrorIs(t, MapWireLine([]byte("END\r\n"), WireMeta).Err, ErrMalformedResponse)
-	isErrorIs(t, MapWireLine([]byte("ENTRY\r\n"), WireMeta).Err, ErrMalformedResponse)
-	isTrue(t, MapWireLine([]byte("END\r\n"), WireMeta).Discard)
+func Test_mapWireLineMetaStatus(t *testing.T) {
+	equal(t, MetaStatusEN, mapWireLine([]byte("EN kfoo\r\n"), wireMeta).Status)
+	equal(t, MetaStatusNF, mapWireLine([]byte("NF\r\n"), wireMeta).Status)
+	equal(t, MetaStatusNS, mapWireLine([]byte("NS\r\n"), wireMeta).Status)
+	equal(t, MetaStatusEX, mapWireLine([]byte("EX\r\n"), wireMeta).Status)
+	equal(t, MetaStatusHD, mapWireLine([]byte("HD\r\n"), wireMeta).Status)
+	isErrorIs(t, mapWireLine([]byte("EN\r\n"), wireMeta).Err, ErrNotFound)
+	isErrorIs(t, mapWireLine([]byte("END\r\n"), wireMeta).Err, ErrMalformedResponse)
+	isErrorIs(t, mapWireLine([]byte("ENTRY\r\n"), wireMeta).Err, ErrMalformedResponse)
+	isTrue(t, mapWireLine([]byte("END\r\n"), wireMeta).Discard)
 }
 
 func TestForecastKeepsUnknownAppLines(t *testing.T) {

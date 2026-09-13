@@ -15,17 +15,17 @@ import (
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 type clientOptions struct {
-	pickBuilder Builder
-	resolver    Resolver
+	pickBuilder builder
+	resolver    resolver
 
 	dialTimeout  time.Duration
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 
-	maxConns       int
-	maxIdleConns   int
-	maxLifetime    time.Duration
-	maxIdleTimeout time.Duration
+	maxOpen     int
+	maxIdle     int
+	maxLifetime time.Duration
+	maxIdleTime time.Duration
 
 	allowFlushAll   bool
 	allowAdmin      bool
@@ -42,9 +42,8 @@ type clientOptions struct {
 	retryAttempts   int
 	failover        Failover
 	keepAlive       time.Duration
-	minIdleConns    int
+	minIdle         int
 	namespace       string
-	hashWithPrefix  bool
 	resolverRefresh time.Duration
 	maxValueBytes   int
 
@@ -55,18 +54,18 @@ type clientOptions struct {
 
 func optionsFromConfig(cfg Config) (*clientOptions, error) {
 	o := &clientOptions{
-		pickBuilder: cfg.Cluster.PickBuilder,
-		resolver:    cfg.Cluster.Resolver,
+		pickBuilder: cfg.Cluster.pickBuilder,
+		resolver:    cfg.Cluster.resolver,
 
 		dialTimeout:  cfg.Transport.DialTimeout,
 		readTimeout:  cfg.Transport.ReadTimeout,
 		writeTimeout: cfg.Transport.WriteTimeout,
 
-		maxConns:       cfg.Pool.MaxOpen,
-		maxIdleConns:   cfg.Pool.MaxIdle,
-		maxLifetime:    cfg.Pool.MaxLifetime,
-		maxIdleTimeout: cfg.Pool.MaxIdleTime,
-		minIdleConns:   cfg.Pool.MinIdle,
+		maxOpen:     cfg.Pool.MaxOpen,
+		maxIdle:     cfg.Pool.MaxIdle,
+		maxLifetime: cfg.Pool.MaxLifetime,
+		maxIdleTime: cfg.Pool.MaxIdleTime,
+		minIdle:     cfg.Pool.MinIdle,
 
 		allowFlushAll:   cfg.AllowFlushAll,
 		allowAdmin:      cfg.AllowAdmin,
@@ -77,7 +76,6 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 		retryAttempts: cfg.Transport.RetryAttempts,
 
 		namespace:         cfg.Cluster.Namespace,
-		hashWithPrefix:    cfg.Cluster.HashWithPrefix,
 		resolverRefresh:   cfg.Cluster.ResolverRefresh,
 		maxValueBytes:     cfg.MaxValueBytes,
 		tcpNoDelay:        tcpNoDelayEnabled(cfg.Transport.TCPNoDelay),
@@ -100,13 +98,13 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 		o.retryAttempts = 1
 	}
 	if isZeroPool(cfg.Pool) {
-		o.maxConns = 100
-		o.maxIdleConns = 10
-	} else if o.maxConns <= 0 {
+		o.maxOpen = 100
+		o.maxIdle = 10
+	} else if o.maxOpen <= 0 {
 		return nil, fmt.Errorf("Pool.MaxOpen must be > 0: %w", ErrInvalidArgument)
 	}
-	if o.minIdleConns < 0 {
-		o.minIdleConns = 0
+	if o.minIdle < 0 {
+		o.minIdle = 0
 	}
 	if cfg.Transport.TLS != nil {
 		o.tlsSet = true
@@ -117,7 +115,7 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 		o.authPass = cfg.Auth.Pass
 		o.authAllowPlain = cfg.Auth.AllowPlaintext
 	}
-	o.failover = applyFailover(cfg, len(cfg.Servers))
+	o.failover = cfg.Failover
 	if err := applyTLSDialer(o); err != nil {
 		return nil, err
 	}

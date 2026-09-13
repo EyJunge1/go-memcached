@@ -61,40 +61,36 @@ type preparedMetaOp struct {
 	barrier  MetaNoop
 }
 
-func metaOpFlags(op MetaOp) (any, error) {
-	if op.Flags == nil {
-		switch op.Op {
-		case MetaOpGet:
-			return MetaGet{}, nil
-		case MetaOpSet:
-			return MetaSet{}, nil
-		case MetaOpDelete:
-			return MetaDelete{}, nil
-		case MetaOpArith:
-			return MetaArithmetic{}, nil
-		case MetaOpNoop:
-			return MetaNoop{}, nil
-		default:
-			return nil, fmt.Errorf("meta op: %w", ErrInvalidArgument)
-		}
+func metaOpKinds(op MetaOp) int {
+	n := 0
+	if op.Get != nil {
+		n++
 	}
-	return op.Flags, nil
+	if op.Set != nil {
+		n++
+	}
+	if op.Del != nil {
+		n++
+	}
+	if op.Arith != nil {
+		n++
+	}
+	if op.Noop != nil {
+		n++
+	}
+	return n
 }
 
 func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error) {
-	key := c.nsBytes(op.Key)
-	flagsAny, err := metaOpFlags(op)
-	if err != nil {
-		return preparedMetaOp{}, err
+	if metaOpKinds(op) != 1 {
+		return preparedMetaOp{}, fmt.Errorf("meta op: %w", ErrInvalidArgument)
 	}
+	key := c.nsBytes(op.Key)
 	prep := preparedMetaOp{idx: idx, key: key}
 
-	switch op.Op {
-	case MetaOpGet:
-		f, ok := flagsAny.(MetaGet)
-		if !ok {
-			return preparedMetaOp{}, fmt.Errorf("meta get flags: %w", ErrInvalidArgument)
-		}
+	switch {
+	case op.Get != nil:
+		f := *op.Get
 		if err := f.validate(); err != nil {
 			return preparedMetaOp{}, err
 		}
@@ -113,11 +109,8 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.line = line
 		prep.tok = opaqueToken(mg.Otoken, mg.O, mg.Oset || mg.OtokenSet)
 		prep.getFlags = mg
-	case MetaOpSet:
-		f, ok := flagsAny.(MetaSet)
-		if !ok {
-			return preparedMetaOp{}, fmt.Errorf("meta set flags: %w", ErrInvalidArgument)
-		}
+	case op.Set != nil:
+		f := *op.Set
 		ms := f.toFlags()
 		ms.q = true
 		if err := c.checkKeyValueFlags(key, op.Body, ms.b); err != nil {
@@ -139,11 +132,8 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.line = line
 		prep.tok = opaqueToken(ms.Otoken, ms.O, ms.Oset || ms.OtokenSet)
 		prep.key = key
-	case MetaOpDelete:
-		f, ok := flagsAny.(MetaDelete)
-		if !ok {
-			return preparedMetaOp{}, fmt.Errorf("meta delete flags: %w", ErrInvalidArgument)
-		}
+	case op.Del != nil:
+		f := *op.Del
 		if err := f.validate(); err != nil {
 			return preparedMetaOp{}, err
 		}
@@ -161,11 +151,8 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.cmd = []byte("md")
 		prep.line = line
 		prep.tok = opaqueToken(md.Otoken, md.O, md.Oset || md.OtokenSet)
-	case MetaOpArith:
-		f, ok := flagsAny.(MetaArithmetic)
-		if !ok {
-			return preparedMetaOp{}, fmt.Errorf("meta arith flags: %w", ErrInvalidArgument)
-		}
+	case op.Arith != nil:
+		f := *op.Arith
 		if err := f.validate(); err != nil {
 			return preparedMetaOp{}, err
 		}
@@ -188,12 +175,9 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.cmd = []byte("ma")
 		prep.line = line
 		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.Oset || ma.OtokenSet)
-	case MetaOpNoop:
+	case op.Noop != nil:
 		// Trailing mn is the pipeline barrier; an extra mn here would end read2 early.
-		f, ok := flagsAny.(MetaNoop)
-		if flagsAny != nil && !ok {
-			return preparedMetaOp{}, fmt.Errorf("meta noop flags: %w", ErrInvalidArgument)
-		}
+		f := *op.Noop
 		if err := f.validate(); err != nil {
 			return preparedMetaOp{}, err
 		}
@@ -201,8 +185,6 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.line = nil
 		prep.noop = true
 		prep.barrier = f
-	default:
-		return preparedMetaOp{}, fmt.Errorf("meta op: %w", ErrInvalidArgument)
 	}
 	return prep, nil
 }
@@ -291,9 +273,9 @@ func (c *Client) MetaPipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 	}
 	addrs = c.liveAddrs(addrs)
 
-	groups := make(map[*Addr][]preparedMetaOp, len(addrs))
+	groups := make(map[*addr][]preparedMetaOp, len(addrs))
 	for _, p := range prepared {
-		addr, err := picker.Pick(addrs, c.hashKey(p.key))
+		addr, err := picker.Pick(addrs, p.key)
 		if err != nil {
 			return nil, fmt.Errorf("pick node failed: %w", err)
 		}
@@ -327,7 +309,7 @@ func (c *Client) MetaPipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 	return out, errors.Join(errs...)
 }
 
-func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []preparedMetaOp, out []MetaResult) error {
+func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []preparedMetaOp, out []MetaResult) error {
 	var raw []byte
 	var barrier MetaNoop
 	byOpaque := make(map[string]int, len(group))
@@ -358,7 +340,7 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []p
 		gotLines = true
 		return err
 	}
-	dispatchErr := c.dispatchToAddr(ctx, addr, req, resp)
+	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
 	if !gotLines {
 		return dispatchErr
 	}

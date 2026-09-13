@@ -110,24 +110,24 @@ type conn struct {
 	wr *bufio.Writer
 }
 
-func newConnContext(ctx context.Context, addr *Addr, o *clientOptions) (*conn, error) {
+func newConnContext(ctx context.Context, node *addr, o *clientOptions) (*conn, error) {
 	if o == nil {
 		o = &clientOptions{tcpNoDelay: true}
 	}
-	if addr != nil && strings.HasPrefix(addr.Network, "unix") {
-		if err := checkUnixSocketMode(addr.Address, o.unixSocketAnyMode, o.unixSocketMaxMode); err != nil {
+	if node != nil && strings.HasPrefix(node.Network, "unix") {
+		if err := checkUnixSocketMode(node.Address, o.unixSocketAnyMode, o.unixSocketMaxMode); err != nil {
 			return nil, err
 		}
 	}
-	rawConn, err := addr.dial(ctx, o.dialTimeout, o.keepAlive, o.dialContext)
+	rawConn, err := node.dial(ctx, o.dialTimeout, o.keepAlive, o.dialContext)
 	if err != nil {
 		return nil, fmt.Errorf("dialContext: %w", err)
 	}
 	applyTCPNoDelay(rawConn, o.tcpNoDelay)
 
 	network := ""
-	if addr != nil {
-		network = addr.Network
+	if node != nil {
+		network = node.Network
 	}
 	cn := &conn{
 		createdAt:  nowFunc(),

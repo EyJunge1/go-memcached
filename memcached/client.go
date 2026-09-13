@@ -1,7 +1,6 @@
 package memcached
 
 import (
-	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -15,8 +14,8 @@ type Client struct {
 	options *clientOptions
 
 	mu               sync.RWMutex
-	addrs            []*Addr
-	picker           Picker
+	addrs            []*addr
+	picker           picker
 	connPools        map[string]*connPool
 	resolveSpec      string
 	resolveSpecFixed bool
@@ -89,7 +88,7 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 			return err
 		}
 	}
-	var addrs []*Addr
+	var addrs []*addr
 	if len(servers) > 0 {
 		var err error
 		addrs, err = serversToAddrs(servers)
@@ -161,7 +160,7 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) snapshotCluster() ([]*Addr, Picker) {
+func (c *Client) snapshotCluster() ([]*addr, picker) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.addrs, c.picker
@@ -188,11 +187,11 @@ func (c *Client) setResolverErr(err error) {
 
 // PoolStat is a snapshot of one node's connection pool.
 type PoolStat struct {
-	Address  string
-	Total    int
-	Idle     int
-	MaxConns int
-	MaxIdle  int
+	Address string
+	Total   int
+	Idle    int
+	MaxOpen int
+	MaxIdle int
 }
 
 // PoolStats returns pool occupancy per configured node. Nodes that have never
@@ -211,11 +210,11 @@ func (c *Client) PoolStats() []PoolStat {
 		}
 		s := pool.stats()
 		out = append(out, PoolStat{
-			Address:  addr.Address,
-			Total:    s.TotalConns,
-			Idle:     s.IdleConns,
-			MaxConns: s.MaxConns,
-			MaxIdle:  s.MaxIdle,
+			Address: addr.Address,
+			Total:   s.TotalConns,
+			Idle:    s.IdleConns,
+			MaxOpen: s.MaxOpen,
+			MaxIdle: s.MaxIdle,
 		})
 	}
 	return out
@@ -228,11 +227,4 @@ func (c *Client) nsBytes(key []byte) []byte {
 	out := make([]byte, 0, len(c.options.namespace)+len(key))
 	out = append(out, c.options.namespace...)
 	return append(out, key...)
-}
-
-func (c *Client) hashKey(wire []byte) []byte {
-	if c.options == nil || c.options.namespace == "" || c.options.hashWithPrefix {
-		return wire
-	}
-	return bytes.TrimPrefix(wire, []byte(c.options.namespace))
 }

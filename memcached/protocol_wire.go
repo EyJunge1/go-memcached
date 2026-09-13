@@ -7,66 +7,66 @@ import (
 	"unicode"
 )
 
-// WireKind selects which token families MapWireLine applies after the global
+// wireKind selects which token families mapWireLine applies after the global
 // error strings.
-type WireKind uint8
+type wireKind uint8
 
 const (
-	WireApp WireKind = iota
-	WireMeta
-	WireAdmin
-	WireStats
-	WireDump
+	wireApp wireKind = iota
+	wireMeta
+	wireAdmin
+	wireStats
+	wireDump
 )
 
-// WireClass is the coarse classification of one status line.
-type WireClass uint8
+// wireClass is the coarse classification of one status line.
+type wireClass uint8
 
 const (
-	WireNominal WireClass = iota
-	WireFault
-	WireStreamEnd
+	wireNominal wireClass = iota
+	wireFault
+	wireStreamEnd
 )
 
-// WireHit is the result of mapping one protocol line.
-type WireHit struct {
-	Class   WireClass
+// wireHit is the result of mapping one protocol line.
+type wireHit struct {
+	Class   wireClass
 	Err     error
 	Status  MetaStatus
 	Discard bool
 }
 
-// MapWireLine classifies one ASCII/meta/admin/stats/dump status line.
-func MapWireLine(line []byte, kind WireKind) WireHit {
+// mapWireLine classifies one ASCII/meta/admin/stats/dump status line.
+func mapWireLine(line []byte, kind wireKind) wireHit {
 	tok := string(trimCRLF(line))
-	if kind == WireDump && isDumpEnd(tok) {
-		return WireHit{Class: WireStreamEnd}
+	if kind == wireDump && isDumpEnd(tok) {
+		return wireHit{Class: wireStreamEnd}
 	}
 	if hit, ok := mapGlobalErrorLine(line, tok); ok {
 		return hit
 	}
 	switch kind {
-	case WireDump:
+	case wireDump:
 		if hit, ok := mapAdminKeywordHit(tok); ok {
 			return hit
 		}
-		return WireHit{Class: WireNominal}
-	case WireAdmin:
+		return wireHit{Class: wireNominal}
+	case wireAdmin:
 		if tok == "OK" {
-			return WireHit{Class: WireNominal}
+			return wireHit{Class: wireNominal}
 		}
 		if hit, ok := mapAdminKeywordHit(tok); ok {
 			return hit
 		}
 		return malformedHit(tok)
-	case WireStats:
+	case wireStats:
 		if tok == "END" || tok == "RESET" || tok == "OK" ||
 			strings.HasPrefix(tok, "STAT") ||
 			tok == "PREFIX" || strings.HasPrefix(tok, "PREFIX ") {
-			return WireHit{Class: WireNominal}
+			return wireHit{Class: wireNominal}
 		}
 		return malformedHit(tok)
-	case WireMeta:
+	case wireMeta:
 		return mapMetaCDLine(tok)
 	default:
 		return mapAppLine(tok)
@@ -77,46 +77,46 @@ func isDumpEnd(s string) bool {
 	return s == "END" || s == "EN"
 }
 
-func malformedHit(tok string) WireHit {
-	return WireHit{
-		Class:   WireFault,
+func malformedHit(tok string) wireHit {
+	return wireHit{
+		Class:   wireFault,
 		Err:     fmt.Errorf("%s: %w", tok, ErrMalformedResponse),
 		Discard: true,
 	}
 }
 
-func mapGlobalErrorLine(line []byte, tok string) (WireHit, bool) {
+func mapGlobalErrorLine(line []byte, tok string) (wireHit, bool) {
 	if err := prefixedProtocolError(line, "CLIENT_ERROR", ErrClientError); err != nil {
-		return WireHit{Class: WireFault, Err: err}, true
+		return wireHit{Class: wireFault, Err: err}, true
 	}
 	if err := prefixedProtocolError(line, "SERVER_ERROR", ErrServerError); err != nil {
-		return WireHit{Class: WireFault, Err: err, Discard: true}, true
+		return wireHit{Class: wireFault, Err: err, Discard: true}, true
 	}
 	if tok == "ERROR" {
-		return WireHit{Class: WireFault, Err: ErrNonexistentCommand}, true
+		return wireHit{Class: wireFault, Err: ErrNonexistentCommand}, true
 	}
 	if err := prefixedProtocolError(line, "ERROR", ErrCommandError); err != nil {
-		return WireHit{Class: WireFault, Err: err}, true
+		return wireHit{Class: wireFault, Err: err}, true
 	}
-	return WireHit{}, false
+	return wireHit{}, false
 }
 
-func mapAppLine(tok string) WireHit {
+func mapAppLine(tok string) wireHit {
 	switch tok {
 	case "NOT_FOUND":
-		return WireHit{Class: WireFault, Err: ErrNotFound}
+		return wireHit{Class: wireFault, Err: ErrNotFound}
 	case "EXISTS":
-		return WireHit{Class: WireFault, Err: ErrExists}
+		return wireHit{Class: wireFault, Err: ErrExists}
 	case "NOT_STORED":
-		return WireHit{Class: WireFault, Err: ErrNotStored}
+		return wireHit{Class: wireFault, Err: ErrNotStored}
 	case "STORED", "DELETED", "TOUCHED", "OK", "END":
-		return WireHit{Class: WireNominal}
+		return wireHit{Class: wireNominal}
 	}
 	if strings.HasPrefix(tok, "VALUE") || strings.HasPrefix(tok, "VERSION") || strings.HasPrefix(tok, "STAT") {
-		return WireHit{Class: WireNominal}
+		return wireHit{Class: wireNominal}
 	}
 	if isArithmeticValue(tok) {
-		return WireHit{Class: WireNominal}
+		return wireHit{Class: wireNominal}
 	}
 	return malformedHit(tok)
 }
@@ -136,35 +136,35 @@ func isArithmeticValue(tok string) bool {
 	return true
 }
 
-func mapMetaCDLine(tok string) WireHit {
+func mapMetaCDLine(tok string) wireHit {
 	cd, _, _ := strings.Cut(tok, " ")
 	switch cd {
 	case "HD":
-		return WireHit{Class: WireNominal, Status: MetaStatusHD}
+		return wireHit{Class: wireNominal, Status: MetaStatusHD}
 	case "VA":
-		return WireHit{Class: WireNominal, Status: MetaStatusVA}
+		return wireHit{Class: wireNominal, Status: MetaStatusVA}
 	case "EN":
-		return WireHit{Class: WireFault, Err: ErrNotFound, Status: MetaStatusEN}
+		return wireHit{Class: wireFault, Err: ErrNotFound, Status: MetaStatusEN}
 	case "NF":
-		return WireHit{Class: WireFault, Err: ErrNotFound, Status: MetaStatusNF}
+		return wireHit{Class: wireFault, Err: ErrNotFound, Status: MetaStatusNF}
 	case "NS":
-		return WireHit{Class: WireFault, Err: ErrNotStored, Status: MetaStatusNS}
+		return wireHit{Class: wireFault, Err: ErrNotStored, Status: MetaStatusNS}
 	case "EX":
-		return WireHit{Class: WireFault, Err: ErrExists, Status: MetaStatusEX}
+		return wireHit{Class: wireFault, Err: ErrExists, Status: MetaStatusEX}
 	case "MN":
-		return WireHit{Class: WireNominal, Status: MetaStatusMN}
+		return wireHit{Class: wireNominal, Status: MetaStatusMN}
 	case "ME":
-		return WireHit{Class: WireNominal, Status: MetaStatusME}
+		return wireHit{Class: wireNominal, Status: MetaStatusME}
 	default:
-		return WireHit{
-			Class:   WireFault,
+		return wireHit{
+			Class:   wireFault,
 			Err:     fmt.Errorf("unexpected meta cd %q: %w", cd, ErrMalformedResponse),
 			Discard: true,
 		}
 	}
 }
 
-func mapAdminKeywordHit(tok string) (WireHit, bool) {
+func mapAdminKeywordHit(tok string) (wireHit, bool) {
 	type kw struct {
 		prefix string
 		err    error
@@ -183,10 +183,10 @@ func mapAdminKeywordHit(tok string) (WireHit, bool) {
 		{"NOTSTARTED", ErrNotStarted},
 	} {
 		if tok == k.prefix || strings.HasPrefix(tok, k.prefix+" ") {
-			return WireHit{Class: WireFault, Err: fmt.Errorf("%s: %w", tok, k.err)}, true
+			return wireHit{Class: wireFault, Err: fmt.Errorf("%s: %w", tok, k.err)}, true
 		}
 	}
-	return WireHit{}, false
+	return wireHit{}, false
 }
 
 func isChargeMetaFault(err error) bool {

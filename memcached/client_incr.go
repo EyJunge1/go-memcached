@@ -6,33 +6,15 @@ import (
 )
 
 // Incr increments the key and returns the new value.
-// MutateOpts.Quiet is rejected; use IncrQuiet for noreply.
+// Quiet sends noreply and returns (0, nil).
 func (c *Client) Incr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
-	if opts.Quiet {
-		return 0, fmt.Errorf("incr Quiet: %w", ErrInvalidArgument)
-	}
-	return c.arithmetic(ctx, "incr", key, delta, false)
+	return c.arithmetic(ctx, "incr", key, delta, opts.Quiet)
 }
 
 // Decr decrements the key and returns the new value.
-// MutateOpts.Quiet is rejected; use DecrQuiet for noreply.
+// Quiet sends noreply and returns (0, nil).
 func (c *Client) Decr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
-	if opts.Quiet {
-		return 0, fmt.Errorf("decr Quiet: %w", ErrInvalidArgument)
-	}
-	return c.arithmetic(ctx, "decr", key, delta, false)
-}
-
-// IncrQuiet sends incr with noreply and does not invent a sum.
-func (c *Client) IncrQuiet(ctx context.Context, key []byte, delta uint64) error {
-	_, err := c.arithmetic(ctx, "incr", key, delta, true)
-	return err
-}
-
-// DecrQuiet sends decr with noreply and does not invent a difference.
-func (c *Client) DecrQuiet(ctx context.Context, key []byte, delta uint64) error {
-	_, err := c.arithmetic(ctx, "decr", key, delta, true)
-	return err
+	return c.arithmetic(ctx, "decr", key, delta, opts.Quiet)
 }
 
 func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64, quiet bool) (uint64, error) {

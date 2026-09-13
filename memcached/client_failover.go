@@ -11,7 +11,6 @@ func isRetryable(err error) bool {
 	}
 	if isKeepaliveProtocolError(err) ||
 		errors.Is(err, ErrMalformedResponse) ||
-		errors.Is(err, ErrUnknownIndicator) ||
 		errors.Is(err, ErrServerError) ||
 		errors.Is(err, ErrCommandError) {
 		return false
@@ -19,11 +18,11 @@ func isRetryable(err error) bool {
 	return isTransportError(err)
 }
 
-func (c *Client) liveAddrs(addrs []*Addr) []*Addr {
+func (c *Client) liveAddrs(addrs []*addr) []*addr {
 	if !c.options.failover.Eject || c.options.failover.FailureLimit <= 0 {
 		return addrs
 	}
-	live := make([]*Addr, 0, len(addrs))
+	live := make([]*addr, 0, len(addrs))
 	for _, a := range addrs {
 		if !c.isDead(a) {
 			live = append(live, a)
@@ -35,13 +34,13 @@ func (c *Client) liveAddrs(addrs []*Addr) []*Addr {
 	return live
 }
 
-func (c *Client) isDead(addr *Addr) bool {
-	if addr == nil || c.options.failover.FailureLimit <= 0 {
+func (c *Client) isDead(node *addr) bool {
+	if node == nil || c.options.failover.FailureLimit <= 0 {
 		return false
 	}
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
-	until, ok := c.deadUntil[addr.id()]
+	until, ok := c.deadUntil[node.id()]
 	return ok && nowFunc().Before(until)
 }
 
@@ -59,13 +58,13 @@ func quarantineDuration(fo Failover, failures int) time.Duration {
 	return fo.DeadAfter
 }
 
-func (c *Client) noteFailure(addr *Addr) {
-	if addr == nil || c.options.failover.FailureLimit <= 0 {
+func (c *Client) noteFailure(node *addr) {
+	if node == nil || c.options.failover.FailureLimit <= 0 {
 		return
 	}
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
-	id := addr.id()
+	id := node.id()
 	c.failCount[id]++
 	if c.failCount[id] >= c.options.failover.FailureLimit {
 		if dur := quarantineDuration(c.options.failover, c.failCount[id]); dur > 0 {
@@ -76,13 +75,13 @@ func (c *Client) noteFailure(addr *Addr) {
 	}
 }
 
-func (c *Client) noteSuccess(addr *Addr) {
-	if addr == nil {
+func (c *Client) noteSuccess(node *addr) {
+	if node == nil {
 		return
 	}
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
-	id := addr.id()
+	id := node.id()
 	delete(c.failCount, id)
 	delete(c.deadUntil, id)
 }

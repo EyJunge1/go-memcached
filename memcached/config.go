@@ -16,7 +16,7 @@ type Config struct {
 	Transport       Transport
 	Pool            Pool
 	Cluster         Cluster
-	Failover        *Failover // nil = on when len(Servers)>1; &Failover{} = off
+	Failover        Failover // zero = off; use DefaultFailover() for the previous multi-node default
 	Auth            *Auth
 	AllowFlushAll   bool
 	AllowAdmin      bool
@@ -65,14 +65,15 @@ type Pool struct {
 	MaxIdleTime time.Duration
 }
 
-// Cluster selects hashing, namespace, and optional resolver refresh.
+// Cluster selects namespace and optional resolver refresh.
+// The picker is always weighted Ketama/MD5.
 type Cluster struct {
-	PickBuilder     Builder // nil → weighted Ketama/MD5
 	Namespace       string
-	HashWithPrefix  bool
-	Resolver        Resolver
 	ResolverRefresh time.Duration
 	ResolveSpec     string // re-resolved on refresh; empty → formatted Servers
+
+	pickBuilder builder
+	resolver    resolver
 }
 
 // Failover quarantines nodes after consecutive transport failures.
@@ -100,7 +101,7 @@ func ParseServers(spec string) ([]Server, error) {
 	return addrsToServers(addrs), nil
 }
 
-func addrsToServers(addrs []*Addr) []Server {
+func addrsToServers(addrs []*addr) []Server {
 	out := make([]Server, 0, len(addrs))
 	for _, a := range addrs {
 		if a == nil {
@@ -111,16 +112,16 @@ func addrsToServers(addrs []*Addr) []Server {
 	return out
 }
 
-func addrToServer(a *Addr) Server {
+func addrToServer(a *addr) Server {
 	return Server{Network: a.Network, Address: a.Address, Weight: a.Weight}
 }
 
-func serversToAddrs(servers []Server) ([]*Addr, error) {
+func serversToAddrs(servers []Server) ([]*addr, error) {
 	if len(servers) == 0 {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 	}
-	out := make([]*Addr, 0, len(servers))
-	for i, s := range servers {
+	out := make([]*addr, 0, len(servers))
+	for _, s := range servers {
 		network := s.Network
 		if network == "" {
 			network = "tcp"
@@ -133,7 +134,7 @@ func serversToAddrs(servers []Server) ([]*Addr, error) {
 		if strings.TrimSpace(s.Address) == "" {
 			return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 		}
-		out = append(out, NewAddrWeighted(network, s.Address, i, s.Weight))
+		out = append(out, newAddrWeighted(network, s.Address, s.Weight))
 	}
 	return out, nil
 }
@@ -276,21 +277,12 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
-func applyFailover(cfg Config, n int) Failover {
-	if n <= 1 {
-		return Failover{}
+// DefaultFailover is the previous multi-node default: two failures, 1s retry, 30s dead, eject.
+func DefaultFailover() Failover {
+	return Failover{
+		FailureLimit: 2,
+		RetryAfter:   time.Second,
+		DeadAfter:    30 * time.Second,
+		Eject:        true,
 	}
-	if cfg.Failover == nil {
-		return Failover{
-			FailureLimit: 2,
-			RetryAfter:   time.Second,
-			DeadAfter:    30 * time.Second,
-			Eject:        true,
-		}
-	}
-	return *cfg.Failover
-}
-
-func defaultPickBuilder() Builder {
-	return NewKetamaPickBuilder(KetamaOptions{Weighted: true, Hash: KetamaHashMD5})
 }

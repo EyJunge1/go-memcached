@@ -27,29 +27,6 @@ func (c *Client) Get(ctx context.Context, opts GetOpts, keys ...[]byte) ([]*Item
 	return c.getFromNodes(ctx, command, exp, keys, withCAS)
 }
 
-// GetOne fetches a single key. A miss returns ErrNotFound.
-func (c *Client) GetOne(ctx context.Context, key []byte) (*Item, error) {
-	items, err := c.Get(ctx, GetOpts{}, key)
-	if err != nil {
-		return nil, err
-	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("no items found: %w", ErrNotFound)
-	}
-	return items[0], nil
-}
-
-// GetMulti fetches keys in parallel per cluster node and returns a map with CAS.
-// Missing keys are omitted. Map keys are the wire key (string form of Item.Key).
-func (c *Client) GetMulti(ctx context.Context, keys [][]byte) (map[string]*Item, error) {
-	items, err := c.Get(ctx, GetOpts{CAS: true}, keys...)
-	out := make(map[string]*Item, len(items))
-	for _, item := range items {
-		out[string(item.Key)] = item
-	}
-	return out, err
-}
-
 func getCommand(opts GetOpts) (command string, withCAS bool) {
 	if opts.Touch != nil {
 		if opts.CAS {
@@ -63,7 +40,7 @@ func getCommand(opts GetOpts) (command string, withCAS bool) {
 	return "get", false
 }
 
-func (c *Client) getFromAddr(ctx context.Context, addr *Addr, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
+func (c *Client) getFromAddr(ctx context.Context, node *addr, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
 	var req *request
 	var resp *response
 	if command == "gats" || command == "gat" {
@@ -82,7 +59,7 @@ func (c *Client) getFromAddr(ctx context.Context, addr *Addr, command string, ex
 		items = parsed
 		return nil
 	}
-	if err := c.dispatchToAddr(ctx, addr, req, resp); err != nil {
+	if err := c.dispatchToAddr(ctx, node, req, resp); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -110,9 +87,9 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 	}
 	addrs = c.liveAddrs(addrs)
 
-	groups := make(map[*Addr][][]byte, len(addrs))
+	groups := make(map[*addr][][]byte, len(addrs))
 	for _, key := range wired {
-		addr, err := picker.Pick(addrs, c.hashKey(key))
+		addr, err := picker.Pick(addrs, key)
 		if err != nil {
 			return nil, fmt.Errorf("pick node failed: %w", err)
 		}
@@ -130,11 +107,11 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 		err   error
 	}
 	ch := make(chan nodeResult, len(groups))
-	for addr, nodeKeys := range groups {
-		go func(addr *Addr, nodeKeys [][]byte) {
-			items, err := c.getFromAddr(ctx, addr, command, expiry, nodeKeys, withCAS)
+	for target, nodeKeys := range groups {
+		go func(node *addr, nodeKeys [][]byte) {
+			items, err := c.getFromAddr(ctx, node, command, expiry, nodeKeys, withCAS)
 			ch <- nodeResult{items: items, err: err}
-		}(addr, nodeKeys)
+		}(target, nodeKeys)
 	}
 
 	var items []*Item
