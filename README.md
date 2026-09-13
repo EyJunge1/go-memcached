@@ -1,4 +1,4 @@
-# gomemcached
+# go-memcached
 
 ### Features
 
@@ -81,7 +81,7 @@ does not send `flush_all`.
 ### Installation
 
 ```bash
-go get github.com/EyJunge1/gomemcached@latest
+go get github.com/EyJunge1/go-memcached/memcached@latest
 ```
 
 ### Usage
@@ -93,7 +93,7 @@ import (
     "context"
     "time"
 
-    "github.com/EyJunge1/gomemcached"
+    "github.com/EyJunge1/go-memcached/memcached"
 )
 
 func main() {
@@ -187,8 +187,8 @@ arbitrary raw command passthrough.
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/EyJunge1/gomemcached.git
-    cd gomemcached
+    git clone https://github.com/EyJunge1/go-memcached.git
+    cd go-memcached
     ```
 2. Install pre-commit hooks:
     ```bash

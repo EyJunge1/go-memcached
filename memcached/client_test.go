@@ -51,7 +51,7 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 	wg.Wait()
 }
 
-// https://github.com/EyJunge1/gomemcached/issues/18
+// https://github.com/EyJunge1/go-memcached/issues/18
 // Mock a concurrent client to set, get and touch the cache at the same time.
 func Test_concurrent(t *testing.T) {
 	client := setupLiveClient(t)

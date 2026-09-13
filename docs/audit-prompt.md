@@ -1,4 +1,4 @@
-# gomemcached — Multi-Agent Audit Prompt
+# go-memcached — Multi-Agent Audit Prompt
 
 Copy **Gemeinsamer Kopf** plus genau einen **AGENT**-Block.
 
@@ -53,7 +53,7 @@ App-Befehle, Admin/Ops, alle Meta-Flags, alle `stats`-Subcommands, optionale Tok
 - komplettes Binary-Protokoll ([docs](https://docs.memcached.org/protocols/binary/))
 - SASL (hängt am Binary, von Memcached selbst als Problem genannt)
 - TAP, VBucket, Range-Ops (`RGet`/`RSet`/… — nicht im Server)
-- Serialisierung/Kompression als Library-Dependency (gomemcached macht bewusst `[]byte`)
+- Serialisierung/Kompression als Library-Dependency (go-memcached macht bewusst `[]byte`)
 
 Meta **ersetzt** Binary. Fehlt ein Binary-Opcode, aber Meta kann dasselbe: **kein Missing Feature**, höchstens Hinweis unter Deprecated.
 
@@ -61,7 +61,7 @@ Meta **ersetzt** Binary. Fehlt ein Binary-Opcode, aber Meta kann dasselbe: **kei
 
 ## Stand: pre-release, alles darf kippen
 
-gomemcached ist **nicht in Produktion**. Es gibt keine Downstream-Nutzer, die eine stabile API erwarten.
+go-memcached ist **nicht in Produktion**. Es gibt keine Downstream-Nutzer, die eine stabile API erwarten.
 
 Daraus folgt für jeden Vorschlag:
 
@@ -178,7 +178,7 @@ Aus `protocol.txt` / [Basic](https://docs.memcached.org/protocols/basic/) / [Met
 
 ---
 
-## Was gomemcached bereits behauptet (Code = Wahrheit)
+## Was go-memcached bereits behauptet (Code = Wahrheit)
 
 Text: set/add/replace/append/prepend/cas, get/gets/gat/gats, delete, incr/decr, touch, version, stats, flush_all, ping, SetServers.
 
@@ -195,7 +195,7 @@ API-Dateien: `client.go`, `client_commands.go`, `protocol.go`, `protocol_builder
 ## Gemeinsamer Kopf
 
 ```text
-Repo: Workspace-Root gomemcached. Package memcached.
+Repo: Workspace-Root go-memcached. Package memcached/.
 
 Modell: nur Grok 4.6 (fast high / xhigh fast / high max).
 
@@ -268,7 +268,7 @@ Schreiben / ergänzen:
 ```text
 Rolle: API-Vergleich. Gemeinsamer Kopf gilt.
 
-libmemcached und die zwei Go-Clients gegen gomemcached.
+libmemcached und die zwei Go-Clients gegen go-memcached.
 Binary/SASL-Behaviors von libmemcached nicht als Missing zählen.
 
 Cluster: crc32/murmur3/rendezvous vs Ketama/Weights.
