@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Debug issues me and returns a value (protocol miss is dbg.Err, not the function error).
+// Debug sends me. A protocol miss is MetaItemDebug.Err, not the returned error.
 func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug) (MetaItemDebug, error) {
 	c := m.c
 	if err := f.validate(); err != nil {

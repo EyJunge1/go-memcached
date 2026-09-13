@@ -7,26 +7,26 @@ import (
 	"strconv"
 )
 
+// metaGetFlags is the encoded mg flag set.
 type metaGetFlags struct {
-	b      bool   // b: interpret key as base64 encoded binary value
-	c      bool   // c: return item cas token
-	f      bool   // f: return client flags token
-	h      bool   // h: return whether item has been hit before as a 0 or 1
-	k      bool   // k: return key as a token
-	l      bool   // l: return time since item was last accessed in seconds
-	O      uint64 // O(token): opaque value, consumes a token and copies back with response
+	b      bool   // key is Base64
+	c      bool   // echo CAS
+	f      bool   // echo client flags
+	h      bool   // echo hit-before (0 or 1)
+	k      bool   // echo key
+	l      bool   // echo seconds since last access
+	O      uint64 // numeric opaque, echoed
 	Otoken string
-	q      bool // q: use noreply semantics for return codes.
-	s      bool // s: return item size token
-	t      bool // t: return item TTL remaining in seconds (-1 for unlimited)
-	u      bool // u: don't bump the item in the LRU
-	v      bool // v: return item value in <data block>
+	q      bool // quiet: skip HD/EN; still return EX/NF/NS
+	s      bool // echo size
+	t      bool // echo remaining TTL (-1 unlimited)
+	u      bool // skip LRU bump
+	v      bool // include value body
 
-	// These flags can modify the item:
-	E uint64 // E(token): use token as new CAS value if item is modified
-	N int64  // N(token): vivify on miss, takes TTL as a argument
-	R int64  // R(token): if remaining TTL is less than token, win for recache
-	T int64  // T(token): update remaining TTL
+	E uint64 // new CAS if the item is written
+	N int64  // create on miss (TTL)
+	R int64  // recache win if remaining TTL is below token
+	T int64  // set remaining TTL
 
 	Oset      bool
 	OtokenSet bool
@@ -40,6 +40,7 @@ type metaGetFlags struct {
 	L         string
 }
 
+// encodeMetaGetLine encodes mg <key> <flags>* and returns the wire key.
 func encodeMetaGetLine(key []byte, flags *metaGetFlags) ([]byte, []byte) {
 	wireKey := key
 	if flags.b {
@@ -75,7 +76,7 @@ func encodeMetaGetLine(key []byte, flags *metaGetFlags) ([]byte, []byte) {
 	return wireKey, b.AddCRLF().build()
 }
 
-// mg <key> <flags>*\r\n
+// buildMetaGetCommand encodes mg <key> <flags>*\r\n. Quiet appends mn.
 func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) {
 	wireKey, raw := encodeMetaGetLine(key, flags)
 	req := buildRequest([]byte("mg"), wireKey, raw)
@@ -91,19 +92,7 @@ func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) 
 	return req, resp
 }
 
-// parseMetaItem parses the response from memcached server. It coule be:
-//
-//	<CD> <flags>*\r\n
-//
-// .e.g:
-//
-//	HD c26 kZm9v b O456 s3\r\n
-//
-// CD is one of: HD(succeed), NF(not found), NS(not stored), EX(exists), EN(miss).
-//
-//	VA(value).
-//
-// VA is specified as: VA <size> <flags>*\r\n<data block>\r\n.
+// parseMetaItem reads HD/VA/EN/NF/NS/EX plus optional flags and a VA body.
 func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound bool) error {
 	if err := forecastCollectedMeta(lines); err != nil {
 		return err
@@ -127,13 +116,11 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 		return nil
 	}
 
-	// figure out the <CD>
 	if len(proto) == 0 {
 		return fmt.Errorf("missing response: %w", ErrMalformedResponse)
 	}
 	lines = proto
 
-	// Normal CD handling
 	parts := bytes.Split(trimCRLF(lines[0]), _SpaceBytes)
 	if len(parts) < 1 {
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
@@ -171,7 +158,6 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 		return parseFlags(parts, 1, item)
 	}
 
-	// VA handling
 	if len(parts) <= dataLenIndex {
 		return fmt.Errorf("missing value size: %w", ErrMalformedResponse)
 	}
@@ -196,6 +182,7 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 	return nil
 }
 
+// forecastCollectedMeta returns the first meta fault that must abort parsing.
 func forecastCollectedMeta(lines [][]byte) error {
 	for i := 0; i < len(lines); i++ {
 		if isMetaNoopLine(lines[i]) {
@@ -206,16 +193,13 @@ func forecastCollectedMeta(lines [][]byte) error {
 			return hit.Err
 		}
 		if hit.Status == MetaStatusVA {
-			i++ // data block is not a status line
+			i++ // skip the framed body
 		}
 	}
 	return nil
 }
 
-// CD <flags>*\r\n
-// .e.g:
-//
-//	HD c26 kZm9v b O456 s3\r\n
+// parseFlags applies meta reply tokens (c, f, t, l, s, O, h, W, X, Z, k, b).
 func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 	parseUint := func(flag byte, b []byte) (uint64, error) {
 		v, err := strconv.ParseUint(string(b), 10, 64)
@@ -299,6 +283,7 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 	return nil
 }
 
+// parseMetaPipeline parses a pipelined meta reply into items.
 func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
 	var items []*MetaItem
 	var charge error

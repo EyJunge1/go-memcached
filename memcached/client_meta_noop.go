@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Noop issues mn.
+// Noop sends mn.
 func (m *MetaClient) Noop(ctx context.Context, f MetaNoop) (MetaResult, error) {
 	if err := f.validate(); err != nil {
 		return MetaResult{}, err

@@ -1,35 +1,38 @@
-// Package memcached is a thread-safe memcached client for Store and Get
-// (text protocol) plus Meta().Get and related meta commands.
+// Package memcached implements a concurrent text- and meta-protocol client.
 //
-// Application commands:
-//   - set/add/replace/append/prepend/cas via Store (zero Mode is set;
-//     NOT_STORED/EXISTS/NOT_FOUND via errors.Is)
-//   - get / gets / gat / gats via Get + GetOpts; missing keys are omitted
-//   - Item.Quiet / MutateOpts.Quiet / FlushOpts.Quiet send noreply
-//     (conn discarded; CLIENT_ERROR still returned). AdminOpts.Quiet is send-ok only.
-//   - delete and touch (noreply via MutateOpts.Quiet)
-//   - incr/decr always return the new value; quiet arithmetic is Meta().Arithmetic + q
-//   - mg/ms/md/mn/ma/me via client.Meta() (Get/Set/Delete/Noop/Arithmetic/Debug/Pipeline)
-//   - version via Version / VersionAll; stats via Stats / StatsAll
-//     (reset/sizes only via Admin; detail via AdminNode.StatsDetail)
-//   - flush_all via Admin().On / All Flush (requires Config.AllowFlushAll)
+// Application surface:
+//   - Store sends set, add, replace, append, prepend, or cas (zero Mode is set).
+//     Check NOT_STORED, EXISTS, and NOT_FOUND with errors.Is.
+//   - Get and GetOpts issue get, gets, gat, and gats. Missing keys are omitted,
+//     not returned as errors.
+//   - Quiet on Item, MutateOpts, and FlushOpts adds noreply. The connection is
+//     discarded after send; CLIENT_ERROR is still returned. AdminOpts.Quiet
+//     means only that the write was sent.
+//   - Delete and Touch take MutateOpts.Quiet for noreply.
+//   - Incr and Decr always return the new counter. Quiet arithmetic is
+//     Meta().Arithmetic with q.
+//   - Meta() exposes mg, ms, md, mn, ma, me (Get, Set, Delete, Noop,
+//     Arithmetic, Debug, Pipeline).
+//   - Version / VersionAll and Stats / StatsAll are the health and stats
+//     entry points. reset and sizes are on Admin; detail is AdminNode.StatsDetail.
+//   - flush_all is Admin().On or All Flush and requires Config.AllowFlushAll.
 //
-// Two pipeline worlds: Client.Pipeline is text write-then-read;
-// Meta().Pipeline is the meta batch (quiet q plus mn).
+// Client.Pipeline is a text write-then-read batch. Meta().Pipeline is the
+// meta batch; quiet ops pair q with mn.
 //
-// Admin commands (verbosity, shutdown, slabs, lru*, watch, crawler dumps)
-// are available only through Client.Admin after Config.AllowAdmin.
-// Cluster.ResolverRefresh requires AllowSetServers, as SetServers does.
+// Verbosity, shutdown, slabs, lru*, watch, and crawler dumps are reached
+// only through Client.Admin when Config.AllowAdmin is set. SetServers and
+// Cluster.ResolverRefresh both need AllowSetServers.
 //
-// Values are opaque []byte. Serialize or compress in the caller before Store.
+// Values are raw []byte. Encoding and compression belong in the caller.
 //
-// The default picker is weighted Ketama/MD5.
+// Node selection defaults to weighted Ketama/MD5.
 //
-// The default transport is plaintext TCP. Transport.RequireTLS fails New
-// without TLS; it does not change that default. UDP is udp:// / udp4 / udp6
-// only (8-byte framing, one request datagram). It cannot mix with TCP, Unix,
-// TLS, or Auth, and it cannot mutate: Get/gets, Version, Meta().Get without
-// N/R/T/E, Meta().Noop, Meta().Debug. GetOpts.Touch and StatsAll are TCP-only.
-// Token auth (-Y) is configured on Config.Auth at dial time. SASL is out of
-// scope. Binary, TAP, VBucket, and range ops are out of scope.
+// The default path is plaintext TCP. Transport.RequireTLS rejects New when
+// TLS is missing; it does not change that default. UDP (udp://, udp4, udp6)
+// uses 8-byte framing and one request per datagram. It cannot share a Client
+// with TCP, Unix, TLS, or Auth, and it cannot mutate. Allowed UDP calls:
+// Get/gets, Version, Meta().Get without N/R/T/E, Meta().Noop, Meta().Debug.
+// GetOpts.Touch and StatsAll require TCP. Config.Auth is token auth (-Y) at
+// dial. SASL, binary, TAP, VBucket, and range ops are not implemented.
 package memcached

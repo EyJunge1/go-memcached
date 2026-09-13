@@ -6,15 +6,13 @@ import (
 	"fmt"
 )
 
-// GetOpts selects get vs gets vs gat vs gats.
+// GetOpts chooses get, gets, gat, or gats.
 type GetOpts struct {
-	CAS   bool     // gets / gats
-	Touch *Exptime // gat / gats; TCP-only (UDP returns ErrNotSupported)
+	CAS   bool     // CAS requests gets or gats.
+	Touch *Exptime // Touch uses gat or gats; UDP returns ErrNotSupported.
 }
 
-// Get fetches keys. Missing keys are omitted. An empty result is not ErrNotFound.
-// Keys are grouped by cluster node and fetched in parallel.
-// Item.Key is the caller key; Config.Cluster.Namespace is stripped after the read.
+// Get loads keys. Misses are omitted and an empty slice is not ErrNotFound.
 func (c *Client) Get(ctx context.Context, keys [][]byte, opts GetOpts) ([]Item, error) {
 	if len(keys) == 0 {
 		return []Item{}, nil
@@ -37,6 +35,7 @@ func (c *Client) Get(ctx context.Context, keys [][]byte, opts GetOpts) ([]Item, 
 	return out, err
 }
 
+// getCommand selects get, gets, gat, or gats from GetOpts.
 func getCommand(opts GetOpts) (command string, withCAS bool) {
 	if opts.Touch != nil {
 		if opts.CAS {
@@ -50,6 +49,7 @@ func getCommand(opts GetOpts) (command string, withCAS bool) {
 	return "get", false
 }
 
+// getFromAddr fetches keys from one node and parses VALUE replies.
 func (c *Client) getFromAddr(ctx context.Context, node *addr, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
 	var req *request
 	var resp *response
@@ -75,6 +75,7 @@ func (c *Client) getFromAddr(ctx context.Context, node *addr, command string, ex
 	return items, nil
 }
 
+// getFromNodes groups keys by picker and fetches each node concurrently.
 func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

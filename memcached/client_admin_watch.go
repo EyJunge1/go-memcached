@@ -12,7 +12,7 @@ import (
 
 const adminStreamLineLimit = 64 * 1024
 
-// WatchTopic is a typed watch stream name. Free strings are rejected.
+// WatchTopic is a closed set of watch stream names. Other strings are rejected.
 type WatchTopic string
 
 const (
@@ -26,7 +26,7 @@ const (
 	WatchDeletions   WatchTopic = "deletions"
 )
 
-// WatchEvent is one watcher log line. Err is set on a terminal stream error.
+// WatchEvent is one watcher log line. Err is set when the stream ends in error.
 type WatchEvent struct {
 	TS  time.Time
 	GID uint64
@@ -34,13 +34,14 @@ type WatchEvent struct {
 	Err error
 }
 
-// DumpEntry is one metadump or mgdump line. Err is set on a terminal stream error.
+// DumpEntry is one metadump or mgdump line. Err is set when the stream ends in error.
 type DumpEntry struct {
 	Fields map[string]string
 	Line   string
 	Err    error
 }
 
+// releaseDedicated closes an unpooled admin-stream socket.
 func releaseDedicated(cn wireConn) {
 	if cn == nil {
 		return
@@ -48,6 +49,7 @@ func releaseDedicated(cn wireConn) {
 	_ = cn.Close()
 }
 
+// readAdminStreamLine reads one watcher or dump line, capped at adminStreamLineLimit.
 func readAdminStreamLine(cn wireConn) ([]byte, error) {
 	var buf []byte
 	tmp := make([]byte, 1)
@@ -71,6 +73,7 @@ func readAdminStreamLine(cn wireConn) ([]byte, error) {
 	}
 }
 
+// sendAdminLine writes one admin command on a dedicated connection and maps the status reply.
 func (a *AdminNode) sendAdminLine(ctx context.Context, cn wireConn, req *request, resp *response) error {
 	a.c.enableUDPFraming(nil, req, resp)
 	if err := req.send(ctx, cn, a.c.rt.writeTimeout); err != nil {
@@ -85,6 +88,7 @@ func (a *AdminNode) sendAdminLine(ctx context.Context, cn wireConn, req *request
 	return nil
 }
 
+// acquireStream dials a dedicated socket for watch or dump; ctx must carry a deadline.
 func (a *AdminNode) acquireStream(ctx context.Context) (wireConn, error) {
 	if err := requireDeadline(ctx); err != nil {
 		return nil, err
@@ -100,8 +104,8 @@ func (a *AdminNode) acquireStream(ctx context.Context) (wireConn, error) {
 	return cn, nil
 }
 
-// Watch starts a watcher stream on the bound node.
-// ctx must have a deadline; cancel or deadline close the dedicated connection.
+// Watch opens a watcher stream on the bound node.
+// ctx must carry a deadline; cancel or expiry closes the dedicated connection.
 func (a *AdminNode) Watch(ctx context.Context, topics ...WatchTopic) (<-chan WatchEvent, error) {
 	if len(topics) == 0 {
 		return nil, fmt.Errorf("watch: %w", ErrInvalidArgument)
@@ -129,6 +133,7 @@ func (a *AdminNode) Watch(ctx context.Context, topics ...WatchTopic) (<-chan Wat
 	return out, nil
 }
 
+// readWatch pumps watcher log lines into out until ctx ends or the stream fails.
 func (a *AdminNode) readWatch(ctx context.Context, cn wireConn, out chan WatchEvent) {
 	defer close(out)
 	defer releaseDedicated(cn)
@@ -171,6 +176,7 @@ func (a *AdminNode) readWatch(ctx context.Context, cn wireConn, out chan WatchEv
 	}
 }
 
+// parseWatchEvent decodes one URI-encoded watcher line into a WatchEvent.
 func parseWatchEvent(line string) WatchEvent {
 	raw := parseURIPairs(line)
 	ev := WatchEvent{Raw: raw}
@@ -183,6 +189,7 @@ func parseWatchEvent(line string) WatchEvent {
 	return ev
 }
 
+// parseWatchTS parses a watcher ts field as seconds plus an optional microsecond integer.
 func parseWatchTS(ts string) time.Time {
 	secStr, frac, ok := strings.Cut(ts, ".")
 	sec, err := strconv.ParseInt(secStr, 10, 64)
@@ -192,8 +199,8 @@ func parseWatchTS(ts string) time.Time {
 	var nsec int64
 	if ok && frac != "" {
 		usec, uerr := strconv.ParseInt(frac, 10, 64)
-		// logger.c prints usec as an integer (typically 0–999999), not a
-		// fractional second. Out-of-range values stay at second precision.
+		// logger.c writes usec as an integer (0–999999), not a fractional
+		// second. Values outside that range keep second precision only.
 		if uerr == nil && usec >= 0 && usec <= 999999 {
 			nsec = usec * 1000
 		}
@@ -201,6 +208,7 @@ func parseWatchTS(ts string) time.Time {
 	return time.Unix(sec, nsec)
 }
 
+// parseURIPairs splits a space-separated k=v line and URL-decodes each value.
 func parseURIPairs(line string) map[string]string {
 	out := make(map[string]string)
 	for _, field := range strings.Fields(line) {
@@ -217,7 +225,7 @@ func parseURIPairs(line string) map[string]string {
 }
 
 // LRUCrawlerMetaDump streams URI-encoded item metadata until END or EN.
-// ctx must have a deadline; cancel or deadline close the dedicated connection.
+// ctx must carry a deadline; cancel or expiry closes the dedicated connection.
 func (a *AdminNode) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
@@ -237,7 +245,7 @@ func (a *AdminNode) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-
 }
 
 // LRUCrawlerMgDump streams "mg …" lines until END or EN for a later Meta().Get.
-// ctx must have a deadline; cancel or deadline close the dedicated connection.
+// ctx must carry a deadline; cancel or expiry closes the dedicated connection.
 func (a *AdminNode) LRUCrawlerMgDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
@@ -256,6 +264,7 @@ func (a *AdminNode) LRUCrawlerMgDump(ctx context.Context, selector string) (<-ch
 	return ch, nil
 }
 
+// startDumpStream opens a metadump or mgdump stream and emits entries until END, EN, or error.
 func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, parse func(string) DumpEntry, emit func(DumpEntry), done func()) error {
 	cn, err := a.acquireStream(ctx)
 	if err != nil {

@@ -1,5 +1,6 @@
 package memcached
 
+// buildFlushAllCommand encodes flush_all [exptime] [noreply]\r\n. ExptimeNever omits the token.
 func buildFlushAllCommand(delay Exptime, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().AddString("flush_all")
 	defer b.release()

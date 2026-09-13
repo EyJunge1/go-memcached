@@ -93,8 +93,6 @@ func Test_connPool_get_put(t *testing.T) {
 	})
 }
 
-// Test_connPool_get_timeout_case1 mocking the case that the createConn function
-// takes longer than the context timeout to return a connection.
 func Test_connPool_get_timeout_case1(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		createConn := func(ctx context.Context) (wireConn, error) {
@@ -119,9 +117,6 @@ func Test_connPool_get_timeout_case1(t *testing.T) {
 	})
 }
 
-// Test_connPool_get_timeout_case2 mocking the case that the all connections
-// are occupied, we must wait for a connection to be put back to the pool but
-// no connection is put back before (get) context timeout deadline.
 func Test_connPool_get_timeout_case2(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		pool := newConnPool(5, 10, time.Hour, 5*time.Minute, createConn)
@@ -190,18 +185,12 @@ func Test_connPool_get_oversize(t *testing.T) {
 	})
 }
 
-// Test_connPool_cleanup_maxIdle tests the case that connection sits in
-// idle list for more than maxIdleTime, it should be closed.
 func Test_connPool_cleanup_maxIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// maxLifetime = 3600s
-		// maxIdleTime = 1s
 		pool := newConnPool(5, 10, time.Hour, time.Second, createConn)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		// get 10 connections and put them back, now there are 10 idle connections
-		// and 10 open connections.
 		for range 10 {
 			go func() {
 				cn, err := pool.get(ctx)
@@ -224,8 +213,6 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		equal(t, int64(0), stat.closedLifetime)
 		equal(t, int64(0), stat.closedIdleAge)
 
-		// wait for the cleaner to clean up the idle connection, decrease the open count
-		// connections to 5.
 		time.Sleep(3 * time.Second)
 		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
@@ -234,7 +221,7 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		stat = pool.stats()
 		t.Logf("After cleanup: %+v", stat)
 		equal(t, 0, stat.TotalConns)
-		equal(t, 0, stat.IdleConns) // since all connections are cleaned up(idle=1s)
+		equal(t, 0, stat.IdleConns)
 		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
 		equal(t, int64(5), stat.closedIdleCap)
@@ -244,18 +231,12 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 	})
 }
 
-// Test_connPool_cleanup_maxLife tests the case that connection sits in
-// idle list for more than maxLifetime, it should be closed.
 func Test_connPool_cleanup_maxLife(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// maxLifetime = 1s
-		// maxIdleTime = 3600s
 		pool := newConnPool(5, 10, 2*time.Second, time.Hour, createConn)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		// get 10 connections and put them back, now there are 10 idle connections
-		// and 10 open connections.
 		for range 10 {
 			go func() {
 				cn, err := pool.get(ctx)
@@ -278,8 +259,6 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		equal(t, int64(0), stat.closedLifetime)
 		equal(t, int64(0), stat.closedIdleAge)
 
-		// wait for the cleaner to clean up the idle connection, decrease the open count
-		// connections to 5.
 		time.Sleep(3 * time.Second)
 		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
@@ -288,7 +267,7 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		stat = pool.stats()
 		t.Logf("After cleanup: %+v", stat)
 		equal(t, 0, stat.TotalConns)
-		equal(t, 0, stat.IdleConns) // since all connections are cleaned up(life=2s)
+		equal(t, 0, stat.IdleConns)
 		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
 		equal(t, int64(5), stat.closedIdleCap)

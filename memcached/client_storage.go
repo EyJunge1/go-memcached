@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// StoreMode selects the text storage command.
+// StoreMode picks which text storage verb Store sends.
 type StoreMode uint8
 
 const (
@@ -18,6 +18,7 @@ const (
 	StoreCAS
 )
 
+// storeCommand maps StoreMode to the text storage verb.
 func storeCommand(mode StoreMode) (string, error) {
 	switch mode {
 	case StoreSet:
@@ -37,11 +38,7 @@ func storeCommand(mode StoreMode) (string, error) {
 	}
 }
 
-// Store issues one text storage command.
-// NOT_STORED, EXISTS, and NOT_FOUND are returned as sentinels.
-// Quiet sends noreply. A nil error means the write was sent, not that the
-// server accepted the item. CLIENT_ERROR and SERVER_ERROR are still
-// returned if the server replies. The connection is discarded.
+// Store sends one text storage command. NOT_STORED, EXISTS, and NOT_FOUND are sentinels; Quiet only means the write was sent.
 func (c *Client) Store(ctx context.Context, item Item) error {
 	command, err := storeCommand(item.Mode)
 	if err != nil {
@@ -75,6 +72,7 @@ func (c *Client) Store(ctx context.Context, item Item) error {
 	return nil
 }
 
+// dispatchQuiet writes a noreply command on the key's picked node.
 func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response) error {
 	select {
 	case <-ctx.Done():
@@ -90,13 +88,10 @@ func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response
 	return c.sendQuietToAddr(ctx, addr, req, resp, true)
 }
 
-// quietFaultWait is how long a noreply send waits for CLIENT_ERROR/SERVER_ERROR.
-// The deadline must be in the future or Go skips the Read entirely. Data already
-// on the socket returns immediately; a well-formed quiet write waits the full
-// budget. Shorter than the default ReadTimeout so Quiet stays cheaper than a
-// normal round-trip.
+// quietFaultWait is how long a noreply write waits for CLIENT_ERROR or SERVER_ERROR.
 const quietFaultWait = 25 * time.Millisecond
 
+// connBuffered reports unread bytes on cn, or -1 if the conn does not expose a buffer.
 func connBuffered(cn wireConn) int {
 	type withBuf interface{ buffered() int }
 	if b, ok := cn.(withBuf); ok {
@@ -105,6 +100,7 @@ func connBuffered(cn wireConn) int {
 	return -1
 }
 
+// readQuietFault briefly reads for CLIENT_ERROR or SERVER_ERROR after a noreply write.
 func readQuietFault(ctx context.Context, cn wireConn) error {
 	deadline := clock().Add(quietFaultWait)
 	if ctx != nil {
@@ -136,6 +132,7 @@ func readQuietFault(ctx context.Context, cn wireConn) error {
 	return nil
 }
 
+// sendQuietToAddr writes a noreply frame to node and optionally probes for a fault line.
 func (c *Client) sendQuietToAddr(ctx context.Context, node *addr, req *request, resp *response, probeFault bool) error {
 	select {
 	case <-ctx.Done():

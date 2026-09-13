@@ -8,15 +8,14 @@ import (
 	"time"
 )
 
-// FlushOpts controls flush_all delay, cluster stagger, and noreply.
-// Delay nil omits the token (immediate). ExptimeImmediate sends wire -1.
-// Stagger applies only when Delay is nil: node i uses Rel(i*Stagger).
+// FlushOpts sets flush_all delay, cluster stagger, and noreply. Nil Delay runs now and may stagger as Rel(i*Stagger); ExptimeImmediate sends -1.
 type FlushOpts struct {
 	Delay   *Exptime
 	Stagger time.Duration
 	Quiet   bool
 }
 
+// flushDelayFor returns the flush_all delay for node index i from FlushOpts.
 func flushDelayFor(o FlushOpts) func(int) Exptime {
 	return func(i int) Exptime {
 		if o.Delay != nil {
@@ -26,6 +25,7 @@ func flushDelayFor(o FlushOpts) func(int) Exptime {
 	}
 }
 
+// flushOptsValid rejects a negative Stagger or Delay combined with Stagger.
 func flushOptsValid(o FlushOpts) error {
 	if o.Stagger < 0 {
 		return fmt.Errorf("flush_all: %w", ErrInvalidArgument)
@@ -36,8 +36,7 @@ func flushOptsValid(o FlushOpts) error {
 	return nil
 }
 
-// Flush sends flush_all on the On() node. Requires Config.AllowFlushAll.
-// Broadcast is All().Flush.
+// Flush sends flush_all on the On() node. Config.AllowFlushAll must be set.
 func (a *AdminNode) Flush(ctx context.Context, o FlushOpts) error {
 	if a == nil || a.c == nil {
 		return ErrAdminNotEnabled
@@ -55,7 +54,7 @@ func (a *AdminNode) Flush(ctx context.Context, o FlushOpts) error {
 	return a.c.flushAllOnAddr(ctx, addr, flushDelayFor(o)(0), o.Quiet)
 }
 
-// Flush sends flush_all on every configured server.
+// Flush sends flush_all to every configured server.
 func (b *AdminBroadcast) Flush(ctx context.Context, o FlushOpts) error {
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
@@ -66,6 +65,7 @@ func (b *AdminBroadcast) Flush(ctx context.Context, o FlushOpts) error {
 	return b.c.flushAllBroadcast(ctx, flushDelayFor(o), o.Quiet)
 }
 
+// flushAllBroadcast sends flush_all to every configured node.
 func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) Exptime, quiet bool) error {
 	if !c.rt.allowFlushAll {
 		return ErrFlushAllNotAllowed
@@ -93,6 +93,7 @@ func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) Expti
 	return nil
 }
 
+// flushAllOnAddr sends flush_all to one node, using Quiet when requested.
 func (c *Client) flushAllOnAddr(ctx context.Context, node *addr, delay Exptime, quiet bool) error {
 	if node != nil && isUDPNetwork(node.Network) {
 		return fmt.Errorf("udp flush_all: %w", ErrNotSupported)

@@ -17,21 +17,21 @@ var requestPool = sync.Pool{
 	},
 }
 
+// request is one outbound frame.
 type request struct {
-	cmd []byte // command name
-	key []byte // key is nil if the command DOES NOT need key
+	cmd []byte // verb, for UDP retry classification
+	key []byte // routing key; nil when the command has none
 	raw []byte
-	// body and tail are written after raw so storage values are not copied
-	// into the builder buffer.
+	// body and tail follow raw so storage values skip the builder buffer.
 	body []byte
 	tail []byte
 
-	// this field is used to indicate whether the request is UDP enabled.
-	// And it's set by the memcached client before sending the request.
+	// udpEnabled is set by the client before send when the node is UDP.
 	udpEnabled bool
 	udpReqID   uint16
 }
 
+// wire concatenates raw, body, and tail into one outbound frame.
 func (req *request) wire() []byte {
 	if len(req.body) == 0 && len(req.tail) == 0 {
 		return req.raw
@@ -43,6 +43,7 @@ func (req *request) wire() []byte {
 	return out
 }
 
+// buildRequest returns a pooled request with cmd, key, and raw.
 func buildRequest(cmd []byte, key []byte, raw []byte) *request {
 	req := requestPool.Get().(*request)
 	req.cmd = cmd
@@ -51,6 +52,7 @@ func buildRequest(cmd []byte, key []byte, raw []byte) *request {
 	return req
 }
 
+// release clears the request and returns it to the pool.
 func (req *request) release() {
 	req.cmd = nil
 	req.key = nil
@@ -63,6 +65,7 @@ func (req *request) release() {
 	requestPool.Put(req)
 }
 
+// send writes the request over TCP or UDP and flushes.
 func (req *request) send(ctx context.Context, rr wireConn, writeTimeout time.Duration) (err error) {
 	if has := selectProximateDeadline(ctx, rr, writeTimeout, clock, false); has {
 		defer func() { _ = rr.setWriteDeadline(zeroTime) }()
@@ -79,6 +82,7 @@ func (req *request) send(ctx context.Context, rr wireConn, writeTimeout time.Dur
 	return rr.Flush()
 }
 
+// write writes raw, body, and tail without flushing.
 func (req *request) write(rr wireConn) (err error) {
 	if _, err = rr.Write(req.raw); err != nil {
 		return err
@@ -94,6 +98,7 @@ func (req *request) write(rr wireConn) (err error) {
 	return err
 }
 
+// watchContextCancel shortens the conn deadlines when ctx is canceled.
 func watchContextCancel(ctx context.Context, rr wireConn) (stop func()) {
 	if ctx == nil {
 		return func() {}
@@ -106,6 +111,7 @@ func watchContextCancel(ctx context.Context, rr wireConn) (stop func()) {
 	return func() { _ = cancelWatch() }
 }
 
+// releaseReqAndResp releases both the request and the response.
 func releaseReqAndResp(req *request, resp *response) {
 	if req != nil {
 		req.release()

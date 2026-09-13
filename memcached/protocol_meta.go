@@ -6,6 +6,7 @@ import (
 
 const maxOpaqueTokenBytes = 32
 
+// validMetaHints rejects whitespace or controls in proxy tokens P and L.
 func validMetaHints(p, l string) error {
 	if err := validMetaHint(p); err != nil {
 		return fmt.Errorf("P: %w", err)
@@ -16,6 +17,7 @@ func validMetaHints(p, l string) error {
 	return nil
 }
 
+// validMetaHint rejects whitespace or controls in one proxy hint token.
 func validMetaHint(tok string) error {
 	if tok == "" {
 		return nil
@@ -28,6 +30,7 @@ func validMetaHint(tok string) error {
 	return nil
 }
 
+// validOpaqueToken rejects empty, overlong, or control-bearing opaque tokens.
 func validOpaqueToken(token string) error {
 	if token == "" {
 		return fmt.Errorf("opaque token empty: %w", ErrInvalidArgument)

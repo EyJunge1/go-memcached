@@ -5,16 +5,17 @@ import (
 	"fmt"
 )
 
-// Incr increments the key and returns the new value.
+// Incr adds delta to the key and returns the updated counter.
 func (c *Client) Incr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
 	return c.arithmetic(ctx, "incr", key, delta)
 }
 
-// Decr decrements the key and returns the new value.
+// Decr subtracts delta from the key and returns the updated counter.
 func (c *Client) Decr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
 	return c.arithmetic(ctx, "decr", key, delta)
 }
 
+// arithmetic sends incr or decr and returns the updated counter.
 func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64) (uint64, error) {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
@@ -33,6 +34,7 @@ func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta u
 	return value, nil
 }
 
+// parseArithmeticAfterRecv maps a numeric reply into dst after recv.
 func parseArithmeticAfterRecv(dst *uint64) func(*response) error {
 	return func(resp *response) error {
 		if len(resp.rawLines) == 0 {

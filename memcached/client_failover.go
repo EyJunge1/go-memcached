@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// isRetryable reports whether err is a transport failure that dispatch may try on another attempt.
 func isRetryable(err error) bool {
 	if err == nil {
 		return false
@@ -18,6 +19,7 @@ func isRetryable(err error) bool {
 	return isTransportError(err)
 }
 
+// liveAddrs drops members currently in failover quarantine, unless every member is dead.
 func (c *Client) liveAddrs(addrs []*addr) []*addr {
 	if !c.rt.failover.Eject || c.rt.failover.FailureLimit <= 0 {
 		return addrs
@@ -34,6 +36,7 @@ func (c *Client) liveAddrs(addrs []*addr) []*addr {
 	return live
 }
 
+// isDead reports whether node is still inside its failover quarantine window.
 func (c *Client) isDead(node *addr) bool {
 	if node == nil || c.rt.failover.FailureLimit <= 0 {
 		return false
@@ -44,10 +47,11 @@ func (c *Client) isDead(node *addr) bool {
 	return ok && clock().Before(until)
 }
 
-// deadUntilRevived is used when RetryAfter and DeadAfter are both 0:
-// the node stays ejected until noteSuccess.
+// deadUntilRevived is the quarantine end when RetryAfter and DeadAfter are
+// both 0: the node stays out until noteSuccess.
 var deadUntilRevived = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// quarantineDuration returns RetryAfter, or DeadAfter once failures exceed FailureLimit.
 func quarantineDuration(fo Failover, failures int) time.Duration {
 	if failures > fo.FailureLimit && fo.DeadAfter > 0 {
 		return fo.DeadAfter
@@ -58,6 +62,7 @@ func quarantineDuration(fo Failover, failures int) time.Duration {
 	return fo.DeadAfter
 }
 
+// noteFailure increments the node's failure count and quarantines it once FailureLimit is reached.
 func (c *Client) noteFailure(node *addr) {
 	if node == nil || c.rt.failover.FailureLimit <= 0 {
 		return
@@ -75,6 +80,7 @@ func (c *Client) noteFailure(node *addr) {
 	}
 }
 
+// noteSuccess clears the node's failure count and lifts any quarantine.
 func (c *Client) noteSuccess(node *addr) {
 	if node == nil {
 		return
@@ -86,7 +92,7 @@ func (c *Client) noteSuccess(node *addr) {
 	delete(c.deadUntil, id)
 }
 
-// DeadServers returns nodes currently in failover quarantine.
+// DeadServers lists members that are in failover quarantine right now.
 func (c *Client) DeadServers() []Server {
 	addrs, _ := c.snapshotCluster()
 	var out []Server
@@ -98,6 +104,7 @@ func (c *Client) DeadServers() []Server {
 	return out
 }
 
+// startResolverRefresh launches the periodic Cluster.ResolverRefresh loop when that interval is set.
 func (c *Client) startResolverRefresh() {
 	if c.rt == nil || c.rt.resolverRefresh <= 0 {
 		return

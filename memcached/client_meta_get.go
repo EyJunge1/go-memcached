@@ -9,11 +9,12 @@ import (
 	"sync"
 )
 
+// stripTrailingMN removes a trailing mn\r\n so a pipelined command can share one barrier.
 func stripTrailingMN(raw []byte) []byte {
 	return bytes.TrimSuffix(raw, []byte("mn\r\n"))
 }
 
-// Get issues mg with the given flags.
+// Get sends mg for key using flags f.
 func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
 	c := m.c
 	if err := f.validate(); err != nil {
@@ -46,6 +47,7 @@ func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet) (MetaResult
 	return res, nil
 }
 
+// applyCheckCAS sets CASMatched when mg used C and the server returned HD without a value.
 func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
 	if item == nil || flags == nil {
 		return
@@ -53,6 +55,7 @@ func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
 	item.CASMatched = flags.Cset && flags.v && item.gotHD && item.Value == nil
 }
 
+// preparedMetaOp is one encoded Meta().Pipeline step plus its opaque token.
 type preparedMetaOp struct {
 	idx      int
 	key      []byte
@@ -64,6 +67,7 @@ type preparedMetaOp struct {
 	barrier  MetaNoop
 }
 
+// metaOpKinds counts how many of Get, Set, Del, Arith, and Noop are set on op.
 func metaOpKinds(op MetaOp) int {
 	n := 0
 	if op.Get != nil {
@@ -84,6 +88,7 @@ func metaOpKinds(op MetaOp) int {
 	return n
 }
 
+// encodeMetaPipelineOp validates one MetaOp and encodes its quiet wire line for Pipeline.
 func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error) {
 	if metaOpKinds(op) != 1 {
 		return preparedMetaOp{}, fmt.Errorf("meta op: %w", ErrInvalidArgument)
@@ -179,7 +184,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.line = line
 		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.Oset || ma.OtokenSet)
 	case op.Noop != nil:
-		// Trailing mn is the pipeline barrier; an extra mn here would end read2 early.
+		// The batch already ends with mn; another mn would make the barrier reader stop early.
 		f := *op.Noop
 		if err := f.validate(); err != nil {
 			return preparedMetaOp{}, err
@@ -192,6 +197,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 	return prep, nil
 }
 
+// opaqueToken returns the O token string used to correlate a pipelined reply.
 func opaqueToken(tok string, num uint64, set bool) string {
 	if tok != "" {
 		return tok
@@ -202,6 +208,7 @@ func opaqueToken(tok string, num uint64, set bool) string {
 	return ""
 }
 
+// ensurePipelineOpaque assigns a unique O token for a pipelined mg when the caller omitted one.
 func ensurePipelineOpaque(flags *metaGetFlags, idx int) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
@@ -214,6 +221,7 @@ func ensurePipelineOpaque(flags *metaGetFlags, idx int) error {
 	return nil
 }
 
+// ensureSetOpaque assigns a unique O token for a pipelined ms when the caller omitted one.
 func ensureSetOpaque(flags *metaSetFlags, idx int) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
@@ -226,6 +234,7 @@ func ensureSetOpaque(flags *metaSetFlags, idx int) error {
 	return nil
 }
 
+// ensureDeleteOpaque assigns a unique O token for a pipelined md when the caller omitted one.
 func ensureDeleteOpaque(flags *metaDeleteFlags, idx int) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
@@ -238,6 +247,7 @@ func ensureDeleteOpaque(flags *metaDeleteFlags, idx int) error {
 	return nil
 }
 
+// ensureArithOpaque assigns a unique O token for a pipelined ma when the caller omitted one.
 func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
@@ -250,7 +260,7 @@ func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
 	return nil
 }
 
-// Pipeline issues mixed meta ops with auto-O, a trailing mn, and parallel fan-out.
+// Pipeline runs mixed meta ops, assigns O when missing, appends mn, and fans out by node.
 func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, error) {
 	c := m.c
 	if err := ctx.Err(); err != nil {
@@ -313,6 +323,7 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 	return out, errors.Join(errs...)
 }
 
+// metaPipelineDispatch writes a node's quiet meta batch, then maps replies onto out by opaque.
 func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []preparedMetaOp, out []MetaResult) error {
 	var raw []byte
 	var barrier MetaNoop

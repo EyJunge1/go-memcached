@@ -6,18 +6,15 @@ import (
 	"time"
 )
 
-// Exptime is the memcached wire expiration integer.
-// 0 never expires; 1..2592000 are relative seconds; values above 2592000 are
-// Unix timestamps (32-bit on the server). Negative values are a client
-// convention (wire -1) that expire immediately; they are not in protocol.txt.
-// flush_all delay 0 omits the token (immediate) and is not the same as item 0.
+// Exptime is the item expiry token on the wire.
+// 0 is no expiry, 1–2592000 are relative seconds, larger values are Unix time.
+// Negative values send -1 (expire now); protocol.txt does not define that token.
 type Exptime int64
 
 const (
-	// ExptimeNever means the item does not expire.
+	// ExptimeNever leaves the item without an expiry.
 	ExptimeNever Exptime = 0
-	// ExptimeImmediate expires the item at once. This is a client convention
-	// that sends wire -1; protocol.txt does not define a negative token.
+	// ExptimeImmediate expires the item at once. The client sends -1.
 	ExptimeImmediate Exptime = -1
 
 	maxRelativeExpirySecs int64 = 2592000
@@ -25,7 +22,7 @@ const (
 
 var maxRelativeExpiry = 30 * 24 * time.Hour
 
-// Rel maps a duration onto Exptime using the protocol 30-day rule.
+// Rel converts a duration to Exptime under the protocol 30-day split.
 func Rel(d time.Duration) Exptime {
 	switch {
 	case d == 0:
@@ -41,9 +38,9 @@ func Rel(d time.Duration) Exptime {
 	}
 }
 
-// UnixExp returns t as a Unix-timestamp Exptime. Times at or before the
-// 30-day relative window are rejected so the server cannot treat them as TTL.
-// Values above math.MaxInt32 are rejected (protocol Unix expiry is 32-bit).
+// UnixExp encodes t as a Unix-timestamp Exptime. Times inside the 30-day
+// relative window are rejected so the server cannot read them as a TTL.
+// Values above math.MaxInt32 are rejected because wire Unix expiry is 32-bit.
 func UnixExp(t time.Time) (Exptime, error) {
 	u := t.Unix()
 	if u <= maxRelativeExpirySecs {
@@ -55,15 +52,15 @@ func UnixExp(t time.Time) (Exptime, error) {
 	return Exptime(u), nil
 }
 
-// expiryToken is the sole wire encoder for Exptime.
+// expiryToken returns the integer sent on the wire for this Exptime.
 func expiryToken(e Exptime) int64 {
 	return int64(e)
 }
 
-// recacheToken encodes a remaining-TTL window as relative seconds.
-// This is not an item Exptime and must not go through Rel: a window above
-// 30 days stays relative seconds (mg R compares remaining TTL). Zero and
-// negative omit the flag (ok=false). Sub-second windows encode as 1.
+// recacheToken turns a remaining-TTL window into relative seconds.
+// This is not an item Exptime and must not use Rel: a window longer than
+// 30 days stays relative (mg R compares remaining TTL). Zero and negative
+// omit the flag (ok=false). Sub-second windows become 1.
 func recacheToken(d time.Duration) (int64, bool) {
 	if d <= 0 {
 		return 0, false

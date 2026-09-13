@@ -55,36 +55,30 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 	wg.Wait()
 }
 
-// https://github.com/EyJunge1/go-memcached/issues/18
-// Mock a concurrent client to set, get and touch the cache at the same time.
 func Test_concurrent(t *testing.T) {
 	client := setupLiveClient(t)
-	// metaset options
 	msOptions := func(cas uint64, clientFlags uint32) MetaSet {
 		exp := Exptime(2)
 		return MetaSet{
-			NewCAS:      &cas,
-			TTL:         &exp,
-			Flags: clientFlags,
-			ReturnKey:   true,
-			ReturnSize:  true,
-			ReturnCAS:   true,
+			NewCAS:     &cas,
+			TTL:        &exp,
+			Flags:      clientFlags,
+			ReturnKey:  true,
+			ReturnSize: true,
+			ReturnCAS:  true,
 		}
 	}
 
 	key := "Test_concurrent"
 	value := "Test_concurrent is value of Test_concurrent"
-	// prepare data
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
 
-	// meta set goroutine
 	wg.Go(func() {
 		counter := 0
 		cas := uint64(0)
 
-		// update only
 		for counter <= 20 {
 			item, err := client.Meta().Set(ctx, []byte(key), []byte(value), msOptions(cas, 0x1234))
 			noError(t, err)
@@ -99,7 +93,6 @@ func Test_concurrent(t *testing.T) {
 		}
 	})
 
-	// get goroutine
 	wg.Go(func() {
 		counter := 0
 
@@ -117,7 +110,6 @@ func Test_concurrent(t *testing.T) {
 		}
 	})
 
-	// touch goroutine
 	wg.Go(func() {
 		counter := 0
 

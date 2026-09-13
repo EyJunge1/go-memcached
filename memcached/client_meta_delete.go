@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Delete issues md with the given flags.
+// Delete sends md for key using flags f.
 func (m *MetaClient) Delete(ctx context.Context, key []byte, f MetaDelete) (MetaResult, error) {
 	c := m.c
 	if err := f.validate(); err != nil {

@@ -7,13 +7,14 @@ import (
 	"strconv"
 )
 
+// metaDebugFlags is the encoded me flag set.
 type metaDebugFlags struct {
-	b bool // b: interpret key as base64 encoded binary value
+	b bool // key is Base64
 	P string
 	L string
 }
 
-// me <key> <flag>\r\n
+// buildMetaDebugCommand encodes me <key> [b]\r\n.
 func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *response) {
 	if flags.b {
 		key = base64Encode(key)
@@ -35,9 +36,7 @@ func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *respon
 	return req, resp
 }
 
-// parseMetaItemDebug parses the response from memcached server. It could be:
-// success: ME foo exp=-1 la=2 cas=18 fetch=no cls=1 size=65\r\n
-// failed:  EN\r\n
+// parseMetaItemDebug reads ME <key> key=value… or EN.
 func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) error {
 	if len(lines) != 1 {
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
@@ -68,7 +67,6 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 	case "EN":
 		return ErrNotFound
 	case "ME":
-		// success
 	default:
 		return fmt.Errorf("unexpected cd<=%s>: %w", string(cd), ErrMalformedResponse)
 	}

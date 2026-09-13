@@ -23,17 +23,17 @@ func Test_parseFlags(t *testing.T) {
 				item:     &MetaItem{},
 			},
 			want: &MetaItem{
-				Key:              []byte("foo"),
-				Value:            nil,
-				CAS:              26,
-				Flags:            0,
-				TTL:              0,
+				Key:        []byte("foo"),
+				Value:      nil,
+				CAS:        26,
+				Flags:      0,
+				TTL:        0,
 				LastAccess: 0,
-				Size:             3,
-				Opaque:      "456",
-				HitBefore:        false,
-				WireKey:          []byte("Zm9v"),
-				KeyBase64:        true,
+				Size:       3,
+				Opaque:     "456",
+				HitBefore:  false,
+				WireKey:    []byte("Zm9v"),
+				KeyBase64:  true,
 			},
 		},
 		{
@@ -44,17 +44,17 @@ func Test_parseFlags(t *testing.T) {
 				item:     &MetaItem{},
 			},
 			want: &MetaItem{
-				Key:              []byte("foo"),
-				Value:            nil,
-				CAS:              29,
-				Flags:            123,
-				TTL:              200,
+				Key:        []byte("foo"),
+				Value:      nil,
+				CAS:        29,
+				Flags:      123,
+				TTL:        200,
 				LastAccess: 0,
-				Size:             3,
-				Opaque:      "789",
-				HitBefore:        true,
-				WireKey:          []byte("Zm9v"),
-				KeyBase64:        true,
+				Size:       3,
+				Opaque:     "789",
+				HitBefore:  true,
+				WireKey:    []byte("Zm9v"),
+				KeyBase64:  true,
 			},
 		},
 		{
@@ -68,7 +68,7 @@ func Test_parseFlags(t *testing.T) {
 				Won:         true,
 				Stale:       true,
 				RecacheBusy: true,
-				Opaque: "opaque",
+				Opaque:      "opaque",
 			},
 		},
 	}
@@ -96,7 +96,6 @@ func Test_parseMetaItem(t *testing.T) {
 			name: "normal1: not found error and noReply false",
 			args: args{
 				lines: [][]byte{
-					// ERROR
 					[]byte("NF\r\n"),
 				},
 				item:    &MetaItem{},
@@ -109,7 +108,6 @@ func Test_parseMetaItem(t *testing.T) {
 			name: "normal2: miss error and noReply true",
 			args: args{
 				lines: [][]byte{
-					// ERROR
 					[]byte("EN\r\n"),
 				},
 				item:    &MetaItem{},
@@ -122,7 +120,6 @@ func Test_parseMetaItem(t *testing.T) {
 			name: "normal3: not found error flags",
 			args: args{
 				lines: [][]byte{
-					// ERROR
 					[]byte("EN kfoo\r\n"),
 				},
 				item:    &MetaItem{},
@@ -135,7 +132,6 @@ func Test_parseMetaItem(t *testing.T) {
 			name: "normal3: HD",
 			args: args{
 				lines: [][]byte{
-					// HD c26 kZm9v b O456 s3
 					[]byte("HD c26 kZm9v b O456 s3\r\n"),
 				},
 				item:    &MetaItem{},
@@ -143,27 +139,25 @@ func Test_parseMetaItem(t *testing.T) {
 			},
 			wantErr: false,
 			wantItem: &MetaItem{
-				Key:              []byte("foo"),
-				Value:            nil,
-				CAS:              26,
-				Flags:            0,
-				TTL:              0,
+				Key:        []byte("foo"),
+				Value:      nil,
+				CAS:        26,
+				Flags:      0,
+				TTL:        0,
 				LastAccess: 0,
-				Size:             3,
-				Opaque:      "456",
-				HitBefore:        false,
-				WireKey:          []byte("Zm9v"),
-				KeyBase64:        true,
-				status:           MetaStatusHD,
-				gotHD:            true,
+				Size:       3,
+				Opaque:     "456",
+				HitBefore:  false,
+				WireKey:    []byte("Zm9v"),
+				KeyBase64:  true,
+				status:     MetaStatusHD,
+				gotHD:      true,
 			},
 		},
 		{
 			name: "normal4: VA",
 			args: args{
 				lines: [][]byte{
-					// VA 3 c29 f123 h1 kZm9v b l0 O789 s3 t200
-					// bar
 					[]byte("VA 3 c29 f123 h1 kZm9v b l0 O789 s3 t200\r\n"),
 					[]byte("bar\r\n"),
 				},
@@ -172,25 +166,24 @@ func Test_parseMetaItem(t *testing.T) {
 			},
 			wantErr: false,
 			wantItem: &MetaItem{
-				Key:              []byte("foo"),
-				Value:            []byte("bar"),
-				CAS:              29,
-				Flags:            123,
-				TTL:              200,
+				Key:        []byte("foo"),
+				Value:      []byte("bar"),
+				CAS:        29,
+				Flags:      123,
+				TTL:        200,
 				LastAccess: 0,
-				Size:             3,
-				Opaque:      "789",
-				HitBefore:        true,
-				WireKey:          []byte("Zm9v"),
-				KeyBase64:        true,
-				status:           MetaStatusVA,
+				Size:       3,
+				Opaque:     "789",
+				HitBefore:  true,
+				WireKey:    []byte("Zm9v"),
+				KeyBase64:  true,
+				status:     MetaStatusVA,
 			},
 		},
 		{
 			name: "malformed1: missing data block",
 			args: args{
 				lines: [][]byte{
-					// VA 3 c29 f123 h1 kZm9v b l0 O789 s3 t200
 					[]byte("VA 3 c29 f123 h1 kZm9v b l0 O789 s3 t200\r\n"),
 				},
 				item:    &MetaItem{},

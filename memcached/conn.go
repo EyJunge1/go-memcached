@@ -13,6 +13,7 @@ import (
 	"time"
 )
 
+// clockFunc is the time source; tests replace clock.
 type clockFunc func() time.Time
 
 var clock clockFunc = time.Now
@@ -24,6 +25,7 @@ var udpScratchPool = sync.Pool{New: func() any {
 	return &b
 }}
 
+// applyTCPNoDelay sets TCP_NODELAY on c when it unwraps to a *net.TCPConn.
 func applyTCPNoDelay(c net.Conn, on bool) {
 	type netConner interface{ NetConn() net.Conn }
 	for i := 0; i < 3 && c != nil; i++ {
@@ -39,6 +41,7 @@ func applyTCPNoDelay(c net.Conn, on bool) {
 	}
 }
 
+// checkUnixSocketMode rejects a Unix socket that is world-writable or exceeds maxMode.
 func checkUnixSocketMode(path string, anyMode bool, maxMode os.FileMode) error {
 	if anyMode && maxMode == 0 {
 		return nil
@@ -57,16 +60,16 @@ func checkUnixSocketMode(path string, anyMode bool, maxMode os.FileMode) error {
 	return nil
 }
 
-// wireConn is one pooled socket: line/framed reads, deadlines, and pool return.
+// wireConn is one pooled socket: line or framed reads, deadlines, and pool return.
 type wireConn interface {
 	io.ReadWriteCloser
 
 	readLine(delim byte) ([]byte, error)
 	readExact(n int) ([]byte, error)
 	readDatagram() ([]byte, error)
-	// expired reports whether createdAt is before since. The duration is age.
+	// expired reports age and whether createdAt is before since.
 	expired(since time.Time) (time.Duration, bool)
-	// idle reports whether returnedAt is before since. The duration is time left.
+	// idle reports remaining idle time and whether returnedAt is before since.
 	idle(since time.Time) (time.Duration, bool)
 
 	release() error
@@ -80,14 +83,14 @@ type wireConn interface {
 
 var _ wireConn = (*conn)(nil)
 
-// conn is a buffered TCP, Unix, or UDP socket used as a wireConn.
+// conn is a buffered TCP, Unix, or UDP socket that implements wireConn.
 type conn struct {
 	createdAt  time.Time
 	addr       net.Addr
 	network    string
 	returnedAt time.Time
 
-	sync.Mutex // guards following
+	sync.Mutex // guards the fields below
 	raw        net.Conn
 	closed     bool
 	pool       *connPool
@@ -96,6 +99,7 @@ type conn struct {
 	wr *bufio.Writer
 }
 
+// newConnContext dials node, applies TCP_NODELAY, and returns a buffered wireConn.
 func newConnContext(ctx context.Context, node *addr, o *runtime) (*conn, error) {
 	if o == nil {
 		o = &runtime{tcpNoDelay: true}
@@ -128,16 +132,19 @@ func newConnContext(ctx context.Context, node *addr, o *runtime) (*conn, error) 
 	return cn, nil
 }
 
+// getConnPool returns the pool that currently owns this conn, if any.
 func (c *conn) getConnPool() *connPool {
 	return c.pool
 }
 
+// setConnPool records the pool that owns this conn.
 func (c *conn) setConnPool(p *connPool) {
 	c.pool = p
 }
 
 var zeroTime = time.Time{}
 
+// setReadDeadline applies a read deadline on the raw socket; a zero time clears it.
 func (c *conn) setReadDeadline(d time.Time) error {
 	if d.IsZero() {
 		return c.raw.SetReadDeadline(zeroTime)
@@ -146,6 +153,7 @@ func (c *conn) setReadDeadline(d time.Time) error {
 	return c.raw.SetReadDeadline(d)
 }
 
+// setWriteDeadline applies a write deadline on the raw socket; a zero time clears it.
 func (c *conn) setWriteDeadline(d time.Time) error {
 	if d.IsZero() {
 		return c.raw.SetWriteDeadline(zeroTime)
@@ -154,12 +162,14 @@ func (c *conn) setWriteDeadline(d time.Time) error {
 	return c.raw.SetWriteDeadline(d)
 }
 
+// isClosed reports whether Close has already been called.
 func (c *conn) isClosed() bool {
 	c.Lock()
 	defer c.Unlock()
 	return c.closed
 }
 
+// buffered returns the number of unread bytes in the read buffer.
 func (c *conn) buffered() int {
 	if c.rr == nil {
 		return 0
@@ -167,6 +177,7 @@ func (c *conn) buffered() int {
 	return c.rr.Buffered()
 }
 
+// readLine reads from the buffered socket through the next delim byte.
 func (c *conn) readLine(delim byte) ([]byte, error) {
 	if c.isClosed() {
 		return nil, errors.New("connection is closed")
@@ -175,6 +186,7 @@ func (c *conn) readLine(delim byte) ([]byte, error) {
 	return c.rr.ReadBytes(delim)
 }
 
+// readExact reads exactly n bytes into a fresh buffer for VALUE/VA bodies.
 func (c *conn) readExact(n int) ([]byte, error) {
 	if c.isClosed() {
 		return nil, errors.New("connection is closed")
@@ -182,12 +194,12 @@ func (c *conn) readExact(n int) ([]byte, error) {
 	if n < 0 {
 		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
 	}
-	// Owned buffer: VALUE/VA payloads are stored on the response and Item.
 	buf := make([]byte, n)
 	_, err := io.ReadFull(c.rr, buf)
 	return buf, err
 }
 
+// readDatagram reads one UDP datagram from the raw socket into a copied buffer.
 func (c *conn) readDatagram() ([]byte, error) {
 	if c.isClosed() {
 		return nil, errors.New("connection is closed")
@@ -204,6 +216,7 @@ func (c *conn) readDatagram() ([]byte, error) {
 	return out, nil
 }
 
+// Read implements io.Reader on the buffered socket.
 func (c *conn) Read(p []byte) (n int, err error) {
 	if c.isClosed() {
 		return 0, errors.New("connection is closed")
@@ -212,6 +225,7 @@ func (c *conn) Read(p []byte) (n int, err error) {
 	return c.rr.Read(p)
 }
 
+// Write implements io.Writer on the buffered socket.
 func (c *conn) Write(p []byte) (n int, err error) {
 	if c.isClosed() {
 		return 0, errors.New("connection is closed")
@@ -220,6 +234,7 @@ func (c *conn) Write(p []byte) (n int, err error) {
 	return c.wr.Write(p)
 }
 
+// Flush implements flushing the write buffer to the socket.
 func (c *conn) Flush() error {
 	if c.isClosed() {
 		return errors.New("connection is closed")
@@ -227,6 +242,7 @@ func (c *conn) Flush() error {
 	return c.wr.Flush()
 }
 
+// Close implements io.Closer on the buffered socket.
 func (c *conn) Close() error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
@@ -244,6 +260,7 @@ func (c *conn) Close() error {
 	return c.raw.Close()
 }
 
+// expired reports the conn age and whether createdAt is before since.
 func (c *conn) expired(since time.Time) (time.Duration, bool) {
 	now := clock()
 	past := now.Sub(c.createdAt)
@@ -254,6 +271,7 @@ func (c *conn) expired(since time.Time) (time.Duration, bool) {
 	return past, c.createdAt.Before(since)
 }
 
+// idle reports remaining idle time and whether returnedAt is before since.
 func (c *conn) idle(since time.Time) (time.Duration, bool) {
 	if since.IsZero() {
 		return c.returnedAt.Sub(since), false
@@ -267,6 +285,7 @@ func (c *conn) idle(since time.Time) (time.Duration, bool) {
 	return c.returnedAt.Sub(since), false
 }
 
+// release clears I/O deadlines, stamps returnedAt, and returns the conn to its pool.
 func (c *conn) release() error {
 	_ = c.setReadDeadline(zeroTime)
 	_ = c.setWriteDeadline(zeroTime)

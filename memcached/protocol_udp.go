@@ -18,10 +18,12 @@ const (
 
 var udpRequestID atomic.Uint32
 
+// init seeds the UDP request-id counter.
 func init() {
 	seedUDPRequestID()
 }
 
+// seedUDPRequestID seeds the UDP request-id counter from crypto/rand.
 func seedUDPRequestID() {
 	var b [2]byte
 	if _, err := crand.Read(b[:]); err != nil {
@@ -30,6 +32,7 @@ func seedUDPRequestID() {
 	udpRequestID.Store(uint32(binary.BigEndian.Uint16(b[:])))
 }
 
+// nextUDPRequestID returns a non-zero 16-bit id. Zero is reserved on the wire.
 func nextUDPRequestID() uint16 {
 	var b [2]byte
 	if _, err := crand.Read(b[:]); err == nil {
@@ -46,10 +49,12 @@ func nextUDPRequestID() uint16 {
 	}
 }
 
+// isUDPNetwork reports whether network is udp, udp4, or udp6.
 func isUDPNetwork(network string) bool {
 	return network == "udp" || network == "udp4" || network == "udp6"
 }
 
+// udpRequestAllowed rejects commands that are unsafe on UDP.
 func udpRequestAllowed(req *request) error {
 	if req == nil {
 		return fmt.Errorf("udp: %w", ErrNotSupported)
@@ -64,6 +69,7 @@ func udpRequestAllowed(req *request) error {
 	}
 }
 
+// udpMetaRawAllowed rejects meta lines other than mn, me, or side-effect-free mg.
 func udpMetaRawAllowed(raw []byte) error {
 	for _, line := range bytes.Split(raw, []byte("\r\n")) {
 		fields := bytes.Fields(line)
@@ -84,6 +90,7 @@ func udpMetaRawAllowed(raw []byte) error {
 	return nil
 }
 
+// mgLineHasSideEffect reports whether mg flags include N, R, T, or E.
 func mgLineHasSideEffect(fields [][]byte) bool {
 	if len(fields) < 3 {
 		return false
@@ -100,6 +107,7 @@ func mgLineHasSideEffect(fields [][]byte) bool {
 	return false
 }
 
+// idempotentReadCommand reports whether cmd is a UDP-safe read.
 func idempotentReadCommand(cmd []byte) bool {
 	switch string(cmd) {
 	case "get", "gets", "version", "mg", "mn", "me":
@@ -109,8 +117,7 @@ func idempotentReadCommand(cmd []byte) bool {
 	}
 }
 
-// sendUDP sends the request to the memcached server.
-// https://github.com/memcached/memcached/blob/master/doc/protocol.txt#L1875-L1914
+// sendUDP writes one 8-byte framed datagram (protocol.txt UDP section).
 func (req *request) sendUDP(rr wireConn) (err error) {
 	payload := req.wire()
 	if udpHeaderSize+len(payload) > maxUDPDatagram {
@@ -130,6 +137,7 @@ func (req *request) sendUDP(rr wireConn) (err error) {
 	return rr.Flush()
 }
 
+// udpFragmentCap returns how many UDP fragments a maxValue reply may use.
 func udpFragmentCap(maxValue int) int {
 	if maxValue <= 0 {
 		maxValue = defaultMaxValueBytes
@@ -144,6 +152,7 @@ func udpFragmentCap(maxValue int) int {
 	return n
 }
 
+// assembleUDP reassembles datagrams with wantID into one payload.
 func assembleUDP(rr wireConn, wantID uint16, maxFragments int) ([]byte, error) {
 	if maxFragments <= 0 {
 		maxFragments = udpFragmentCap(0)

@@ -124,7 +124,7 @@ func Test_parseValueItems(t *testing.T) {
 				withoutEndLine: true,
 			},
 			want:    nil,
-			wantErr: true, // missing data block
+			wantErr: true,
 		},
 		{
 			name: "rejects non-VALUE protocol line",
@@ -419,7 +419,6 @@ func Test_buildGetAndTouchesCommand_setsPickKey(t *testing.T) {
 }
 
 func Test_dataBlockValueUsesDeclaredLength(t *testing.T) {
-	// Value that itself ends in CRLF must not be trimmed down to empty.
 	raw := []byte("ab\r\n")
 	got, err := dataBlockValue(raw, 2)
 	noError(t, err)

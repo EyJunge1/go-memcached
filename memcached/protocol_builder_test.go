@@ -8,7 +8,6 @@ import (
 )
 
 func Test_protocolBuilder(t *testing.T) {
-	// test build a set command
 	builder := newProtocolBuilder().
 		AddString("set").AddString("key").AddInt(0).AddInt(0).AddInt(5).
 		AddCRLF().
@@ -25,7 +24,6 @@ func Test_protocolBuilder_releaseDiscardsOversizedBuffer(t *testing.T) {
 	b.release()
 	isNil(t, b.buf)
 
-	// Oversized buffers must not be reused via the pool.
 	for range 32 {
 		pb := newProtocolBuilder()
 		capSize := pb.buf.Cap()
@@ -134,7 +132,6 @@ func BenchmarkProtocolBuilder_SetLargeValue(b *testing.B) {
 
 func Test_selectProximateDeadline(t *testing.T) {
 	mockNowFunc := func() time.Time {
-		// return a fixed time at 2021-07-05 00:00:00 UTC
 		return time.Date(2021, 7, 5, 0, 0, 0, 0, time.UTC)
 	}
 	baseTime := mockNowFunc()

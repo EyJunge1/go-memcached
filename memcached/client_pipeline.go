@@ -7,25 +7,26 @@ import (
 	"sync"
 )
 
-// Pipeline batches text commands: write every frame, then read every reply.
-// Quiet mutations stay on Meta().Pipeline. Text noreply is not used.
+// Pipeline queues text commands, then writes every frame and reads every reply. Quiet mutations belong on Meta().Pipeline.
 type Pipeline struct {
 	c    *Client
 	ops  []pipeOp
 	errs []error
 }
 
+// pipeOp is one queued text Pipeline frame.
 type pipeOp struct {
 	req  *request
 	resp *response
 	key  []byte
 }
 
-// Pipeline starts a write-then-read text batch. Meta commands use Meta().Pipeline.
+// Pipeline begins a write-then-read text batch. Meta commands use Meta().Pipeline.
 func (c *Client) Pipeline() *Pipeline {
 	return &Pipeline{c: c}
 }
 
+// Store enqueues one text storage command. Item.Quiet is ErrInvalidArgument.
 func (p *Pipeline) Store(item Item) *Pipeline {
 	if p == nil || p.c == nil {
 		return p
@@ -60,7 +61,7 @@ func (p *Pipeline) Store(item Item) *Pipeline {
 	return p
 }
 
-// Delete queues a text delete.
+// Delete enqueues a text delete.
 func (p *Pipeline) Delete(key []byte) *Pipeline {
 	if p == nil || p.c == nil {
 		return p
@@ -76,7 +77,7 @@ func (p *Pipeline) Delete(key []byte) *Pipeline {
 	return p
 }
 
-// Touch queues a text touch.
+// Touch enqueues a text touch.
 func (p *Pipeline) Touch(key []byte, expiry Exptime) *Pipeline {
 	if p == nil || p.c == nil {
 		return p
@@ -92,6 +93,7 @@ func (p *Pipeline) Touch(key []byte, expiry Exptime) *Pipeline {
 	return p
 }
 
+// release returns pooled request and response objects for every queued op.
 func (p *Pipeline) release() {
 	for _, op := range p.ops {
 		releaseReqAndResp(op.req, op.resp)
@@ -99,11 +101,12 @@ func (p *Pipeline) release() {
 	p.ops = nil
 }
 
+// shouldDiscardPipelineConn reports whether a pipeline error must drop the socket.
 func shouldDiscardPipelineConn(err error) bool {
 	return shouldDiscardConn(err)
 }
 
-// Run writes all queued frames, then reads all replies. Cluster nodes run in parallel.
+// Run writes every queued frame, then reads every reply. Distinct nodes run concurrently.
 func (p *Pipeline) Run(ctx context.Context) error {
 	if p == nil || p.c == nil {
 		return fmt.Errorf("nil pipeline: %w", ErrInvalidArgument)
@@ -157,6 +160,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	return errors.Join(append(p.errs, errs...)...)
 }
 
+// runAddr writes then reads one node's queued frames on a single connection.
 func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error {
 	if isUDPNetwork(node.Network) {
 		return fmt.Errorf("udp pipeline: %w", ErrNotSupported)

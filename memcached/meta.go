@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// MetaStatus is a meta response code (HD, VA, EN, NF, NS, EX, MN, ME).
+// MetaStatus is a two-letter meta reply (HD, VA, EN, NF, NS, EX, MN, ME).
 type MetaStatus uint8
 
 const (
@@ -21,6 +21,7 @@ const (
 	MetaStatusME
 )
 
+// Err maps EN and NF to ErrNotFound, NS to ErrNotStored, and EX to ErrExists.
 func (s MetaStatus) Err() error {
 	switch s {
 	case MetaStatusEN, MetaStatusNF:
@@ -34,6 +35,7 @@ func (s MetaStatus) Err() error {
 	}
 }
 
+// Err returns a transport or parse error, otherwise Status.Err.
 func (r MetaResult) Err() error {
 	if r.err != nil {
 		return r.err
@@ -41,6 +43,7 @@ func (r MetaResult) Err() error {
 	return r.Status.Err()
 }
 
+// String is the two-letter wire token, or "??" when the status is unknown.
 func (s MetaStatus) String() string {
 	switch s {
 	case MetaStatusHD:
@@ -64,6 +67,7 @@ func (s MetaStatus) String() string {
 	}
 }
 
+// metaStatusFromCD maps a two-letter meta status token to MetaStatus.
 func metaStatusFromCD(cd []byte) MetaStatus {
 	switch string(cd) {
 	case "HD":
@@ -87,13 +91,14 @@ func metaStatusFromCD(cd []byte) MetaStatus {
 	}
 }
 
-// MetaResult is one meta command outcome.
+// MetaResult is the outcome of a single meta command.
 type MetaResult struct {
 	Status MetaStatus
 	Item   MetaItem
 	err    error
 }
 
+// metaResultFrom builds a MetaResult from item and status.
 func metaResultFrom(item *MetaItem, status MetaStatus) MetaResult {
 	if item == nil {
 		return MetaResult{Status: status}
@@ -109,20 +114,21 @@ func metaResultFrom(item *MetaItem, status MetaStatus) MetaResult {
 	}
 }
 
+// metaResultWithErr builds a MetaResult that also carries err.
 func metaResultWithErr(item *MetaItem, status MetaStatus, err error) MetaResult {
 	res := metaResultFrom(item, status)
 	res.err = err
 	return res
 }
 
-// MetaGetReturn selects response tokens for mg.
+// MetaGetReturn chooses which tokens mg should echo.
 type MetaGetReturn struct {
 	CAS, Flags, Hit, Key, LastAccess, Size, TTL, Value bool
 }
 
-// MetaGet is the mg flags struct.
-// Pointers (CompareCAS, Vivify, Touch) follow Config rule C: nil omits the flag.
-// Recache follows rule D: zero omits R.
+// MetaGet is the flag set for mg.
+// CompareCAS, Vivify (create-if-missing TTL), and Touch follow Config rule C: nil drops the flag.
+// Recache follows rule D: a zero duration drops R.
 type MetaGet struct {
 	BinaryKey  bool
 	Return     MetaGetReturn
@@ -132,21 +138,21 @@ type MetaGet struct {
 	NoLRUBump  bool
 	NewCAS     *uint64
 	Vivify     *Exptime
-	// Recache is the remaining-TTL window for R (seconds on the wire).
-	// Zero omits the flag. This is not an item Exptime and has no 30-day cap.
+	// Recache is the remaining-TTL window sent as R (seconds).
+	// Zero drops the flag. It is not an item Exptime and has no 30-day split.
 	Recache time.Duration
 	Touch   *Exptime
-	P       string // proxy hint (server ignores)
-	L       string // proxy path (server ignores)
+	P       string // proxy hint, ignored by memcached
+	L       string // proxy path, ignored by memcached
 }
 
-// MetaNoop is the mn flags struct. P/L are proxy hints; the daemon ignores them.
+// MetaNoop is the flag set for mn. P and L are proxy hints the daemon ignores.
 type MetaNoop struct {
 	P string
 	L string
 }
 
-// MetaSet is the ms flags struct.
+// MetaSet is the flag set for ms.
 type MetaSet struct {
 	BinaryKey  bool
 	ReturnCAS  bool
@@ -165,7 +171,7 @@ type MetaSet struct {
 	L          string
 }
 
-// MetaDelete is the md flags struct.
+// MetaDelete is the flag set for md.
 type MetaDelete struct {
 	BinaryKey       bool
 	CompareCAS      *uint64
@@ -180,14 +186,14 @@ type MetaDelete struct {
 	L               string
 }
 
-// MetaDebug is the me flags struct.
+// MetaDebug is the flag set for me.
 type MetaDebug struct {
 	BinaryKey bool
 	P         string
 	L         string
 }
 
-// MetaArithmetic is the ma flags struct.
+// MetaArithmetic is the flag set for ma.
 type MetaArithmetic struct {
 	BinaryKey   bool
 	CompareCAS  *uint64
@@ -206,9 +212,9 @@ type MetaArithmetic struct {
 	L           string
 }
 
-// MetaOp is one entry in Meta().Pipeline.
-// Exactly one of Get, Set, Del, Arith, Noop must be non-nil.
-// Debug (me) is not pipelineable.
+// MetaOp is one step in Meta().Pipeline.
+// Exactly one of Get, Set, Del, Arith, or Noop must be set.
+// Debug (me) cannot be pipelined.
 type MetaOp struct {
 	Key   []byte
 	Body  []byte
@@ -220,6 +226,7 @@ type MetaOp struct {
 	Noop  *MetaNoop
 }
 
+// applyOpaque stores token as a numeric O flag or a string opaque.
 func applyOpaque(token string, flagsO *uint64, flagsOset *bool, flagsTok *string, flagsTokSet *bool) {
 	if token == "" {
 		return
@@ -233,6 +240,7 @@ func applyOpaque(token string, flagsO *uint64, flagsOset *bool, flagsTok *string
 	*flagsTokSet = true
 }
 
+// toFlags maps MetaGet onto the mg wire flags.
 func (f MetaGet) toFlags() *metaGetFlags {
 	out := &metaGetFlags{
 		b: f.BinaryKey,
@@ -273,6 +281,7 @@ func (f MetaGet) toFlags() *metaGetFlags {
 	return out
 }
 
+// toFlags maps MetaSet onto the ms wire flags.
 func (f MetaSet) toFlags() *metaSetFlags {
 	out := &metaSetFlags{
 		b: f.BinaryKey,
@@ -306,6 +315,7 @@ func (f MetaSet) toFlags() *metaSetFlags {
 	return out
 }
 
+// toFlags maps MetaDelete onto the md wire flags.
 func (f MetaDelete) toFlags() *metaDeleteFlags {
 	out := &metaDeleteFlags{
 		b: f.BinaryKey,
@@ -332,6 +342,7 @@ func (f MetaDelete) toFlags() *metaDeleteFlags {
 	return out
 }
 
+// toFlags maps MetaArithmetic onto the ma wire flags.
 func (f MetaArithmetic) toFlags() *metaArithmeticFlags {
 	out := &metaArithmeticFlags{
 		b: f.BinaryKey,
@@ -368,10 +379,12 @@ func (f MetaArithmetic) toFlags() *metaArithmeticFlags {
 	return out
 }
 
+// toFlags maps MetaDebug onto the me wire flags.
 func (f MetaDebug) toFlags() *metaDebugFlags {
 	return &metaDebugFlags{b: f.BinaryKey, P: f.P, L: f.L}
 }
 
+// validate checks MetaGet proxy hints and the recache window.
 func (f MetaGet) validate() error {
 	if err := validMetaHints(f.P, f.L); err != nil {
 		return err
@@ -385,6 +398,7 @@ func (f MetaGet) validate() error {
 	return nil
 }
 
+// validate checks MetaSet proxy hints and that N is only set for append or prepend.
 func (f MetaSet) validate() error {
 	if err := validMetaHints(f.P, f.L); err != nil {
 		return err
@@ -395,6 +409,7 @@ func (f MetaSet) validate() error {
 	return nil
 }
 
+// validate checks MetaDelete proxy hints and that T requires invalidate.
 func (f MetaDelete) validate() error {
 	if err := validMetaHints(f.P, f.L); err != nil {
 		return err
@@ -405,6 +420,7 @@ func (f MetaDelete) validate() error {
 	return nil
 }
 
+// validate checks MetaArithmetic proxy hints, rejects Quiet with ReturnValue, and requires AutoCreate when Initial is set.
 func (f MetaArithmetic) validate() error {
 	if err := validMetaHints(f.P, f.L); err != nil {
 		return err
@@ -418,10 +434,12 @@ func (f MetaArithmetic) validate() error {
 	return nil
 }
 
+// validate checks MetaDebug proxy hints.
 func (f MetaDebug) validate() error {
 	return validMetaHints(f.P, f.L)
 }
 
+// validate checks MetaNoop proxy hints.
 func (f MetaNoop) validate() error {
 	return validMetaHints(f.P, f.L)
 }

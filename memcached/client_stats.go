@@ -9,6 +9,7 @@ import (
 	"unicode"
 )
 
+// statsArgsRestricted reports whether args require Admin (reset or sizes).
 func statsArgsRestricted(args []string) bool {
 	for _, a := range args {
 		switch strings.ToLower(a) {
@@ -19,6 +20,7 @@ func statsArgsRestricted(args []string) bool {
 	return false
 }
 
+// validFreeStatsArgs rejects empty, control, cachedump, and detail stats args.
 func validFreeStatsArgs(args []string) error {
 	for _, a := range args {
 		if a == "" {
@@ -39,12 +41,13 @@ func validFreeStatsArgs(args []string) error {
 	return nil
 }
 
-// NodeStats is one node's STAT pairs.
+// NodeStats is the STAT map from one member.
 type NodeStats struct {
 	Server Server
 	Stats  map[string]string
 }
 
+// statsMapOnAddr reads STAT pairs from one node.
 func (c *Client) statsMapOnAddr(ctx context.Context, node *addr, args []string) (map[string]string, error) {
 	sub := strings.Join(args, " ")
 	req, resp := buildStatsCommand(sub)
@@ -61,10 +64,7 @@ func (c *Client) statsMapOnAddr(ctx context.Context, node *addr, args []string) 
 	return out, nil
 }
 
-// Stats returns STAT pairs from the first live node
-// (first Servers() entry not in DeadServers(); if all are dead, Servers()[0]).
-// Allowed args include items, slabs, settings, and conns (and no args).
-// reset, sizes, detail, and cachedump are rejected. TCP-only.
+// Stats reads STAT pairs from the first live node. reset, sizes, detail, and cachedump are refused; TCP only.
 func (c *Client) Stats(ctx context.Context, args ...string) (map[string]string, error) {
 	if err := validFreeStatsArgs(args); err != nil {
 		return nil, err
@@ -86,8 +86,7 @@ func (c *Client) Stats(ctx context.Context, args ...string) (map[string]string, 
 	return out, nil
 }
 
-// StatsAll returns stats for every configured node.
-// Args use the same filter as Stats. TCP-only.
+// StatsAll collects stats from every configured node. Filter and TCP-only match Stats.
 func (c *Client) StatsAll(ctx context.Context, args ...string) ([]NodeStats, error) {
 	if err := validFreeStatsArgs(args); err != nil {
 		return nil, err
@@ -120,6 +119,7 @@ func (c *Client) StatsAll(ctx context.Context, args ...string) ([]NodeStats, err
 	return out, nil
 }
 
+// orderNodeStats sorts StatsAll results into configured server order.
 func (c *Client) orderNodeStats(out []NodeStats) {
 	order := c.serverIndex()
 	sort.SliceStable(out, func(i, j int) bool {

@@ -33,13 +33,7 @@ var (
 	_MetaMNCRLFBytes = []byte("MN\r\n")
 )
 
-// forecastCommonFaultLine forecasts the error line from the response line.
-// ERROR\r\n
-// CLIENT_ERROR <message>\r\n
-// SERVER_ERROR <message>\r\n
-// NOT_FOUND\r\n
-// EXISTS\r\n
-// NOT_STORED\r\n
+// forecastCommonFaultLine maps a well-known status line to a sentinel, or nil.
 func forecastCommonFaultLine(line []byte) error {
 	hit := mapWireLine(line, wireApp)
 	if hit.Class != wireFault || errors.Is(hit.Err, ErrMalformedResponse) {
@@ -48,6 +42,7 @@ func forecastCommonFaultLine(line []byte) error {
 	return hit.Err
 }
 
+// prefixedProtocolError maps a prefix-matched status line onto sentinel.
 func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
 	trimmed := trimCRLF(line)
 	p := []byte(prefix)
@@ -63,15 +58,10 @@ func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
 }
 
 const (
-	// defaultBufferSize covers common short text/meta command headers and
-	// small payloads without growth. Measured lengths with the builder's
-	// spacing rules: get/delete ≈14-17B, small set ≈32B, meta set with
-	// several flags ≈42B. Larger storage values grow once; oversized
-	// buffers are discarded on release via maxPooledBufferCap.
+	// defaultBufferSize fits typical short headers; larger frames grow once.
 	defaultBufferSize = 64
 
-	// maxPooledBufferCap prevents large storage values from permanently
-	// retaining oversized buffers in the pool.
+	// maxPooledBufferCap stops large writes from pinning huge buffers.
 	maxPooledBufferCap = 4 << 10 // 4 KiB
 )
 
@@ -90,21 +80,12 @@ var (
 	}
 )
 
-// The protocolBuilder is used to build a protocol message.
-// We can use it build request command quickly with chaining method like this:
-//
-// newProtocolBuilder().
-// AddString("set").AddString("key").AddInt(0).AddInt(0).AddInt(5).NewLine().
-// AddString("value").build()
-//
-// The result is:
-//
-// set key 0 0 5\r\n
-// value\r\n
+// protocolBuilder is a pooled space-separated command encoder.
 type protocolBuilder struct {
 	buf *bytes.Buffer
 }
 
+// newProtocolBuilder returns a pooled protocolBuilder.
 func newProtocolBuilder() *protocolBuilder {
 	pb := builderPool.Get().(*protocolBuilder)
 	if pb.buf == nil {
@@ -116,6 +97,7 @@ func newProtocolBuilder() *protocolBuilder {
 	return pb
 }
 
+// release returns the builder and its buffer to the pools.
 func (b *protocolBuilder) release() {
 	if b.buf != nil {
 		if b.buf.Cap() <= maxPooledBufferCap {
@@ -128,38 +110,43 @@ func (b *protocolBuilder) release() {
 	builderPool.Put(b)
 }
 
+// AddString appends s and a trailing space.
 func (b *protocolBuilder) AddString(s string) *protocolBuilder {
 	b.buf.WriteString(s)
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
+// AddBytes appends bs and a trailing space.
 func (b *protocolBuilder) AddBytes(bs []byte) *protocolBuilder {
 	b.buf.Write(bs)
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
+// AddInt appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddInt(i int) *protocolBuilder {
 	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), int64(i), 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
+// AddUint appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddUint(i uint64) *protocolBuilder {
 	b.buf.Write(strconv.AppendUint(b.buf.AvailableBuffer(), i, 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
+// AddInt64 appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddInt64(i int64) *protocolBuilder {
 	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), i, 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
+// AddCRLF trims a trailing space and appends CRLF.
 func (b *protocolBuilder) AddCRLF() *protocolBuilder {
-	// trim space if needed
 	if bytes.HasSuffix(b.buf.Bytes(), _SpaceBytes) {
 		b.buf.Truncate(b.buf.Len() - 1)
 	}
@@ -168,8 +155,7 @@ func (b *protocolBuilder) AddCRLF() *protocolBuilder {
 	return b
 }
 
-// AddFlagBool adds a flag with string value to the protocol message.
-// e.g. AddFlagBool("k", true) will append "k" to the protocol message.
+// AddFlagBool writes flag (with a trailing space) when v is true.
 func (b *protocolBuilder) AddFlagBool(flag string, v bool) *protocolBuilder {
 	if !v {
 		return b
@@ -180,7 +166,7 @@ func (b *protocolBuilder) AddFlagBool(flag string, v bool) *protocolBuilder {
 	return b
 }
 
-// AddFlagUint adds a flag with uint64 value, including token 0 (e.g. "D0 ").
+// AddFlagUint writes flag plus tok, including 0 (for example "D0 ").
 func (b *protocolBuilder) AddFlagUint(flag string, tok uint64) *protocolBuilder {
 	b.buf.WriteString(flag)
 	b.buf.Write(strconv.AppendUint(b.buf.AvailableBuffer(), tok, 10))
@@ -188,7 +174,7 @@ func (b *protocolBuilder) AddFlagUint(flag string, tok uint64) *protocolBuilder 
 	return b
 }
 
-// AddFlagUintPresent writes the flag when it was set or the token is non-zero.
+// AddFlagUintPresent writes the flag when set is true or tok is non-zero.
 func (b *protocolBuilder) AddFlagUintPresent(flag string, tok uint64, set bool) *protocolBuilder {
 	if !set && tok == 0 {
 		return b
@@ -196,7 +182,7 @@ func (b *protocolBuilder) AddFlagUintPresent(flag string, tok uint64, set bool) 
 	return b.AddFlagUint(flag, tok)
 }
 
-// AddFlagInt64Present writes a signed flag token when set (Meta T/N/R, including -1).
+// AddFlagInt64Present writes a signed token when set (meta T/N/R, including -1).
 func (b *protocolBuilder) AddFlagInt64Present(flag string, tok int64, set bool) *protocolBuilder {
 	if !set && tok == 0 {
 		return b
@@ -207,7 +193,7 @@ func (b *protocolBuilder) AddFlagInt64Present(flag string, tok int64, set bool) 
 	return b
 }
 
-// AddFlagUintNonZero writes the flag only when tok != 0 (used for F0 omit).
+// AddFlagUintNonZero writes the flag only when tok is non-zero (F0 is omitted).
 func (b *protocolBuilder) AddFlagUintNonZero(flag string, tok uint64) *protocolBuilder {
 	if tok == 0 {
 		return b
@@ -215,6 +201,7 @@ func (b *protocolBuilder) AddFlagUintNonZero(flag string, tok uint64) *protocolB
 	return b.AddFlagUint(flag, tok)
 }
 
+// AddFlagString writes flag plus tok when tok is non-empty.
 func (b *protocolBuilder) AddFlagString(flag, tok string) *protocolBuilder {
 	if tok == "" {
 		return b
@@ -226,6 +213,7 @@ func (b *protocolBuilder) AddFlagString(flag, tok string) *protocolBuilder {
 	return b
 }
 
+// AddOpaque writes the O flag from token or from a numeric value.
 func (b *protocolBuilder) AddOpaque(token string, num uint64, numSet bool) *protocolBuilder {
 	if token != "" {
 		return b.AddFlagString("O", token)
@@ -233,6 +221,7 @@ func (b *protocolBuilder) AddOpaque(token string, num uint64, numSet bool) *prot
 	return b.AddFlagUintPresent("O", num, numSet)
 }
 
+// build returns a copy of the command bytes, trimming a trailing space and ensuring CRLF.
 func (b *protocolBuilder) build() []byte {
 	data := b.buf.Bytes()
 
@@ -251,6 +240,7 @@ func (b *protocolBuilder) build() []byte {
 	return result
 }
 
+// trimCRLF strips a trailing CRLF or LF from line.
 func trimCRLF(line []byte) []byte {
 	if n := len(line); n >= 2 && line[n-2] == '\r' && line[n-1] == '\n' {
 		return line[:n-2]
@@ -261,16 +251,19 @@ func trimCRLF(line []byte) []byte {
 	return line
 }
 
+// isMetaNoopLine reports whether line is a meta MN reply.
 func isMetaNoopLine(line []byte) bool {
 	return bytes.Equal(trimCRLF(line), []byte("MN"))
 }
 
+// base64Encode encodes src with standard Base64.
 func base64Encode(src []byte) []byte {
 	dst := make([]byte, base64.StdEncoding.EncodedLen(len(src)))
 	base64.StdEncoding.Encode(dst, src)
 	return dst
 }
 
+// base64Decode decodes src with standard Base64.
 func base64Decode(src []byte) ([]byte, error) {
 	dst := make([]byte, base64.StdEncoding.DecodedLen(len(src)))
 	n, err := base64.StdEncoding.Decode(dst, src)

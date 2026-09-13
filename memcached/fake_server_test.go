@@ -60,7 +60,7 @@ func startFakeMemcached(t *testing.T) *fakeMemcached {
 
 func startFakeMemcachedUnix(t *testing.T) (*fakeMemcached, string) {
 	t.Helper()
-	// macOS sun_path is 104 bytes; t.TempDir() plus the test name overflows.
+	// macOS sun_path is 104 bytes; t.TempDir() plus the test name is too long.
 	path := os.TempDir() + "/" + fmt.Sprintf("g%x.sock", time.Now().UnixNano())
 	t.Cleanup(func() { _ = os.Remove(path) })
 	ln, err := net.Listen("unix", path)

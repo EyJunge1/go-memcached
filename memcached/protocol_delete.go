@@ -1,6 +1,6 @@
 package memcached
 
-// delete <key> [noreply]\r\n
+// buildDeleteCommand encodes delete <key> [noreply]\r\n.
 func buildDeleteCommand(key []byte, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString("delete").

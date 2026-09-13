@@ -45,7 +45,6 @@ func ExampleConfig() {
 	cfg := memcached.Config{
 		Servers: []memcached.Server{{Address: "localhost:11211"}},
 	}
-	// Zero Failover and Allow* keep failover, admin, flush, and SetServers off.
 	_ = cfg
 }
 

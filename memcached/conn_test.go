@@ -8,7 +8,6 @@ import (
 
 var _ wireConn = (*mockConn)(nil)
 
-// mockConn is a wireConn for pool tests.
 type mockConn struct {
 	createdAt     time.Time
 	returnedAt    time.Time

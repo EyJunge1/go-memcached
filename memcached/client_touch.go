@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Touch updates expiration without fetching the item.
+// Touch changes expiry without reading the value.
 func (c *Client) Touch(ctx context.Context, key []byte, expiry Exptime, opts MutateOpts) error {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {

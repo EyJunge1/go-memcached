@@ -14,20 +14,25 @@ var (
 	_ picker   = &ketamaPicker{}
 )
 
+// resolver turns a server spec into addresses.
 type resolver interface {
 	Resolve(spec string) ([]*addr, error)
 }
 
+// picker chooses a node for a key.
 type picker interface {
 	Pick(addrs []*addr, key []byte) (*addr, error)
 }
 
+// builder constructs a picker for a snapshot of addrs.
 type builder interface {
 	Build(addrs []*addr) picker
 }
 
+// defaultResolver parses host:port, unix://, and udp:// specs.
 type defaultResolver struct{}
 
+// Resolve parses a comma-separated server spec into weighted addrs.
 func (r defaultResolver) Resolve(spec string) ([]*addr, error) {
 	if spec == "" {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
@@ -62,14 +67,14 @@ func (r defaultResolver) Resolve(spec string) ([]*addr, error) {
 	return result, nil
 }
 
-// splitAddrWeight strips an optional ?weight=N query. Unknown query keys are rejected.
+// splitAddrWeight pulls an optional ?weight=N suffix. Unknown query keys fail.
 func splitAddrWeight(address string) (raw string, weight uint32, err error) {
 	q := strings.Index(address, "?")
 	if q < 0 {
 		return address, 0, nil
 	}
 	raw, query := address[:q], address[q+1:]
-	// Accept an extra slash before ?weight=.
+	// unix:///path/?weight= leaves a trailing slash on the path.
 	raw = strings.TrimSuffix(raw, "/")
 	if raw == "" {
 		return "", 0, fmt.Errorf("empty address: %w", ErrInvalidAddress)
@@ -93,6 +98,7 @@ func splitAddrWeight(address string) (raw string, weight uint32, err error) {
 	return raw, uint32(n), nil
 }
 
+// resolveAddr maps one host, unix://, or udp:// token onto a network and address.
 func (r defaultResolver) resolveAddr(address string) (network, addr string, err error) {
 	address = strings.TrimSpace(address)
 	if address == "" {

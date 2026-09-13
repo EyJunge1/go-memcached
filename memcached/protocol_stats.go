@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// cutStatLine splits a STAT <key> <value> line.
 func cutStatLine(line []byte) (key, val string, ok bool) {
 	const prefix = "STAT "
 	if !bytes.HasPrefix(line, []byte(prefix)) {
@@ -18,6 +19,7 @@ func cutStatLine(line []byte) (key, val string, ok bool) {
 	return string(name), string(value), true
 }
 
+// buildStatsCommand encodes stats [subcommand]\r\n and reads until END.
 func buildStatsCommand(subCommand string) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString("stats")
@@ -40,6 +42,7 @@ func buildStatsCommand(subCommand string) (*request, *response) {
 	return req, resp
 }
 
+// buildStatsDetailCommand encodes stats detail <mode>.
 func buildStatsDetailCommand(mode string) (*request, *response) {
 	b := newProtocolBuilder().AddString("stats").AddString("detail").AddString(mode)
 	defer b.release()
@@ -50,6 +53,7 @@ func buildStatsDetailCommand(mode string) (*request, *response) {
 	return req, buildLimitedLineResponse(1)
 }
 
+// parseStatsDetailDump maps PREFIX and STAT lines from a detail dump.
 func parseStatsDetailDump(lines [][]byte) (map[string]string, error) {
 	out := make(map[string]string, len(lines))
 	for _, line := range lines {
@@ -80,6 +84,7 @@ func parseStatsDetailDump(lines [][]byte) (map[string]string, error) {
 	return out, nil
 }
 
+// parseStatsMap maps STAT lines, skipping END, RESET, OK, and PREFIX.
 func parseStatsMap(lines [][]byte) (map[string]string, error) {
 	out := make(map[string]string, len(lines))
 	for _, line := range lines {

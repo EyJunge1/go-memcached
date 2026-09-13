@@ -5,73 +5,73 @@ import (
 )
 
 var (
-	// ErrNonexistentCommand is the bare "ERROR" line (unknown command name).
+	// ErrNonexistentCommand matches a bare ERROR line (unknown command).
 	ErrNonexistentCommand = errors.New("nonexistent command")
-	// ErrClientError is CLIENT_ERROR <message>.
+	// ErrClientError matches CLIENT_ERROR followed by a message.
 	ErrClientError = errors.New("client error")
-	// ErrServerError is SERVER_ERROR <message>.
+	// ErrServerError matches SERVER_ERROR followed by a message.
 	ErrServerError = errors.New("server error")
-	// ErrNotFound is NOT_FOUND.
+	// ErrNotFound matches NOT_FOUND and meta EN/NF.
 	ErrNotFound = errors.New("not found")
-	// ErrExists is EXISTS (CAS mismatch on storage).
+	// ErrExists matches EXISTS (CAS did not match on store).
 	ErrExists = errors.New("exists")
-	// ErrNotStored is NOT_STORED (add/replace/append/prepend condition failed).
+	// ErrNotStored matches NOT_STORED when add/replace/append/prepend is refused.
 	ErrNotStored = errors.New("not stored")
-	// ErrInvalidArgument is a client-side argument or Config fault.
+	// ErrInvalidArgument reports a bad caller argument or Config value.
 	ErrInvalidArgument = errors.New("invalid arguments")
-	// ErrNotSupported is a command or transport the client refuses (e.g. Stats on UDP).
+	// ErrNotSupported reports a command or transport this client will not send.
 	ErrNotSupported = errors.New("not supported")
 
-	// ErrMalformedResponse is a line or frame that is not a known protocol reply.
+	// ErrMalformedResponse reports a reply line or frame the parser cannot classify.
 	ErrMalformedResponse = errors.New("malformed response")
-	// ErrInvalidAddress is a bad Server / address spec.
+	// ErrInvalidAddress reports an unusable Server or address spec.
 	ErrInvalidAddress = errors.New("invalid address")
-	// ErrInvalidKey is an empty key, a key longer than 250 bytes, or one with whitespace/control.
+	// ErrInvalidKey reports an empty key, a key over 250 bytes, or one with whitespace or controls.
 	ErrInvalidKey = errors.New("invalid key: empty, longer than 250 bytes, or contains whitespace/control")
-	// ErrInvalidValue is a value longer than Config.MaxValueBytes.
+	// ErrInvalidValue reports a value larger than Config.MaxValueBytes.
 	ErrInvalidValue = errors.New("invalid value: longer than Config.MaxValueBytes")
-	// ErrInvalidNetworkProtocol is a network the client does not dial.
+	// ErrInvalidNetworkProtocol reports a network this client will not dial.
 	ErrInvalidNetworkProtocol = errors.New("invalid network protocol")
-	// ErrFlushAllNotAllowed is Flush without Config.AllowFlushAll.
+	// ErrFlushAllNotAllowed is returned when Flush runs without Config.AllowFlushAll.
 	ErrFlushAllNotAllowed = errors.New("flush_all not allowed: set Config.AllowFlushAll")
-	// ErrAdminNotEnabled is Admin() without Config.AllowAdmin.
+	// ErrAdminNotEnabled is returned when Admin is used without Config.AllowAdmin.
 	ErrAdminNotEnabled = errors.New("admin commands not enabled: set Config.AllowAdmin")
-	// ErrSetServersNotAllowed is SetServers without Config.AllowSetServers.
+	// ErrSetServersNotAllowed is returned when SetServers runs without Config.AllowSetServers.
 	ErrSetServersNotAllowed = errors.New("SetServers not allowed: set Config.AllowSetServers")
-	// ErrBusy is BUSY (slabs reassign / crawler).
+	// ErrBusy matches BUSY from slabs reassign or the crawler.
 	ErrBusy = errors.New("busy")
-	// ErrBadClass is BADCLASS.
+	// ErrBadClass matches BADCLASS.
 	ErrBadClass = errors.New("bad class")
-	// ErrNoSpare is NOSPARE.
+	// ErrNoSpare matches NOSPARE.
 	ErrNoSpare = errors.New("no spare")
-	// ErrNotFull is NOTFULL.
+	// ErrNotFull matches NOTFULL.
 	ErrNotFull = errors.New("not full")
-	// ErrUnsafe is UNSAFE.
+	// ErrUnsafe matches UNSAFE.
 	ErrUnsafe = errors.New("unsafe")
-	// ErrSame is SAME (slabs reassign src == dest).
+	// ErrSame matches SAME (slabs reassign with identical source and dest).
 	ErrSame = errors.New("same")
-	// ErrCommandError is "ERROR <message>" / "ERROR:…".
+	// ErrCommandError matches ERROR with a trailing message or ERROR:….
 	ErrCommandError = errors.New("command error")
-	// ErrWatcherTooMany is WATCHER_TOO_MANY.
+	// ErrWatcherTooMany matches WATCHER_TOO_MANY.
 	ErrWatcherTooMany = errors.New("watcher too many")
-	// ErrWatcherFailed is WATCHER_FAILED.
+	// ErrWatcherFailed matches WATCHER_FAILED.
 	ErrWatcherFailed = errors.New("watcher failed")
-	// ErrMemlimitTooSmall is MEMLIMIT_TOO_SMALL.
+	// ErrMemlimitTooSmall matches MEMLIMIT_TOO_SMALL.
 	ErrMemlimitTooSmall = errors.New("memlimit too small")
-	// ErrMemlimitAdjustFailed is MEMLIMIT_ADJUST_FAILED.
+	// ErrMemlimitAdjustFailed matches MEMLIMIT_ADJUST_FAILED.
 	ErrMemlimitAdjustFailed = errors.New("memlimit adjust failed")
-	// ErrNotStarted is NOTSTARTED (crawler).
+	// ErrNotStarted matches NOTSTARTED from the crawler.
 	ErrNotStarted = errors.New("not started")
-	// ErrMixedTransport is UDP mixed with TCP/Unix on one Client.
+	// ErrMixedTransport is returned when one Client mixes UDP with TCP or Unix.
 	ErrMixedTransport = errors.New("mixed UDP and stream transports")
-	// ErrInsecureTLS is InsecureSkipVerify without AllowInsecureTLS.
+	// ErrInsecureTLS is returned when InsecureSkipVerify is set without AllowInsecureTLS.
 	ErrInsecureTLS = errors.New("tls: InsecureSkipVerify requires Transport.AllowInsecureTLS")
-	// ErrDeadlineRequired is a stream op without a context deadline.
+	// ErrDeadlineRequired is returned when a streaming call has no context deadline.
 	ErrDeadlineRequired = errors.New("context deadline required")
-	// ErrTransport marks dial, send, and recv failures.
+	// ErrTransport wraps dial, send, and receive failures.
 	ErrTransport = errors.New("memcached transport")
-	// ErrAdminTargetRequired is a node-local admin op without On(server).
+	// ErrAdminTargetRequired is returned when a node-local admin call omits On(server).
 	ErrAdminTargetRequired = errors.New("admin command requires On(server)")
-	// ErrClosed is returned after Client.Close.
+	// ErrClosed is returned by methods after Client.Close.
 	ErrClosed = errors.New("client is closed")
 )

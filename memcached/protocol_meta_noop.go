@@ -1,5 +1,6 @@
 package memcached
 
+// buildMetaNoopCommand encodes mn [P] [L]\r\n.
 func buildMetaNoopCommand(f MetaNoop) (*request, *response) {
 	b := newProtocolBuilder().AddString("mn")
 	defer b.release()

@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// Client is a thread-safe memcached client. It manages a connection pool per
-// server address and, in cluster mode, picks a node per key.
+// Client is a concurrent memcached client with a pool per server.
+// With more than one node, each key is hashed onto a member.
 type Client struct {
 	rt *runtime
 
@@ -34,7 +34,7 @@ type Client struct {
 	closed bool
 }
 
-// New creates a memcached client from Config.
+// New builds a Client from Config.
 func New(cfg Config) (*Client, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
@@ -68,9 +68,7 @@ func New(cfg Config) (*Client, error) {
 	return c, nil
 }
 
-// SetServers replaces the cluster address list. Requires Config.AllowSetServers.
-// Existing pools for hosts that remain are reused; pools for removed hosts are
-// closed. Health state for removed IDs is dropped.
+// SetServers swaps cluster membership. Config.AllowSetServers must be set.
 func (c *Client) SetServers(servers []Server) error {
 	if c.rt == nil || !c.rt.allowSetServers {
 		return ErrSetServersNotAllowed
@@ -78,6 +76,7 @@ func (c *Client) SetServers(servers []Server) error {
 	return c.applyServers(servers, true)
 }
 
+// applyServers swaps cluster membership and optionally updates the resolve spec.
 func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	var tlsCfg *tls.Config
 	if c.rt != nil && c.rt.tlsSet {
@@ -143,9 +142,7 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	return nil
 }
 
-// Close closes idle connections and stops resolver refresh.
-// On TCP/Unix it writes quit before closing; UDP skips quit (spec allows close-only).
-// After Close, methods return an error. Close is safe to defer.
+// Close shuts idle sockets and stops resolver refresh. TCP and Unix send quit first; UDP does not.
 func (c *Client) Close() error {
 	c.refreshOnce.Do(func() {
 		if c.refreshStop != nil {
@@ -173,29 +170,32 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// snapshotCluster copies the current address list and picker under read lock.
 func (c *Client) snapshotCluster() ([]*addr, picker) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.addrs, c.picker
 }
 
-// Servers returns a copy of the configured cluster.
+// Servers returns a snapshot of the configured members.
 func (c *Client) Servers() []Server {
 	addrs, _ := c.snapshotCluster()
 	return addrsToServers(addrs)
 }
 
-// ResolverErr returns the last error from periodic resolver refresh.
+// ResolverErr returns the most recent periodic resolver failure, if any.
 func (c *Client) ResolverErr() error {
 	c.resolverMu.Lock()
 	defer c.resolverMu.Unlock()
 	return c.resolverErr
 }
 
+// serverKey identifies a Server by Network and Address for membership maps.
 func serverKey(s Server) string {
 	return serverNetwork(s) + "\x00" + s.Address
 }
 
+// serverIndex maps each configured member to its position in Servers().
 func (c *Client) serverIndex() map[string]int {
 	addrs, _ := c.snapshotCluster()
 	out := make(map[string]int, len(addrs))
@@ -207,9 +207,7 @@ func (c *Client) serverIndex() map[string]int {
 	return out
 }
 
-// pickFirstLiveAddr returns the first Servers() entry that is not in
-// DeadServers(). Identity is Network (empty = tcp) + Address. If every
-// node is dead, it returns Servers()[0]. An empty cluster is ErrInvalidAddress.
+// pickFirstLiveAddr returns the first live member, or the first if all are dead. An empty cluster is ErrInvalidAddress.
 func (c *Client) pickFirstLiveAddr() (*addr, error) {
 	addrs, _ := c.snapshotCluster()
 	if len(addrs) == 0 {
@@ -237,13 +235,14 @@ func (c *Client) pickFirstLiveAddr() (*addr, error) {
 	return first, nil
 }
 
+// setResolverErr stores the latest periodic resolver failure.
 func (c *Client) setResolverErr(err error) {
 	c.resolverMu.Lock()
 	c.resolverErr = err
 	c.resolverMu.Unlock()
 }
 
-// PoolStat is a snapshot of one node's connection pool.
+// PoolStat is one node's connection-pool occupancy.
 type PoolStat struct {
 	Server  Server
 	Total   int
@@ -252,8 +251,8 @@ type PoolStat struct {
 	MaxIdle int
 }
 
-// PoolStats returns pool occupancy per configured node. Nodes that have never
-// been dialed are omitted.
+// PoolStats reports pool occupancy for each configured node. Members that
+// have never been dialed are skipped.
 func (c *Client) PoolStats() []PoolStat {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -278,6 +277,7 @@ func (c *Client) PoolStats() []PoolStat {
 	return out
 }
 
+// nsBytes prefixes key with Config.Cluster.Namespace.
 func (c *Client) nsBytes(key []byte) []byte {
 	if c.rt == nil || c.rt.namespace == "" {
 		return key
@@ -287,6 +287,7 @@ func (c *Client) nsBytes(key []byte) []byte {
 	return append(out, key...)
 }
 
+// stripNS removes the configured namespace from a returned key.
 func (c *Client) stripNS(key []byte) []byte {
 	if c == nil || c.rt == nil || c.rt.namespace == "" {
 		return key

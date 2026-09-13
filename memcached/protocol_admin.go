@@ -12,6 +12,7 @@ import (
 
 var crawlerClassSelector = regexp.MustCompile(`^\d+(,\d+)*$`)
 
+// validAdminToken rejects empty tokens and tokens with whitespace or controls.
 func validAdminToken(s string) error {
 	if s == "" {
 		return fmt.Errorf("empty token: %w", ErrInvalidArgument)
@@ -24,6 +25,7 @@ func validAdminToken(s string) error {
 	return nil
 }
 
+// validCrawlerSelector accepts all, hash, or a comma-separated slab class list.
 func validCrawlerSelector(s string) error {
 	if err := validAdminToken(s); err != nil {
 		return err
@@ -37,6 +39,7 @@ func validCrawlerSelector(s string) error {
 	return fmt.Errorf("invalid crawler selector %q: %w", s, ErrInvalidArgument)
 }
 
+// buildAdminLine encodes a one-line admin command and optional noreply.
 func buildAdminLine(cmd string, noReply bool, args ...string) (*request, *response) {
 	b := newProtocolBuilder().AddString(cmd)
 	defer b.release()
@@ -53,10 +56,12 @@ func buildAdminLine(cmd string, noReply bool, args ...string) (*request, *respon
 	return req, buildLimitedLineResponse(1)
 }
 
+// buildVerbosityCommand encodes verbosity <level> [noreply].
 func buildVerbosityCommand(level int, noReply bool) (*request, *response) {
 	return buildAdminLine("verbosity", noReply, strconv.Itoa(level))
 }
 
+// buildShutdownCommand encodes shutdown [graceful].
 func buildShutdownCommand(graceful bool) (*request, *response) {
 	if graceful {
 		return buildAdminLine("shutdown", false, "graceful")
@@ -64,18 +69,22 @@ func buildShutdownCommand(graceful bool) (*request, *response) {
 	return buildAdminLine("shutdown", false)
 }
 
+// buildCacheMemLimitCommand encodes cache_memlimit <megabytes> [noreply].
 func buildCacheMemLimitCommand(megabytes uint32, noReply bool) (*request, *response) {
 	return buildAdminLine("cache_memlimit", noReply, strconv.FormatUint(uint64(megabytes), 10))
 }
 
+// buildSlabsReassignCommand encodes slabs reassign <source> <dest>.
 func buildSlabsReassignCommand(source, dest int) (*request, *response) {
 	return buildAdminLine("slabs", false, "reassign", strconv.Itoa(source), strconv.Itoa(dest))
 }
 
+// buildSlabsAutomoveCommand encodes slabs automove <mode>.
 func buildSlabsAutomoveCommand(mode int) (*request, *response) {
 	return buildAdminLine("slabs", false, "automove", strconv.Itoa(mode))
 }
 
+// buildLRUTuneCommand encodes lru tune <hotPct> <warmPct> <hotFactor> <warmFactor>.
 func buildLRUTuneCommand(hotPct, warmPct int, hotFactor, warmFactor float64) (*request, *response) {
 	return buildAdminLine("lru", false, "tune",
 		strconv.Itoa(hotPct), strconv.Itoa(warmPct),
@@ -84,14 +93,17 @@ func buildLRUTuneCommand(hotPct, warmPct int, hotFactor, warmFactor float64) (*r
 	)
 }
 
+// buildLRUModeCommand encodes lru mode <mode>.
 func buildLRUModeCommand(mode string) (*request, *response) {
 	return buildAdminLine("lru", false, "mode", mode)
 }
 
+// buildLRUTempTTLCommand encodes lru temp_ttl <ttl>.
 func buildLRUTempTTLCommand(ttl int) (*request, *response) {
 	return buildAdminLine("lru", false, "temp_ttl", strconv.Itoa(ttl))
 }
 
+// allowedWatchTopic reports whether t is a known watch topic.
 func allowedWatchTopic(t WatchTopic) bool {
 	switch t {
 	case WatchFetchers, WatchMutations, WatchEvictions, WatchConnEvents,
@@ -102,6 +114,7 @@ func allowedWatchTopic(t WatchTopic) bool {
 	}
 }
 
+// buildWatchCommand encodes watch <topic>*.
 func buildWatchCommand(topics []WatchTopic) (*request, *response) {
 	args := make([]string, 0, len(topics))
 	for _, t := range topics {
@@ -116,6 +129,7 @@ func buildWatchCommand(topics []WatchTopic) (*request, *response) {
 	return req, buildLimitedLineResponse(1)
 }
 
+// buildLRUCrawlerCommand encodes lru_crawler <args>*.
 func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 	all := append([]string{"lru_crawler"}, args...)
 	cmd := all[0]
@@ -129,6 +143,7 @@ func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 	return req, buildLimitedLineResponse(1)
 }
 
+// adminStreamLineError maps a dump-stream fault line, or returns nil.
 func adminStreamLineError(s string) error {
 	if s == "" {
 		return nil
@@ -140,6 +155,7 @@ func adminStreamLineError(s string) error {
 	return nil
 }
 
+// parseAdminReply maps the first admin status line.
 func parseAdminReply(resp *response) error {
 	if resp == nil || len(resp.rawLines) == 0 {
 		return fmt.Errorf("empty admin reply: %w", ErrMalformedResponse)
@@ -147,6 +163,7 @@ func parseAdminReply(resp *response) error {
 	return mapAdminStatus(resp.rawLines[0])
 }
 
+// mapAdminStatus maps an admin OK or fault line, or ErrMalformedResponse.
 func mapAdminStatus(line []byte) error {
 	hit := mapWireLine(line, wireAdmin)
 	if hit.Class == wireFault {
@@ -158,6 +175,7 @@ func mapAdminStatus(line []byte) error {
 	return fmt.Errorf("%s: %w", trimCRLF(line), ErrMalformedResponse)
 }
 
+// isShutdownClosed reports whether err is a connection close after shutdown.
 func isShutdownClosed(err error) bool {
 	if err == nil {
 		return false

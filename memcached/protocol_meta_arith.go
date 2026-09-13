@@ -1,21 +1,22 @@
 package memcached
 
+// metaArithmeticFlags is the encoded ma flag set.
 type metaArithmeticFlags struct {
-	b      bool               // b: interpret key as base64 encoded binary value
-	C      uint64             // C(token): compare CAS value
-	E      uint64             // E(token): use token as new CAS value
-	N      int64              // N(token): auto create item on miss with supplied TTL
-	J      uint64             // J(token): initial value to use if auto created after miss (default 0)
-	D      uint64             // D(token): delta to apply (decimal unsigned 64-bit number, default 1)
-	T      int64              // T(token): update TTL on success
-	M      MetaArithmeticMode // M(token): mode switch to change between incr and decr modes.
-	O      uint64             // O(token): opaque value, consumes a token and copies back with response
+	b      bool               // key is Base64
+	C      uint64             // compare CAS
+	E      uint64             // replacement CAS
+	N      int64              // create on miss (TTL)
+	J      uint64             // initial value if created (default 0)
+	D      uint64             // delta (default 1)
+	T      int64              // TTL on success
+	M      MetaArithmeticMode // incr or decr
+	O      uint64             // numeric opaque, echoed
 	Otoken string
-	q      bool // q: use noreply semantics for return codes
-	t      bool // t: return current TTL
-	c      bool // c: return current CAS value if successful.
-	v      bool // v: return new value
-	k      bool // k: return key as a token
+	q      bool // quiet: skip HD/EN; still return EX/NF/NS
+	t      bool // echo TTL
+	c      bool // echo CAS
+	v      bool // echo new value
+	k      bool // echo key
 
 	Cset      bool
 	Eset      bool
@@ -28,7 +29,7 @@ type metaArithmeticFlags struct {
 	L         string
 }
 
-// MetaArithmeticMode is the ma M token (incr/decr).
+// MetaArithmeticMode is the ma M token (incr or decr).
 type MetaArithmeticMode string
 
 const (
@@ -36,6 +37,7 @@ const (
 	MetaArithmeticModeDecr MetaArithmeticMode = "D"
 )
 
+// validMetaArithmeticMode reports whether m is empty, incr, or decr.
 func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 	switch m {
 	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr:
@@ -45,6 +47,7 @@ func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 	}
 }
 
+// buildMetaArithmeticCommand encodes ma <key> <flags>*\r\n. Quiet appends mn.
 func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticFlags) (*request, *response) {
 	if flags.b {
 		key = base64Encode(key)

@@ -1,6 +1,6 @@
 package memcached
 
-// touch <key> <exptime> [noreply]\r\n
+// buildTouchCommand encodes touch <key> <exptime> [noreply]\r\n.
 func buildTouchCommand(key []byte, expTime Exptime, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString("touch").

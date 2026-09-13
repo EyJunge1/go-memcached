@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Set issues ms with the given flags.
+// Set sends ms for key using flags f.
 func (m *MetaClient) Set(ctx context.Context, key, value []byte, f MetaSet) (MetaResult, error) {
 	c := m.c
 	if err := f.validate(); err != nil {

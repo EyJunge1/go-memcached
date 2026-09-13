@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Arithmetic issues ma with the given flags.
+// Arithmetic sends ma for key using flags f.
 func (m *MetaClient) Arithmetic(ctx context.Context, key []byte, delta uint64, f MetaArithmetic) (MetaResult, error) {
 	c := m.c
 	if err := f.validate(); err != nil {

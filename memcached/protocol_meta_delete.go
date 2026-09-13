@@ -1,16 +1,17 @@
 package memcached
 
+// metaDeleteFlags is the encoded md flag set.
 type metaDeleteFlags struct {
-	b      bool   // b: interpret key as base64 encoded binary value
-	C      uint64 // C(token): compare CAS value
-	E      uint64 // E(token): use token as new CAS value
-	I      bool   // I: invalidate. mark as stale, bumps CAS.
-	k      bool   // k: return key
-	O      uint64 // O(token): opaque to copy back.
+	b      bool   // key is Base64
+	C      uint64 // compare CAS
+	E      uint64 // replacement CAS
+	I      bool   // mark stale and bump CAS
+	k      bool   // echo key
+	O      uint64 // numeric opaque, echoed
 	Otoken string
-	q      bool  // q: noreply
-	T      int64 // T(token): updates TTL, only when paired with the 'I' flag
-	x      bool  // x: removes the item value, but leaves the item.
+	q      bool  // quiet: skip HD; still return EX/NF
+	T      int64 // TTL, only with I
+	x      bool  // drop the value, keep the item
 
 	Cset      bool
 	Eset      bool
@@ -21,7 +22,7 @@ type metaDeleteFlags struct {
 	L         string
 }
 
-// md <key> <flags>*\r\n
+// buildMetaDeleteCommand encodes md <key> <flags>*\r\n.
 func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *response) {
 	if flags.b {
 		key = base64Encode(key)

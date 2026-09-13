@@ -23,50 +23,38 @@ var responsePool = sync.Pool{
 	},
 }
 
+// responseEndIndicator chooses how recv drains a reply.
 type responseEndIndicator uint8
 
 const (
 	endIndicatorUnknown responseEndIndicator = iota
-	// endIndicatorNoReply indicates the response is no reply
-	// and the client should not wait for the response.
+	// endIndicatorNoReply means the client must not wait for a reply.
 	endIndicatorNoReply
-	// endIndicatorLimitedLines indicates the response is limited lines;
-	// the client should read line from response with limited lines with delimiter '\n'.
+	// endIndicatorLimitedLines reads a fixed number of '\n'-terminated records.
 	endIndicatorLimitedLines
-	// endIndicatorSpecificEndLine indicates the response is specific end line;
-	// the client should read lines from response until the specific end line.
-	// The delimiter is '\n'.
+	// endIndicatorSpecificEndLine reads '\n' records until specEndLine.
 	endIndicatorSpecificEndLine
-	// endIndicatorQuietBarrier reads until MN, collecting quiet (non-nominal) replies.
+	// endIndicatorQuietBarrier reads until MN and keeps quiet error replies.
 	endIndicatorQuietBarrier
 )
 
-// response represents a structural response from memcached server.
+// response is one decoded server frame.
 type response struct {
-	// endIndicator indicates the parser how to read the whole bytes from the
-	// connection receiving buffer.
+	// endIndicator chooses how recv drains the connection buffer.
 	endIndicator responseEndIndicator
-	// limitedLines is the number of lines to read from the connection.
-	// If limitedLines equals 0, it means the response is not ready to be read
-	// from the connection. 1 means the response is
-	// ready to be read from the connection.
+	// limitedLines is how many protocol records read1 consumes. 0 means none.
 	limitedLines uint8
-	// specEndLine is the specific end line of the response, it helps to read
-	// from the connection.
+	// specEndLine is the terminator read2 stops on.
 	specEndLine []byte
 
-	// rawLines is the raw bytes of the response, it has been divided by '\n'.
-	// .e.g. "VALUE key 0 5\r\nvalue\r\nEND\r\n" will be divided into
-	// ["VALUE key 0 5\r\n", "value\r\n", "END\r\n"].
+	// rawLines are records split on '\n', including VALUE/VA bodies.
 	rawLines [][]byte
 
-	// This field is used to indicate whether the request is UDP enabled.
-	// And it's set by the memcached client before sending the request.
+	// udpEnabled is set by the client before send when the node is UDP.
 	udpEnabled bool
 	udpReqID   uint16
 
-	// afterRecv runs after a successful frame read and before the conn is
-	// returned to the pool, so parse/expect failures can discard a desynced conn.
+	// afterRecv parses the frame before the socket returns to the pool.
 	afterRecv func(*response) error
 
 	maxValueBytes int
@@ -75,12 +63,14 @@ type response struct {
 	readConn      wireConn
 }
 
+// buildNoReplyResponse returns a pooled response that waits for no reply.
 func buildNoReplyResponse() *response {
 	resp := responsePool.Get().(*response)
 	resp.endIndicator = endIndicatorNoReply
 	return resp
 }
 
+// buildLimitedLineResponse returns a pooled response that reads a fixed number of lines.
 func buildLimitedLineResponse(lines uint8) *response {
 	resp := responsePool.Get().(*response)
 	resp.endIndicator = endIndicatorLimitedLines
@@ -89,6 +79,7 @@ func buildLimitedLineResponse(lines uint8) *response {
 	return resp
 }
 
+// buildSpecEndLineResponse returns a pooled response that reads until endLine.
 func buildSpecEndLineResponse(endLine []byte, predictLines int) *response {
 	if predictLines <= 0 {
 		predictLines = 8
@@ -103,6 +94,7 @@ func buildSpecEndLineResponse(endLine []byte, predictLines int) *response {
 
 const rawLinesKeepCap = 32
 
+// resetRawLines reuses or reallocates rawLines with at least hint capacity.
 func resetRawLines(resp *response, hint int) {
 	if hint < 1 {
 		hint = 1
@@ -114,6 +106,7 @@ func resetRawLines(resp *response, hint int) {
 	resp.rawLines = make([][]byte, 0, hint)
 }
 
+// release clears the response and returns it to the pool.
 func (resp *response) release() {
 	resp.endIndicator = endIndicatorUnknown
 	resp.limitedLines = 0
@@ -136,12 +129,14 @@ func (resp *response) release() {
 	responsePool.Put(resp)
 }
 
+// buildQuietBarrierResponse returns a response that reads until MN.
 func buildQuietBarrierResponse() *response {
 	resp := buildSpecEndLineResponse(_MetaMNCRLFBytes, 4)
 	resp.endIndicator = endIndicatorQuietBarrier
 	return resp
 }
 
+// appendMetaQuietBarrier appends mn [P] [L] after raw.
 func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
 	b := newProtocolBuilder().AddString("mn")
 	defer b.release()
@@ -154,29 +149,35 @@ func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
 	return out
 }
 
+// protocolReader is the line and framed-body reader used by recv.
 type protocolReader interface {
 	readLine(delim byte) ([]byte, error)
 	readExact(n int) ([]byte, error)
 }
 
+// payloadReader is an in-memory protocolReader for tests.
 type payloadReader struct {
 	r *bufio.Reader
 }
 
+// newPayloadReader wraps payload for line and exact reads.
 func newPayloadReader(payload []byte) *payloadReader {
 	return &payloadReader{r: bufio.NewReader(bytes.NewReader(payload))}
 }
 
+// readLine reads through the next delim.
 func (p *payloadReader) readLine(delim byte) ([]byte, error) {
 	return p.r.ReadBytes(delim)
 }
 
+// readExact reads exactly n bytes.
 func (p *payloadReader) readExact(n int) ([]byte, error) {
 	buf := make([]byte, n)
 	_, err := io.ReadFull(p.r, buf)
 	return buf, err
 }
 
+// recv reads the server frame according to endIndicator.
 func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Duration) error {
 	if has := selectProximateDeadline(ctx, rr, readTimeout, clock, true); has {
 		defer func() { _ = rr.setReadDeadline(zeroTime) }()
@@ -208,6 +209,7 @@ func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Du
 	return fmt.Errorf("unknown end indicator: %w", ErrMalformedResponse)
 }
 
+// selectProximateDeadline applies the sooner of ctx and timeout to the conn.
 func selectProximateDeadline(
 	ctx context.Context, rr wireConn, timeout time.Duration, clock clockFunc, isRead bool,
 ) (ok bool) {
@@ -245,12 +247,13 @@ func selectProximateDeadline(
 	return has
 }
 
+// protocolDataBlockSize parses the VALUE or VA payload size, if present.
 func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
 	trimmed := trimCRLF(line)
 	switch {
 	case bytes.HasPrefix(trimmed, []byte("VALUE ")):
 		item := &Item{}
-		// Framing only needs <bytes>; CAS is optional on the wire (get vs gets).
+		// Framing only needs <bytes>; CAS is optional (get vs gets).
 		size, err = parseValueLine(trimmed, item, false)
 		return size, true, err
 	case bytes.HasPrefix(trimmed, []byte("VA ")):
@@ -269,6 +272,7 @@ func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
 	}
 }
 
+// appendDataBlock appends a header and its length-framed body, if any.
 func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consumed int, err error) {
 	size, has, err := protocolDataBlockSize(header)
 	if err != nil {
@@ -306,8 +310,8 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 	return 2, nil
 }
 
-// read1 reads the response from the connection with limited protocol lines.
-// VALUE/VA payloads are length-framed and count as the following line.
+// read1 reads limitedLines protocol records. VALUE/VA bodies are length-framed
+// and count as the next record.
 func (resp *response) read1(rr protocolReader) error {
 	read := 0
 	for read < int(resp.limitedLines) {
@@ -330,8 +334,8 @@ func (resp *response) read1(rr protocolReader) error {
 	return nil
 }
 
-// read2 reads protocol lines until specEndLine. Data blocks are length-framed.
-// When collectFaults is set, EX/NF/NS/CLIENT_ERROR stay on the wire until MN.
+// read2 reads until specEndLine. Bodies are length-framed.
+// collectFaults keeps EX/NF/NS/CLIENT_ERROR until MN.
 func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 	for {
 		line, err := rr.readLine('\n')
@@ -358,7 +362,7 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 	return nil
 }
 
-// mapStatusLine accepts want, otherwise protocol sentinels from forecast, else malformed.
+// mapStatusLine accepts want, else a known protocol error, else ErrMalformedResponse.
 func mapStatusLine(resp *response, want []byte) error {
 	if resp.endIndicator == endIndicatorNoReply {
 		return nil
@@ -382,6 +386,7 @@ func mapStatusLine(resp *response, want []byte) error {
 	return fmt.Errorf("unexpected response: %s: %w", snippet, ErrMalformedResponse)
 }
 
+// expectLine is an afterRecv that accepts want via mapStatusLine.
 func expectLine(want []byte) func(*response) error {
 	return func(resp *response) error {
 		return mapStatusLine(resp, want)

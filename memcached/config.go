@@ -10,64 +10,65 @@ import (
 	"time"
 )
 
-// TimeoutNone disables a Transport timeout (no extra deadline beyond ctx).
-// A zero DialTimeout / ReadTimeout / WriteTimeout still means the package default.
+// TimeoutNone leaves a Transport timeout unlimited aside from the caller's context.
+// A zero DialTimeout, ReadTimeout, or WriteTimeout still selects the package default.
 const TimeoutNone time.Duration = -1
 
-// Config is the only constructor input for New.
-// Optional fields follow one rule for the whole API:
+// Config is the sole input to New.
+// Optional fields share one convention across the API:
 //
-//	A — opt-in blocks (Failover, Auth): zero or nil means off.
-//	B — default-on: inverted bool (DisableTCPNoDelay), never *bool.
-//	C — 0 is a valid wire value: pointer (GetOpts.Touch, FlushOpts.Delay, Meta *Exptime / *uint64).
-//	D — 0 is not useful: omit on zero (MetaGet.Recache, Cluster.ResolverRefresh).
-//	E — scalar defaults apply field-wise (DialTimeout 0 → 3s; TimeoutNone = unlimited).
+//	A — opt-in groups (Failover, Auth): the zero value or nil turns the feature off.
+//	B — features that default on use an inverted bool (DisableTCPNoDelay), never *bool.
+//	C — when 0 is a legal wire token, the field is a pointer (GetOpts.Touch,
+//	    FlushOpts.Delay, Meta *Exptime / *uint64).
+//	D — when 0 has no useful wire meaning, a zero value omits the flag
+//	    (MetaGet.Recache, Cluster.ResolverRefresh).
+//	E — numeric defaults are applied per field (DialTimeout 0 becomes 3s;
+//	    TimeoutNone means no extra deadline).
 type Config struct {
 	Servers         []Server
 	Transport       Transport
 	Pool            Pool
 	Cluster         Cluster
-	Failover        Failover // zero = off; use DefaultFailover() for the previous multi-node default
+	Failover        Failover // zero disables failover; DefaultFailover restores the old multi-node policy
 	Auth            *Auth
-	AllowFlushAll   bool // required for Admin On/All Flush; zero denies flush_all
-	AllowAdmin      bool // required for Client.Admin
-	AllowSetServers bool // required for SetServers and Cluster.ResolverRefresh
-	MaxValueBytes   int  // 0 → 1 MiB; applies to write validate and VALUE/VA reads
+	AllowFlushAll   bool // must be set before Admin On/All Flush; otherwise flush_all is refused
+	AllowAdmin      bool // must be set before Client.Admin
+	AllowSetServers bool // must be set before SetServers and Cluster.ResolverRefresh
+	MaxValueBytes   int  // 0 becomes 1 MiB; used for write checks and VALUE/VA reads
 }
 
-// Server is one cluster node.
+// Server names one cluster member.
 type Server struct {
-	Network string // "tcp" (default), "unix", "udp"
+	Network string // empty or "tcp" by default; also "unix", "udp"
 	Address string
-	Weight  uint32 // 0 ⇒ 1; used by Ketama
+	Weight  uint32 // 0 is treated as 1 by Ketama
 }
 
-// Transport holds dial, TLS, and I/O timeouts.
-// Defaults apply field-wise: DialTimeout 0 → 3s, ReadTimeout/WriteTimeout 0 → 5s,
-// RetryAttempts 0 → 1. TimeoutNone on a timeout field means no extra deadline.
-// Dial is the raw socket; TLS, if set, always wraps it.
+// Transport configures dialing, TLS, and I/O deadlines.
+// Zero timeouts become DialTimeout 3s and Read/WriteTimeout 5s; RetryAttempts 0 becomes 1.
+// TimeoutNone skips the extra deadline. Dial is the raw socket; a non-nil TLS wraps it.
 type Transport struct {
 	TLS               *tls.Config
 	Dial              DialContextFunc
-	DialTimeout       time.Duration // 0 → 3s; TimeoutNone = no extra timeout
-	ReadTimeout       time.Duration // 0 → 5s; TimeoutNone = no extra timeout
-	WriteTimeout      time.Duration // 0 → 5s; TimeoutNone = no extra timeout
-	KeepAlive         time.Duration // 0 → net.Dialer default
-	RetryAttempts     int           // 0 → 1
+	DialTimeout       time.Duration // 0 becomes 3s; TimeoutNone skips the extra deadline
+	ReadTimeout       time.Duration // 0 becomes 5s; TimeoutNone skips the extra deadline
+	WriteTimeout      time.Duration // 0 becomes 5s; TimeoutNone skips the extra deadline
+	KeepAlive         time.Duration // 0 leaves net.Dialer's keep-alive
+	RetryAttempts     int           // 0 becomes 1
 	AllowInsecureTLS  bool
-	DisableTCPNoDelay bool // zero = TCP_NODELAY on
-	// RequireTLS makes New fail unless TLS is configured. Default remains plaintext.
+	DisableTCPNoDelay bool // false keeps TCP_NODELAY enabled
+	// RequireTLS rejects New unless TLS is present. The transport default stays plaintext.
 	RequireTLS bool
-	// UnixSocketAnyMode skips the default reject of other-write (002).
+	// UnixSocketAnyMode accepts sockets that are other-writable (mode bit 002).
 	UnixSocketAnyMode bool
-	// UnixSocketMaxMode, when non-zero, rejects sockets with extra permission bits.
+	// UnixSocketMaxMode, if set, rejects sockets whose mode has bits outside the mask.
 	UnixSocketMaxMode os.FileMode
 }
 
-// Pool is the per-node connection pool.
-// Defaults apply field-wise: MaxOpen 0 → 100, MaxIdle 0 → 10. MaxIdle < 0 keeps
-// no idle connections. MaxLifetime/MaxIdleTime 0 stay unlimited. MinIdle 0
-// means no warmup.
+// Pool sizes the per-node connection set.
+// Zero MaxOpen/MaxIdle become 100/10. Negative MaxIdle keeps nothing idle.
+// Zero MaxLifetime, MaxIdleTime, and MinIdle mean no age limit and no warmup.
 type Pool struct {
 	MinIdle     int
 	MaxIdle     int
@@ -76,22 +77,22 @@ type Pool struct {
 	MaxIdleTime time.Duration
 }
 
-// Cluster selects namespace and optional resolver refresh.
+// Cluster holds the key namespace and optional DNS refresh.
 // The picker is always weighted Ketama/MD5.
 type Cluster struct {
 	Namespace string
-	// ResolverRefresh, when > 0, re-resolves ResolveSpec (or formatted Servers)
-	// on that interval. Requires AllowSetServers.
+	// ResolverRefresh > 0 re-resolves ResolveSpec (or formatted Servers) on that interval.
+	// AllowSetServers is required.
 	ResolverRefresh time.Duration
-	ResolveSpec     string // re-resolved on refresh; empty → formatted Servers
+	ResolveSpec     string // refreshed on each tick; empty uses formatted Servers
 
 	pickBuilder builder
 	resolver    resolver
 }
 
-// Failover quarantines nodes after consecutive transport failures.
-// After FailureLimit, the node is skipped for RetryAfter; further failures
-// use DeadAfter. Zero durations mean no timed revive (until a success).
+// Failover skips a node after consecutive transport errors.
+// After FailureLimit the node is ignored for RetryAfter, then DeadAfter.
+// Zero RetryAfter and DeadAfter keep the node down until a later request succeeds.
 type Failover struct {
 	FailureLimit int
 	RetryAfter   time.Duration
@@ -99,13 +100,13 @@ type Failover struct {
 	Eject        bool
 }
 
-// Auth is memcached text token authentication (-Y).
+// Auth is text-protocol token authentication (-Y).
 type Auth struct {
 	User, Pass     string
 	AllowPlaintext bool
 }
 
-// ParseServers parses a comma-separated spec (tcp host:port, unix://, udp://, ?weight=).
+// ParseServers splits a comma-separated spec (host:port, unix://, udp://, ?weight=).
 func ParseServers(spec string) ([]Server, error) {
 	addrs, err := defaultResolver{}.Resolve(spec)
 	if err != nil {
@@ -114,6 +115,7 @@ func ParseServers(spec string) ([]Server, error) {
 	return addrsToServers(addrs), nil
 }
 
+// addrsToServers converts resolved cluster addrs into the public Server list.
 func addrsToServers(addrs []*addr) []Server {
 	out := make([]Server, 0, len(addrs))
 	for _, a := range addrs {
@@ -125,10 +127,12 @@ func addrsToServers(addrs []*addr) []Server {
 	return out
 }
 
+// addrToServer copies one cluster addr into a Server.
 func addrToServer(a *addr) Server {
 	return Server{Network: a.Network, Address: a.Address, Weight: a.Weight}
 }
 
+// serversToAddrs validates Config servers and builds the corresponding cluster addrs.
 func serversToAddrs(servers []Server) ([]*addr, error) {
 	if len(servers) == 0 {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
@@ -152,6 +156,7 @@ func serversToAddrs(servers []Server) ([]*addr, error) {
 	return out, nil
 }
 
+// formatServerSpec renders servers as a comma-separated ParseServers spec.
 func formatServerSpec(servers []Server) string {
 	parts := make([]string, 0, len(servers))
 	for _, s := range servers {
@@ -170,6 +175,7 @@ func formatServerSpec(servers []Server) string {
 	return strings.Join(parts, ",")
 }
 
+// serverNetwork returns s.Network, or "tcp" when the field is empty.
 func serverNetwork(s Server) string {
 	if s.Network == "" {
 		return "tcp"
@@ -177,6 +183,7 @@ func serverNetwork(s Server) string {
 	return s.Network
 }
 
+// isLoopbackServer reports whether s is a Unix socket, localhost, or a loopback IP.
 func isLoopbackServer(s Server) bool {
 	if strings.HasPrefix(serverNetwork(s), "unix") {
 		return true
@@ -192,6 +199,7 @@ func isLoopbackServer(s Server) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// isStreamNetwork reports whether network is TCP or Unix (including the empty TCP default).
 func isStreamNetwork(network string) bool {
 	switch network {
 	case "", "tcp", "tcp4", "tcp6", "unix":
@@ -201,6 +209,7 @@ func isStreamNetwork(network string) bool {
 	}
 }
 
+// validateTransportServers rejects mixed UDP/stream clusters and TLS on UDP.
 func validateTransportServers(servers []Server, tlsCfg *tls.Config) error {
 	var sawUDP, sawStream bool
 	for _, s := range servers {
@@ -219,6 +228,7 @@ func validateTransportServers(servers []Server, tlsCfg *tls.Config) error {
 	return nil
 }
 
+// validateAuthAgainstServers rejects token auth on UDP and plaintext auth to non-loopback hosts.
 func validateAuthAgainstServers(servers []Server, allowPlain, hasTLS bool) error {
 	hasUDP := false
 	needsPlaintextGuard := !hasTLS && !allowPlain
@@ -236,6 +246,7 @@ func validateAuthAgainstServers(servers []Server, allowPlain, hasTLS bool) error
 	return nil
 }
 
+// validateConfig checks Config invariants before New builds a Client.
 func validateConfig(cfg Config) error {
 	if len(cfg.Servers) == 0 {
 		return fmt.Errorf("empty address: %w", ErrInvalidAddress)
@@ -272,7 +283,7 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
-// DefaultFailover is the previous multi-node default: two failures, 1s retry, 30s dead, eject.
+// DefaultFailover returns the former multi-node policy: two failures, 1s retry, 30s dead, eject on.
 func DefaultFailover() Failover {
 	return Failover{
 		FailureLimit: 2,

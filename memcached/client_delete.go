@@ -5,13 +5,13 @@ import (
 	"fmt"
 )
 
-// MutateOpts selects optional noreply for Delete and Touch.
-// Text Incr/Decr have no Quiet; use Meta().Arithmetic with q.
+// MutateOpts adds optional noreply on Delete and Touch.
+// Text Incr and Decr have no Quiet; use Meta().Arithmetic with q.
 type MutateOpts struct {
 	Quiet bool
 }
 
-// Delete removes the key.
+// Delete drops the key.
 func (c *Client) Delete(ctx context.Context, key []byte, opts MutateOpts) error {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {

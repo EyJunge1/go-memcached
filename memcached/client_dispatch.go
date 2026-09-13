@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// getConn returns a true connection from the pool.
+// getConn checks out a live socket from the node's pool.
 func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 	key := node.id()
 
@@ -83,8 +83,10 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 	return pool.get(ctx)
 }
 
+// callFunc runs one request on an already checked-out connection.
 type callFunc func(ctx context.Context, node *addr, conn wireConn) error
 
+// wrapTransport marks unclassified I/O failures as ErrTransport.
 func wrapTransport(err error) error {
 	if err == nil {
 		return nil
@@ -98,6 +100,7 @@ func wrapTransport(err error) error {
 	return fmt.Errorf("%w: %w", ErrTransport, err)
 }
 
+// isClassifiedNonTransport is true for protocol, validation, and context errors.
 func isClassifiedNonTransport(err error) bool {
 	return isKeepaliveProtocolError(err) ||
 		errors.Is(err, context.Canceled) ||
@@ -120,10 +123,12 @@ func isClassifiedNonTransport(err error) bool {
 		errors.Is(err, ErrClosed)
 }
 
+// isTransportError reports whether err is or wraps ErrTransport.
 func isTransportError(err error) bool {
 	return errors.Is(err, ErrTransport)
 }
 
+// isKeepaliveProtocolError reports protocol replies that leave the connection reusable.
 func isKeepaliveProtocolError(err error) bool {
 	return errors.Is(err, ErrNotFound) ||
 		errors.Is(err, ErrExists) ||
@@ -144,10 +149,12 @@ func isKeepaliveProtocolError(err error) bool {
 		errors.Is(err, ErrNotStarted)
 }
 
+// wrapRecvError classifies a receive-path failure the same way as wrapTransport.
 func wrapRecvError(err error) error {
 	return wrapTransport(err)
 }
 
+// shouldDiscardConn reports whether err means the pooled socket can no longer be reused.
 func shouldDiscardConn(err error) bool {
 	if err == nil {
 		return false
@@ -160,6 +167,7 @@ func shouldDiscardConn(err error) bool {
 		errors.Is(err, ErrServerError)
 }
 
+// finishConn returns cn to its pool, or closes it when shouldDiscardConn is true.
 func finishConn(cn wireConn, err error) {
 	if cn == nil {
 		return
@@ -175,6 +183,7 @@ func finishConn(cn wireConn, err error) {
 	_ = cn.release()
 }
 
+// sendOnConn writes req on an already-checked-out connection and reads resp.
 func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *request, resp *response) error {
 	c.enableUDPFraming(node, req, resp)
 	if req.udpEnabled {
@@ -197,6 +206,7 @@ func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *r
 	return nil
 }
 
+// enableUDPFraming attaches a shared request id to req and resp when node uses UDP.
 func (c *Client) enableUDPFraming(node *addr, req *request, resp *response) {
 	if node == nil || !isUDPNetwork(node.Network) {
 		req.udpEnabled = false
@@ -210,6 +220,7 @@ func (c *Client) enableUDPFraming(node *addr, req *request, resp *response) {
 	resp.udpReqID = id
 }
 
+// broadcastRequest runs call on every configured node and joins the resulting errors.
 func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 	select {
 	case <-ctx.Done():
@@ -255,6 +266,7 @@ func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 	return errors.Join(errs...)
 }
 
+// dispatchRequest picks a live cluster member for req.key and runs the request there.
 func (c *Client) dispatchRequest(ctx context.Context, req *request, resp *response) error {
 	select {
 	case <-ctx.Done():
@@ -271,8 +283,8 @@ func (c *Client) dispatchRequest(ctx context.Context, req *request, resp *respon
 	return c.dispatchToAddr(ctx, addr, req, resp)
 }
 
-// dispatchFirstLive sends on the first live node and re-evaluates that pick
-// on each retry (not Ketama).
+// dispatchFirstLive writes to the first live node and picks again on each
+// retry. It does not use Ketama.
 func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *response) error {
 	select {
 	case <-ctx.Done():
@@ -313,6 +325,7 @@ func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *resp
 	return last
 }
 
+// dispatchToAddr sends req to node, retrying transport failures according to Config.
 func (c *Client) dispatchToAddr(ctx context.Context, node *addr, req *request, resp *response) error {
 	attempts := c.rt.retryAttempts
 	if attempts < 1 {
@@ -351,6 +364,7 @@ func (c *Client) dispatchToAddr(ctx context.Context, node *addr, req *request, r
 	return last
 }
 
+// dispatchOnce checks out a conn, sends, and recvs. sent is true if the frame left the socket.
 func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, resp *response) (sent bool, err error) {
 	if err = ctx.Err(); err != nil {
 		return false, err
@@ -390,6 +404,7 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 	return sent, err
 }
 
+// valueLimit is the maximum VALUE/VA body the client will accept from the server.
 func (c *Client) valueLimit() int {
 	if c == nil || c.rt == nil || c.rt.maxValueBytes <= 0 {
 		return defaultMaxValueBytes
@@ -397,6 +412,7 @@ func (c *Client) valueLimit() int {
 	return c.rt.maxValueBytes
 }
 
+// dialDedicated opens an unpooled TCP or Unix socket for admin streams, with auth when configured.
 func (c *Client) dialDedicated(ctx context.Context, node *addr) (wireConn, error) {
 	c.mu.RLock()
 	closed := c.closed

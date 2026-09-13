@@ -7,8 +7,7 @@ import (
 	"unicode"
 )
 
-// wireKind selects which token families mapWireLine applies after the global
-// error strings.
+// wireKind chooses which token set mapWireLine applies after the global errors.
 type wireKind uint8
 
 const (
@@ -19,7 +18,7 @@ const (
 	wireDump
 )
 
-// wireClass is the coarse classification of one status line.
+// wireClass is the coarse class of one status line.
 type wireClass uint8
 
 const (
@@ -28,7 +27,7 @@ const (
 	wireStreamEnd
 )
 
-// wireHit is the result of mapping one protocol line.
+// wireHit is the mapping of one protocol line.
 type wireHit struct {
 	Class   wireClass
 	Err     error
@@ -36,7 +35,7 @@ type wireHit struct {
 	Discard bool
 }
 
-// mapWireLine classifies one ASCII/meta/admin/stats/dump status line.
+// mapWireLine classifies one text, meta, admin, stats, or dump status line.
 func mapWireLine(line []byte, kind wireKind) wireHit {
 	tok := string(trimCRLF(line))
 	if kind == wireDump && isDumpEnd(tok) {
@@ -73,10 +72,12 @@ func mapWireLine(line []byte, kind wireKind) wireHit {
 	}
 }
 
+// isDumpEnd reports whether s is END or EN.
 func isDumpEnd(s string) bool {
 	return s == "END" || s == "EN"
 }
 
+// malformedHit returns a discardable ErrMalformedResponse hit.
 func malformedHit(tok string) wireHit {
 	return wireHit{
 		Class:   wireFault,
@@ -85,6 +86,7 @@ func malformedHit(tok string) wireHit {
 	}
 }
 
+// mapGlobalErrorLine maps CLIENT_ERROR, SERVER_ERROR, and ERROR lines.
 func mapGlobalErrorLine(line []byte, tok string) (wireHit, bool) {
 	if err := prefixedProtocolError(line, "CLIENT_ERROR", ErrClientError); err != nil {
 		return wireHit{Class: wireFault, Err: err}, true
@@ -101,6 +103,7 @@ func mapGlobalErrorLine(line []byte, tok string) (wireHit, bool) {
 	return wireHit{}, false
 }
 
+// mapAppLine maps a classic text-protocol status line.
 func mapAppLine(tok string) wireHit {
 	switch tok {
 	case "NOT_FOUND":
@@ -121,6 +124,7 @@ func mapAppLine(tok string) wireHit {
 	return malformedHit(tok)
 }
 
+// isArithmeticValue reports whether tok is an incr/decr decimal reply.
 func isArithmeticValue(tok string) bool {
 	if tok == "" {
 		return false
@@ -136,6 +140,7 @@ func isArithmeticValue(tok string) bool {
 	return true
 }
 
+// mapMetaCDLine maps a two-letter meta status and optional flags.
 func mapMetaCDLine(tok string) wireHit {
 	cd, _, _ := strings.Cut(tok, " ")
 	switch cd {
@@ -164,6 +169,7 @@ func mapMetaCDLine(tok string) wireHit {
 	}
 }
 
+// mapAdminKeywordHit maps a known admin fault keyword.
 func mapAdminKeywordHit(tok string) (wireHit, bool) {
 	type kw struct {
 		prefix string
@@ -189,6 +195,7 @@ func mapAdminKeywordHit(tok string) (wireHit, bool) {
 	return wireHit{}, false
 }
 
+// isChargeMetaFault reports whether err must abort a meta parse.
 func isChargeMetaFault(err error) bool {
 	return errors.Is(err, ErrClientError) ||
 		errors.Is(err, ErrServerError) ||

@@ -6,8 +6,7 @@ import (
 	"math"
 )
 
-// buildGetsCommand constructs gets command.
-// get/gets <key>*\r\n
+// buildGetsCommand encodes get/gets <key>*\r\n.
 func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command)
@@ -28,8 +27,7 @@ func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
 	return req, resp
 }
 
-// buildGetAndTouchCommand constructs get and touch command.
-// gat/gats <exptime> <key>*\r\n
+// buildGetAndTouchesCommand encodes gat/gats <exptime> <key>*\r\n.
 func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command).
@@ -52,35 +50,23 @@ func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (
 	return req, resp
 }
 
-// parseValueItems parses the response from memcached server, the response
-// is a list of items, each item is a key-value pair.
-//
-// For example:
-// VALUE <key> <flags> <bytes> <cas unique>\r\n
-// <data block>\r\n
-// VALUE <key> <flags> <bytes> <cas unique>\r\n
-// <data block>\r\n
-// ...
-// END\r\n
+// parseValueItems reads VALUE/data pairs, optionally ending with END.
 func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, err error) {
 	n := len(lines)
 	if withoutEndLine && n%2 != 0 {
-		// n must be even
 		return nil, fmt.Errorf("want times of 2 lines, got %d: %w", n, ErrMalformedResponse)
 	}
 	if !withoutEndLine && n%2 == 0 {
-		// n must be odd
 		return nil, fmt.Errorf("want odd lines, got %d: %w", n, ErrMalformedResponse)
 	}
 
 	var (
 		rn      = n
-		items   = make([]*Item, 0, (n/2)+1) // pre-alloc to avoid memory allocation
+		items   = make([]*Item, 0, (n/2)+1)
 		dataLen uint64
 	)
 
 	if !withoutEndLine {
-		// avoid iterate the last line "END\r\n"
 		rn = n - 1
 	}
 
@@ -110,9 +96,7 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 	return items, nil
 }
 
-// dataBlockValue returns the payload of a length-framed VALUE/VA body.
-// The reader stores size+CRLF; the value is the declared size, not a trim of the
-// last CRLF (a value may itself end in CR/LF).
+// dataBlockValue slices a length-framed VALUE/VA body to the declared size, not by trimming CRLF.
 func dataBlockValue(raw []byte, size uint64) ([]byte, error) {
 	if uint64(len(raw)) == size+2 && bytes.HasSuffix(raw, _CRLFBytes) {
 		return raw[:size], nil
@@ -120,11 +104,7 @@ func dataBlockValue(raw []byte, size uint64) ([]byte, error) {
 	return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
 }
 
-// parseValueLine extract item from VALUE line, like following:
-// VALUE <key> <flags> <bytes> <cas unique> => Item{key, flags, cas}
-//
-// if withCas is false, VALUE line is:
-// VALUE <key> <flags> <bytes> => Item{key, flags, 0}
+// parseValueLine fills item from VALUE <key> <flags> <bytes> [cas].
 func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err error) {
 	const (
 		keyIndex     = 1
@@ -147,8 +127,6 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 			continue
 		}
 
-		// another field starts from fieldStart to i, or the last field
-		// the 'i' is the index of space or the last byte.
 		switch nField {
 		case keyIndex:
 			item.Key = append(item.Key[:0], line[fieldStart:i]...)
@@ -195,14 +173,7 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 	return dataLen, nil
 }
 
-// parseUintFromBytes parses slice of bytes to uint64.
-//
-// For example:
-// []byte("1234567890") -> 1234567890
-//
-// If the slice of bytes is empty, it returns 0.
-//
-// If the slice of bytes contains non-digit characters, it returns an error.
+// parseUintFromBytes decodes an ASCII unsigned integer. Empty input is 0.
 func parseUintFromBytes(bs []byte) (uint64, error) {
 	if len(bs) == 0 {
 		return 0, nil

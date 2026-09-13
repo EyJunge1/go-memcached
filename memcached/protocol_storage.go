@@ -1,11 +1,6 @@
 package memcached
 
-// buildStorageCommand constructs storage class command, including:
-//
-//	set/add/replace/append/prepend, etc.
-//
-// <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
-// <data block>\r\n
+// buildStorageCommand encodes <verb> <key> <flags> <exptime> <bytes> [noreply]\r\n plus the body.
 func buildStorageCommand(
 	command string,
 	key []byte,
@@ -41,7 +36,7 @@ func buildStorageCommand(
 	return req, resp
 }
 
-// cas <key> <flag> <exptime> <bytes> <cas unique> [noreply]\r\n
+// buildCasCommand encodes cas <key> <flags> <exptime> <bytes> <cas> [noreply]\r\n plus the body.
 func buildCasCommand(
 	key []byte, value []byte, flag uint32, expTime Exptime, casUnique uint64, noReply bool,
 ) (*request, *response) {
@@ -73,9 +68,7 @@ func buildCasCommand(
 	return req, resp
 }
 
-// mapStorageReply maps a storage-class reply (set/add/replace/append/prepend/cas).
-// STORED is success; NOT_STORED/EXISTS/NOT_FOUND stay protocol sentinels so the
-// pooled conn is released. Anything else is malformed.
+// mapStorageReply maps a set/add/replace/append/prepend/cas reply.
 func mapStorageReply(resp *response) error {
 	return mapStatusLine(resp, _StoredCRLFBytes)
 }

@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// incr/decr <key> <value> [noreply]\r\n
+// buildArithmeticCommand encodes incr/decr <key> <delta> [noreply]\r\n.
 func buildArithmeticCommand(command string, key []byte, delta uint64, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command).
@@ -36,8 +36,7 @@ func buildArithmeticCommand(command string, key []byte, delta uint64, noReply bo
 	return req, resp
 }
 
-// parseArithmeticResponse handles the response with incr/decr command.
-// <value>\r\n
+// parseArithmetic reads the decimal counter from an incr/decr reply.
 func parseArithmetic(line []byte) (uint64, error) {
 	s := string(bytes.TrimSpace(trimCRLF(line)))
 	if s == "" {

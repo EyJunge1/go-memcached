@@ -10,9 +10,7 @@ import (
 
 var errPoolClosed = errors.New("connection pool is closed")
 
-// connPool is the per-node idle set. get() takes an idle conn or dials up to
-// maxOpen. put() returns a conn or closes it when the idle cap is reached.
-// A background cleaner drops conns past maxIdleTime or maxLifetime.
+// connPool is the idle set for one node: get takes or dials, put parks or closes at the idle cap.
 type connPool struct {
 	maxIdle, maxOpen int
 	maxLifetime      time.Duration
@@ -23,8 +21,7 @@ type connPool struct {
 	createConn func(ctx context.Context) (wireConn, error)
 	open       atomic.Int32
 	closed     bool
-	// closedCh is closed once so waiters in get() abort without a receive
-	// on a closed idle channel.
+	// closedCh is closed once so get waiters unblock.
 	closedCh  chan struct{}
 	cleanerCh chan struct{}
 
@@ -35,6 +32,7 @@ type connPool struct {
 	minIdle int
 }
 
+// newConnPool constructs an empty idle pool that dials through createConn.
 func newConnPool(
 	maxIdle, maxOpen int,
 	maxLifetime, maxIdleTime time.Duration,
@@ -53,6 +51,7 @@ func newConnPool(
 	return p
 }
 
+// close shuts the pool, drains idle sockets, and wakes waiters.
 func (p *connPool) close() error {
 	p.mu.Lock()
 	if p.closed {
@@ -63,8 +62,7 @@ func (p *connPool) close() error {
 	p.closed = true
 	close(p.closedCh)
 
-	// Drain idle connections without closing the idle channel itself.
-	// Closing the channel would race with lock-free get() receives.
+	// Drain idle sockets; closing the idle channel would race with lock-free get.
 	for {
 		select {
 		case cn := <-p.conns:
@@ -87,6 +85,7 @@ drained:
 	return nil
 }
 
+// connReusable reports whether cn is still within maxLifetime and maxIdleTime.
 func (p *connPool) connReusable(cn wireConn) bool {
 	now := clock()
 	if p.maxLifetime > 0 {
@@ -102,11 +101,13 @@ func (p *connPool) connReusable(cn wireConn) bool {
 	return true
 }
 
+// closeIdle closes cn and decrements the open-connection count.
 func (p *connPool) closeIdle(cn wireConn) {
 	_ = cn.Close()
 	p.open.Add(-1)
 }
 
+// get returns an idle reusable conn or dials a new one, waiting if the pool is at maxOpen.
 func (p *connPool) get(ctx context.Context) (wireConn, error) {
 	for {
 		select {
@@ -160,6 +161,7 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 	}
 }
 
+// discard closes cn and decrements the open-connection count without returning it to idle.
 func (p *connPool) discard(cn wireConn) error {
 	if cn == nil {
 		return nil
@@ -169,6 +171,7 @@ func (p *connPool) discard(cn wireConn) error {
 	return err
 }
 
+// put parks cn in the idle set or closes it when the pool is closed or at the idle cap.
 func (p *connPool) put(cn wireConn) error {
 	if cn == nil {
 		panic("pool: put nil connection")
@@ -199,7 +202,7 @@ func (p *connPool) put(cn wireConn) error {
 	}
 }
 
-// startCleanerLocked runs under mu. One goroutine reaps idle/expired conns.
+// startCleanerLocked starts one cleaner goroutine under mu to reap aged sockets.
 func (p *connPool) startCleanerLocked() {
 	if (p.maxLifetime > 0 || p.maxIdleTime > 0) && int(p.open.Load()) > 0 && p.cleanerCh == nil {
 		p.cleanerCh = make(chan struct{}, 1)
@@ -207,6 +210,7 @@ func (p *connPool) startCleanerLocked() {
 	}
 }
 
+// connectionsCleaner periodically reaps aged idle sockets and restores MinIdle.
 func (p *connPool) connectionsCleaner(d time.Duration) {
 	const minInterval = 1 * time.Second
 	if d < minInterval {
@@ -252,6 +256,7 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 	}
 }
 
+// shortestIdleTimeLocked returns the smaller enabled of maxLifetime and maxIdleTime.
 func (p *connPool) shortestIdleTimeLocked() time.Duration {
 	if p.maxIdleTime <= 0 {
 		return p.maxLifetime
@@ -263,8 +268,7 @@ func (p *connPool) shortestIdleTimeLocked() time.Duration {
 	return min(p.maxLifetime, p.maxIdleTime)
 }
 
-// connectionCleanerRunLocked drops idle-aged and lifetime-expired conns.
-// The idle channel is not closed: drain, filter, put survivors back.
+// connectionCleanerRunLocked drops idle-aged and lifetime-expired sockets and puts survivors back.
 func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, []wireConn) {
 	var idleClosing int64
 	closing := make([]wireConn, 0, p.maxIdle/2)
@@ -322,6 +326,7 @@ drained:
 	return d, closing
 }
 
+// connPoolStats is occupancy and eviction counters for one node pool.
 type connPoolStats struct {
 	TotalConns int
 	IdleConns  int
@@ -333,6 +338,7 @@ type connPoolStats struct {
 	closedLifetime int64
 }
 
+// stats returns a snapshot of open, idle, and eviction counters.
 func (p *connPool) stats() *connPoolStats {
 	p.mu.Lock()
 	s := &connPoolStats{
@@ -348,6 +354,7 @@ func (p *connPool) stats() *connPoolStats {
 	return s
 }
 
+// ensureMinIdle dials until the idle set reaches minIdle or the open cap is hit.
 func (p *connPool) ensureMinIdle(ctx context.Context) {
 	if p.minIdle <= 0 {
 		return
@@ -372,6 +379,7 @@ func (p *connPool) ensureMinIdle(ctx context.Context) {
 	}
 }
 
+// warmup dials up to n connections and parks them in the idle set.
 func (p *connPool) warmup(ctx context.Context, n int) {
 	if n <= 0 {
 		return

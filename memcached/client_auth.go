@@ -19,21 +19,24 @@ var (
 	authProbeSeq atomic.Uint64
 )
 
+// newAuthProbeKey returns a unique key used only for the token-auth handshake probe.
 func newAuthProbeKey() []byte {
 	var b [8]byte
 	if _, err := readAuthRand(b[:]); err == nil {
 		return []byte(authProbeKeyPrefix + hex.EncodeToString(b[:]))
 	}
-	// Unique even if the CSPRNG is unavailable: nano + monotonic counter.
+	// Fallback when CSPRNG fails: nanosecond clock plus a monotonic counter.
 	n := authProbeSeq.Add(1)
 	t := uint64(clock().UnixNano()) //nolint:gosec // uniqueness only
 	return []byte(fmt.Sprintf("%s%016x%08x", authProbeKeyPrefix, t, n))
 }
 
+// isAuthProbeKey reports whether key was minted by newAuthProbeKey.
 func isAuthProbeKey(key string) bool {
 	return strings.HasPrefix(key, authProbeKeyPrefix)
 }
 
+// validAuthSecret rejects credentials that contain whitespace or ASCII controls.
 func validAuthSecret(s string) error {
 	if strings.IndexFunc(s, func(r rune) bool {
 		return r == '\r' || r == '\n' || r == 0 || r == ' ' || r == '\t' || unicode.IsSpace(r)
@@ -43,11 +46,13 @@ func validAuthSecret(s string) error {
 	return nil
 }
 
+// buildAuthCommand encodes the set used to plant the -Y token-auth probe item.
 func buildAuthCommand(username, password string, key []byte) (*request, *response) {
 	payload := []byte(username + " " + password)
 	return buildStorageCommand("set", key, payload, 0, ExptimeNever, false)
 }
 
+// authHandshake runs -Y token auth on a new connection and fails if the probe item remains.
 func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTimeout, readTimeout time.Duration) error {
 	payload := []byte(user + " " + pass)
 	probeKey := newAuthProbeKey()
@@ -91,7 +96,7 @@ func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTim
 	if len(leftover) == 0 {
 		return nil
 	}
-	// A different body is a pre-existing key collision: -Y consumed our set.
+	// A different body means the key already existed; -Y ate our set.
 	if !bytes.Equal(leftover[0].Value, payload) {
 		return nil
 	}

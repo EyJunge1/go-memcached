@@ -10,11 +10,10 @@ import (
 	"time"
 )
 
-// DialContextFunc dials a raw socket. If Transport.TLS is set, the client
-// always wraps that socket with tls.Client and handshakes.
+// DialContextFunc opens the raw socket. A non-nil Transport.TLS wraps it with tls.Client.
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
-// runtime is the resolved Config after New: defaults applied, TLS dialer wrapped.
+// runtime is Config after New: defaults filled in and the TLS dialer applied.
 type runtime struct {
 	pickBuilder builder
 	resolver    resolver
@@ -53,6 +52,7 @@ type runtime struct {
 	unixSocketMaxMode os.FileMode
 }
 
+// runtimeFromConfig builds a runtime from Config, filling defaults and applying the TLS dialer.
 func runtimeFromConfig(cfg Config) (*runtime, error) {
 	rt := &runtime{
 		pickBuilder: cfg.Cluster.pickBuilder,
@@ -125,6 +125,7 @@ func runtimeFromConfig(cfg Config) (*runtime, error) {
 	return rt, nil
 }
 
+// timeoutOrDefault returns v, or def when v is 0, or 0 when v is TimeoutNone.
 func timeoutOrDefault(v, def time.Duration) time.Duration {
 	if v == 0 {
 		return def
@@ -135,6 +136,7 @@ func timeoutOrDefault(v, def time.Duration) time.Duration {
 	return v
 }
 
+// tlsConfigForDial clones cfg, requires TLS 1.2+, and fills ServerName from a TCP address when empty.
 func tlsConfigForDial(cfg *tls.Config, network, address string) *tls.Config {
 	c := cfg.Clone()
 	if c.MinVersion == 0 {
@@ -148,6 +150,7 @@ func tlsConfigForDial(cfg *tls.Config, network, address string) *tls.Config {
 	return c
 }
 
+// wrapTLSDial returns a dialer that TLS-wraps inner and completes the handshake.
 func wrapTLSDial(inner DialContextFunc, cfg *tls.Config) DialContextFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		raw, err := inner(ctx, network, address)
@@ -163,6 +166,7 @@ func wrapTLSDial(inner DialContextFunc, cfg *tls.Config) DialContextFunc {
 	}
 }
 
+// defaultRawDial returns a DialContextFunc that opens a raw socket with the given keep-alive.
 func defaultRawDial(keepAlive time.Duration) DialContextFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		d := &net.Dialer{KeepAlive: keepAlive}
@@ -170,6 +174,7 @@ func defaultRawDial(keepAlive time.Duration) DialContextFunc {
 	}
 }
 
+// applyTLSDialer wraps runtime.dialContext with TLS when Transport.TLS was set.
 func applyTLSDialer(rt *runtime) error {
 	if !rt.tlsSet {
 		return nil

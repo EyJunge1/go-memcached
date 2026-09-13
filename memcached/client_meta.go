@@ -2,16 +2,17 @@ package memcached
 
 import "errors"
 
-// MetaClient is the meta-protocol command surface. Obtain it via Client.Meta.
+// MetaClient is the mg/ms/md/mn/ma/me API. Get it from Client.Meta.
 type MetaClient struct {
 	c *Client
 }
 
-// Meta returns the meta-protocol handle. It is always available.
+// Meta returns the meta-protocol handle. No Config flag is required.
 func (c *Client) Meta() *MetaClient {
 	return &MetaClient{c: c}
 }
 
+// finishMeta returns a MetaResult from item, treating protocol status errors as success.
 func finishMeta(item *MetaItem, err error) (MetaResult, error) {
 	if err != nil {
 		if item != nil {

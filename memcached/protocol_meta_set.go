@@ -1,20 +1,21 @@
 package memcached
 
+// metaSetFlags is the encoded ms flag set.
 type metaSetFlags struct {
-	b      bool        // b: interpret key as base64 encoded binary value (see metaget)
-	c      bool        // c: return CAS value if successfully stored.
-	C      uint64      // C(token): compare CAS value when storing item
-	E      uint64      // E(token): use token as new CAS value (see meta get for detail)
-	F      uint32      // F(token): set client flags to token (32 bit unsigned numeric)
-	I      bool        // I: invalidate. set-to-invalid if supplied CAS is older than item's CAS
-	k      bool        // k: return key as a token
-	O      uint64      // O(token): opaque value, consumes a token and copies back with response
-	Otoken string      // string opaque (1–32 bytes), takes precedence over O
-	q      bool        // q: use noreply semantics for return codes
-	s      bool        // s: return the size of the stored item on success (ie; new size on append)
-	T      int64       // T(token): Time-To-Live for item, see "Expiration" above.
-	M      MetaSetMode // M(token): mode switch to change behavior to: add, replace, append, prepend, set(default)
-	N      int64       // N(token): if in append mode, auto vivify on miss with supplied TTL
+	b      bool        // key is Base64
+	c      bool        // echo CAS on store
+	C      uint64      // compare CAS
+	E      uint64      // replacement CAS
+	F      uint32      // client flags
+	I      bool        // invalidate if supplied CAS is older
+	k      bool        // echo key
+	O      uint64      // numeric opaque, echoed
+	Otoken string      // string opaque (1–32 bytes) wins over O
+	q      bool        // quiet: skip HD; still return EX/NS
+	s      bool        // echo stored size
+	T      int64       // item TTL
+	M      MetaSetMode // add/replace/append/prepend/set
+	N      int64       // append/prepend create-on-miss TTL
 
 	Cset      bool
 	Eset      bool
@@ -26,22 +27,23 @@ type metaSetFlags struct {
 	L         string
 }
 
-// MetaSetMode is the ms M token (add/replace/append/prepend/set).
+// MetaSetMode is the ms M token (add, replace, append, prepend, set).
 type MetaSetMode string
 
 const (
-	// MetaSetModeAdd means add the item only if it does not already exist.
+	// MetaSetModeAdd stores only when the key is missing.
 	MetaSetModeAdd MetaSetMode = "E"
-	// MetaSetModeReplace means replace the item only if it already exists.
+	// MetaSetModeReplace stores only when the key already exists.
 	MetaSetModeReplace MetaSetMode = "R"
-	// MetaSetModeAppend means append the data to the existing item.
+	// MetaSetModeAppend appends to an existing value.
 	MetaSetModeAppend MetaSetMode = "A"
-	// MetaSetModePrepend means prepend the data to the existing item.
+	// MetaSetModePrepend prepends to an existing value.
 	MetaSetModePrepend MetaSetMode = "P"
-	// MetaSetModeSet means set the item regardless of whether it already exists.
+	// MetaSetModeSet overwrites regardless of prior existence.
 	MetaSetModeSet MetaSetMode = "S"
 )
 
+// validMetaSetMode reports whether m is empty or a known ms mode.
 func validMetaSetMode(m MetaSetMode) bool {
 	switch m {
 	case "", MetaSetModeAdd, MetaSetModeReplace, MetaSetModeAppend, MetaSetModePrepend, MetaSetModeSet:
@@ -51,8 +53,7 @@ func validMetaSetMode(m MetaSetMode) bool {
 	}
 }
 
-// ms <key> <datalen> <flags>*\r\n
-// <data block>\r\n
+// buildMetaSetCommand encodes ms <key> <datalen> <flags>*\r\n plus the body.
 func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *response) {
 	if flags.b {
 		key = base64Encode(key)
