@@ -38,7 +38,7 @@ func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *respon
 // parseMetaItemDebug parses the response from memcached server. It could be:
 // success: ME foo exp=-1 la=2 cas=18 fetch=no cls=1 size=65\r\n
 // failed:  EN\r\n
-func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
+func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) error {
 	if len(lines) != 1 {
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
 	}
@@ -52,7 +52,7 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 		return hit.Err
 	}
 
-	parts := bytes.Split(trimCRLF(lines[0]), _SpaceBytes)
+	parts := bytes.Fields(trimCRLF(lines[0]))
 	if len(parts) < 1 {
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
 	}
@@ -74,7 +74,16 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 	}
 
 	if len(parts) > KeyIndex {
-		item.Key = append(item.Key[:0], parts[KeyIndex]...)
+		item.WireKey = append(item.WireKey[:0], parts[KeyIndex]...)
+		item.Key = item.WireKey
+		item.KeyBase64 = binaryKey
+		if binaryKey {
+			dec, derr := base64Decode(item.WireKey)
+			if derr != nil {
+				return fmt.Errorf("invalid me b key: %w", ErrMalformedResponse)
+			}
+			item.Key = dec
+		}
 	}
 	for i := KeyIndex + 1; i < len(parts); i++ {
 		kv := bytes.Split(parts[i], []byte("="))

@@ -73,6 +73,8 @@ func TestFlushAllAfterAndStatsArgs(t *testing.T) {
 
 	_, err = client.Stats(ctx, "cachedump")
 	isErrorIs(t, err, ErrInvalidArgument)
+	_, err = client.Stats(ctx, "detail", "on")
+	isErrorIs(t, err, ErrInvalidArgument)
 	_, err = client.Stats(ctx, "reset")
 	isErrorIs(t, err, ErrAdminNotEnabled)
 	_, err = client.Stats(ctx, "sizes")
@@ -141,4 +143,62 @@ func TestFlushAllStaggerWritesPerNodeDelay(t *testing.T) {
 	if _, ok := delays["1"]; !ok {
 		t.Fatalf("node 1 must send flush_all 1, got %v", delays)
 	}
+}
+
+func TestFlushAllOnHitsOneNode(t *testing.T) {
+	a := startFakeMemcached(t)
+	b := startFakeMemcached(t)
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.AllowFlushAll = true
+		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
+	})
+	ctx := context.Background()
+	a.mu.Lock()
+	a.items["keep-a"] = &fakeItem{value: []byte("1")}
+	a.mu.Unlock()
+	b.mu.Lock()
+	b.items["keep-b"] = &fakeItem{value: []byte("2")}
+	b.mu.Unlock()
+
+	sv := client.Servers()
+	noError(t, mustAdmin(t, client).On(sv[0]).FlushAll(ctx, FlushOpts{}))
+
+	empties := 0
+	a.mu.Lock()
+	if len(a.items) == 0 {
+		empties++
+	}
+	a.mu.Unlock()
+	b.mu.Lock()
+	if len(b.items) == 0 {
+		empties++
+	}
+	b.mu.Unlock()
+	equal(t, 1, empties)
+
+	noError(t, mustAdmin(t, client).All().FlushAll(ctx, FlushOpts{Exp: Rel(time.Second)}))
+}
+
+func TestFlushAllExpRejectsDelayAndStagger(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.AllowFlushAll = true
+	})
+	ctx := context.Background()
+	isErrorIs(t, mustAdmin(t, client).FlushAll(ctx, FlushOpts{Exp: Rel(time.Second), Delay: time.Second}), ErrInvalidArgument)
+	isErrorIs(t, mustAdmin(t, client).FlushAll(ctx, FlushOpts{Exp: ExptimeImmediate, Stagger: time.Second}), ErrInvalidArgument)
+}
+
+func TestFlushAllExpImmediate(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.AllowFlushAll = true
+	})
+	noError(t, mustAdmin(t, client).FlushAll(context.Background(), FlushOpts{Exp: ExptimeImmediate}))
+	srv.mu.Lock()
+	equal(t, "-1", srv.lastFlushDelay)
+	srv.mu.Unlock()
 }

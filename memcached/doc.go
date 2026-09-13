@@ -2,13 +2,13 @@
 //
 // Application commands:
 //   - set/add/replace/append/prepend/cas (NOT_STORED/EXISTS/NOT_FOUND via errors.Is; Pipeline for write-then-read)
-//   - StoreRequest.Quiet / MutateOpts.Quiet / FlushOpts.Quiet / AdminOpts.Quiet send noreply (send-ok only; conn discarded)
+//   - StoreRequest.Quiet / MutateOpts.Quiet (Delete/Touch) / IncrQuiet / DecrQuiet / FlushOpts.Quiet / AdminOpts.Quiet send noreply (send-ok only; conn discarded)
 //   - get / gets / gat / gats via Get + GetOpts; GetOne for a single-key miss
 //   - ms/mg/md/mn/ma/me, including proxy hints P/L and recache helpers
-//   - MetaNoop returns MetaResult (MN); MetaDebug sets Status (ME/EN)
-//   - delete, incr/decr, touch (noreply via MutateOpts.Quiet)
-//   - version, stats (free args; reset/sizes only via Admin)
-//   - flush_all via Admin().FlushAll (also requires Config.AllowFlushAll; Quiet sends noreply)
+//   - MetaNoop returns MetaResult (MN); MetaDebug sets Status (ME/EN) and decodes b keys
+//   - delete, incr/decr, touch (Delete/Touch noreply via MutateOpts.Quiet)
+//   - version, stats (free args; reset/sizes only via Admin; detail rejected — use Admin.StatsDetail)
+//   - flush_all via Admin().FlushAll / On / All (also requires Config.AllowFlushAll; Quiet sends noreply)
 //
 // Admin commands (verbosity, shutdown, slabs, lru*, watch, crawler dumps)
 // are available only through Client.Admin after Config.AllowAdmin.

@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"bytes"
+	"math"
 	"testing"
 	"time"
 )
@@ -43,6 +44,8 @@ func Test_UnixExp(t *testing.T) {
 	got, err := UnixExp(time.Unix(2592001, 0))
 	noError(t, err)
 	equal(t, Exptime(2592001), got)
+	_, err = UnixExp(time.Unix(int64(math.MaxInt32)+1, 0))
+	isErrorIs(t, err, ErrInvalidArgument)
 }
 
 func Test_expiryToken(t *testing.T) {
@@ -56,9 +59,10 @@ func Test_recacheToken(t *testing.T) {
 	isFalse(t, ok)
 	_, ok = recacheToken(-time.Second)
 	isFalse(t, ok)
-	_, ok = recacheToken(31 * 24 * time.Hour)
-	isFalse(t, ok)
-	tok, ok := recacheToken(5 * time.Second)
+	tok, ok := recacheToken(31 * 24 * time.Hour)
+	isTrue(t, ok)
+	equal(t, int64(2678400), tok)
+	tok, ok = recacheToken(5 * time.Second)
 	isTrue(t, ok)
 	equal(t, int64(5), tok)
 	tok, ok = recacheToken(500 * time.Millisecond)

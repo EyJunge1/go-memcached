@@ -2,18 +2,22 @@ package memcached
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
 // Exptime is the memcached wire expiration integer.
-// 0 never expires; negative values expire immediately; 1..2592000 are relative
-// seconds; values above 2592000 are Unix timestamps.
+// 0 never expires; 1..2592000 are relative seconds; values above 2592000 are
+// Unix timestamps (32-bit on the server). Negative values are a client
+// convention (wire -1) that expire immediately; they are not in protocol.txt.
+// flush_all delay 0 omits the token (immediate) and is not the same as item 0.
 type Exptime int64
 
 const (
 	// ExptimeNever means the item does not expire.
 	ExptimeNever Exptime = 0
-	// ExptimeImmediate expires the item at once (wire -1).
+	// ExptimeImmediate expires the item at once. This is a client convention
+	// that sends wire -1; protocol.txt does not define a negative token.
 	ExptimeImmediate Exptime = -1
 
 	maxRelativeExpirySecs int64 = 2592000
@@ -39,10 +43,14 @@ func Rel(d time.Duration) Exptime {
 
 // UnixExp returns t as a Unix-timestamp Exptime. Times at or before the
 // 30-day relative window are rejected so the server cannot treat them as TTL.
+// Values above math.MaxInt32 are rejected (protocol Unix expiry is 32-bit).
 func UnixExp(t time.Time) (Exptime, error) {
 	u := t.Unix()
 	if u <= maxRelativeExpirySecs {
 		return 0, fmt.Errorf("unix expiry must be > %d: %w", maxRelativeExpirySecs, ErrInvalidArgument)
+	}
+	if u > math.MaxInt32 {
+		return 0, fmt.Errorf("unix expiry exceeds 32-bit: %w", ErrInvalidArgument)
 	}
 	return Exptime(u), nil
 }
@@ -53,10 +61,10 @@ func expiryToken(e Exptime) int64 {
 }
 
 // recacheToken encodes a remaining-TTL window as relative seconds.
-// Zero omits the flag (ok=false). Negative values and windows above 30 days
-// are invalid (ok=false). Sub-second windows encode as 1.
+// This is not an item Exptime: there is no 30-day cap. Zero and negative
+// omit the flag (ok=false). Sub-second windows encode as 1.
 func recacheToken(d time.Duration) (int64, bool) {
-	if d <= 0 || d > maxRelativeExpiry {
+	if d <= 0 {
 		return 0, false
 	}
 	secs := int64(d / time.Second)

@@ -60,10 +60,11 @@ murmur3 is 32-bit. Rendezvous (HRW) is also not Ketama.
 Weights: `10.0.0.1:11211?weight=2` or `Server.Weight`.
 
 `Ping`, `VersionAll`, and `StatsAll` hit every node. `Version` and `Stats`
-hit one node. `Admin().FlushAll` hits every node. `SetServers` requires
+hit one node. `Admin().FlushAll` hits every node; `On(addr).FlushAll` hits
+one node; `All().FlushAll` is the explicit broadcast. `SetServers` requires
 `Config.AllowSetServers`. UDP clients cannot mix with TCP/Unix and cannot
-mutate. UDP allows Get/GetOne/gets, Version/Ping, and MetaGet without
-side-effect flags (`N`/`R`/`T`/`E`).
+mutate. UDP allows Get/GetOne/GetMulti/gets, Version/Ping, MetaGet without
+side-effect flags (`N`/`R`/`T`/`E`), MetaNoop, and MetaDebug.
 
 ### Security
 
@@ -75,7 +76,7 @@ Memcached text without TLS is a full data and admin plane.
 **Admin** (`watch`, `metadump`, `mgdump`, `shutdown`, slabs/LRU) can exfiltrate
 keys or take a node down. Enable only with `Config.AllowAdmin` and call
 `client.Admin()`. Node-local commands require `On(addr)`; `Shutdown` cannot
-run without `On`. `All()` is Verbosity, CacheMemLimit, and Stats only.
+run without `On`. `All()` is Verbosity, CacheMemLimit, Stats, and FlushAll.
 Watch and dump streams require a context deadline.
 
 **UDP** has no integrity; request IDs help but the path is spoofable.
@@ -147,11 +148,11 @@ The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode 
 
 Keys are `[]byte` (1–250 bytes, no whitespace or control characters). Meta commands with a binary-key flag skip the whitespace check; the Base64 form on the wire must still be ≤250 bytes. After a get, `Item.Key` is the **wire key**, including a configured namespace prefix.
 
-Expiration is `Exptime`: `0` never expires; negative values expire immediately; 1..2592000 are relative seconds; larger values are Unix timestamps. Use `Rel(d)` or `UnixExp(t)`. `flush_all` delay `0` means immediately (the delay token is omitted). Recache window `R` is remaining TTL seconds (`time.Duration`), not an item `Exptime`.
+Expiration is `Exptime`: `0` never expires; 1..2592000 are relative seconds; larger values are Unix timestamps (32-bit; `UnixExp` rejects values above `MaxInt32`). Negative values are a **client convention** (wire `-1`) that expire immediately; they are not in protocol.txt. Use `Rel(d)` or `UnixExp(t)`. `flush_all` delay `0` omits the token (immediate) and is not the same as item `0` (never). Recache window `R` is remaining TTL seconds (`time.Duration`), not an item `Exptime` and not capped at 30 days. `GetEarlyRecache(window<=0)` is `ErrInvalidArgument`; `MetaGet.Recache==0` omits `R`.
 
 `GetOne` maps a miss to `ErrNotFound`. Multi-`Get` and `GetMulti` omit missing keys and never return `ErrNotFound` for an empty result.
 
-`Get` and `GetMulti` split keys across cluster nodes and fetch in parallel. `GetOpts.CAS` selects `gets`/`gats`; `GetOpts.Touch` selects `gat`/`gats`. `Store`/`Add`/`Cas` return `ErrNotStored` / `ErrExists` / `ErrNotFound` via `errors.Is`. Text `noreply` (`StoreRequest.Quiet`, `MutateOpts.Quiet`, `FlushOpts.Quiet`, `AdminOpts.Quiet`) means send-ok only; the connection is discarded and wire errors are not observed. `Pipeline()` writes every text frame, then reads every reply (no text `noreply`). Quiet meta stays on `MetaPipeline` (`q` plus `mn`). Recache helpers: `GetOrVivify`, `GetEarlyRecache`, `Invalidate`. Meta structs accept proxy hints `P`/`L` (`mn` included). `Ping` checks every node. `SetServers` replaces the node list when `AllowSetServers` is set.
+`Get` and `GetMulti` split keys across cluster nodes and fetch in parallel. `GetOpts.CAS` selects `gets`/`gats`; `GetOpts.Touch` selects `gat`/`gats`. `Store`/`Add`/`Cas` return `ErrNotStored` / `ErrExists` / `ErrNotFound` via `errors.Is`. Text `noreply` (`StoreRequest.Quiet`, `MutateOpts.Quiet` on Delete/Touch, `IncrQuiet`/`DecrQuiet`, `FlushOpts.Quiet`, `AdminOpts.Quiet`) means send-ok only; the connection is discarded and wire errors are not observed. `Incr`/`Decr` reject `MutateOpts.Quiet`. `Pipeline()` writes every text frame, then reads every reply (no text `noreply`). Quiet meta stays on `MetaPipeline` (`q` plus `mn`). Recache helpers: `GetOrVivify`, `GetEarlyRecache`, `Invalidate`. Meta structs accept proxy hints `P`/`L` (`mn` included; a `MetaOpNoop` can put `P`/`L` on the pipeline barrier). `Ping` checks every node. `SetServers` replaces the node list when `AllowSetServers` is set.
 
 ### Support Commands
 
@@ -166,18 +167,18 @@ arbitrary raw command passthrough.
 | Get             | ✅ | `Get(ctx, GetOpts, keys...)` | Multi-key; miss omitted |
 | GetOne          | ✅ | `GetOne(ctx, key)` | Single key; miss → `ErrNotFound` |
 | GetMulti        | ✅ | `GetMulti(ctx, keys)` | Map with CAS; missing keys omitted |
-| Delete / Incr / Decr / Touch | ✅ | typed + `MutateOpts` | `Quiet` sends `noreply`; Incr/Decr Quiet return `(0, nil)` |
+| Delete / Incr / Decr / Touch | ✅ | typed + `MutateOpts` | Delete/Touch `Quiet` sends `noreply`; `IncrQuiet`/`DecrQuiet` for arith noreply |
 | Pipeline        | ✅ | `Pipeline().Set/Delete; Flush` | Write-then-read; TTL via `Item.Exp`; append/prepend force `0 0`; no text `noreply` |
-| Stats           | ✅ | `Stats(ctx, args...)` | Free tokens; `reset`/`sizes` only Admin |
+| Stats           | ✅ | `Stats(ctx, args...)` | Free tokens; `reset`/`sizes` only Admin; generic `Stats` rejects `detail` — use `Admin().StatsDetail` |
 | StatsAll / VersionAll | ✅ | cluster maps | Every node; partial errors joined |
-| Meta*           | ✅ | `MetaGet`/`MetaSet`/… structs | `MetaResult.Status` (HD/VA/EN/NF/NS/EX/MN); `me` via `MetaItemDebug.Status`; `P`/`L` including `mn` |
-| Recache         | ✅ | `GetOrVivify` / `GetEarlyRecache` / `Invalidate` | `mg N` / `mg R` (Duration ≤30d) / `md I T` |
-| MetaPipeline    | ✅ | mixed ops + auto-`O` + `mn` | Parallel per node; miss is empty slot |
+| Meta*           | ✅ | `MetaGet`/`MetaSet`/… structs | `MetaResult.Status` (HD/VA/EN/NF/NS/EX/MN); `me` via `MetaItemDebug` (`Key` decoded when `b`); `P`/`L` including `mn` |
+| Recache         | ✅ | `GetOrVivify` / `GetEarlyRecache` / `Invalidate` | `mg N` / `mg R` (Duration, no 30d cap) / `md I T` |
+| MetaPipeline    | ✅ | mixed ops + auto-`O` + `mn` | Parallel per node; Quiet-Miss is `EN` (mg) / `HD` (mutation); `MetaOpNoop` `P`/`L` on barrier |
 | Version / Ping  | ✅ | | `Version` one node; `Ping` all |
-| FlushAll        | ✅ | `Admin().FlushAll(FlushOpts)` | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger` as `time.Duration`; `Quiet` sends `noreply` |
-| Auth            | ✅ | `Config.Auth` | Token auth `-Y` on every new dial; leftover probe uses `__mc_auth` / `exptime=0` |
+| FlushAll        | ✅ | `Admin().FlushAll` / `On` / `All` | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Exp`/`Stagger`; `Quiet` sends `noreply` |
+| Auth            | ✅ | `Config.Auth` | Token auth `-Y` on every new dial; leftover probe uses a random `__mc_auth_*` key |
 | SetServers      | ✅ | requires `AllowSetServers` | Trust-anchor |
-| Admin()         | opt-in | `On(addr)` / `All()` | Shutdown only with `On` |
+| Admin()         | opt-in | `On(addr)` / `All()` | `watch`, dumps, slabs/lru, verbosity, shutdown, `cache_memlimit`, `StatsDetail`; Shutdown and node-local ops need `On` |
 
 ### Development Guide
 

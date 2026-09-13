@@ -35,11 +35,15 @@ const (
 	MetaArithmeticModeIncr metaArithmeticMode = "I"
 	// MetaArithmeticModeDecr means decrement the item. also alias for "-".
 	MetaArithmeticModeDecr metaArithmeticMode = "D"
+	// MetaArithmeticModeIncrPlus is the documented + alias for increment.
+	MetaArithmeticModeIncrPlus metaArithmeticMode = "+"
+	// MetaArithmeticModeDecrMinus is the documented - alias for decrement.
+	MetaArithmeticModeDecrMinus metaArithmeticMode = "-"
 )
 
 func validMetaArithmeticMode(m metaArithmeticMode) bool {
 	switch m {
-	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr, "+", "-":
+	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr, MetaArithmeticModeIncrPlus, MetaArithmeticModeDecrMinus:
 		return true
 	default:
 		return false
@@ -81,7 +85,7 @@ func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticF
 
 	var resp *response
 	if flags.q {
-		req.raw = appendMetaQuietBarrier(req.raw)
+		req.raw = appendMetaQuietBarrier(req.raw, MetaNoop{})
 		resp = buildQuietBarrierResponse()
 	} else {
 		resp = buildLimitedLineResponse(1)

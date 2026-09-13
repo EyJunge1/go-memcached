@@ -199,6 +199,40 @@ func (b *AdminBroadcast) CacheMemLimit(ctx context.Context, megabytes uint32, o 
 	return b.doAll(ctx, func() (*request, *response) { return buildCacheMemLimitCommand(megabytes, false) })
 }
 
+// StatsDetail runs stats detail on|off|dump on the bound node.
+// on/off return an empty map after OK. dump returns PREFIX name → counters.
+func (a *AdminClient) StatsDetail(ctx context.Context, mode string) (map[string]string, error) {
+	switch mode {
+	case "on", "off", "dump":
+	default:
+		return nil, fmt.Errorf("stats detail %q: %w", mode, ErrInvalidArgument)
+	}
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return nil, err
+	}
+	req, resp := buildStatsDetailCommand(mode)
+	defer releaseReqAndResp(req, resp)
+	var out map[string]string
+	if mode == "dump" {
+		resp.afterRecv = func(r *response) error {
+			var perr error
+			out, perr = parseStatsDetailDump(r.rawLines)
+			return perr
+		}
+	} else {
+		resp.afterRecv = parseAdminReply
+		out = map[string]string{}
+	}
+	if err := a.c.dispatchToAddr(ctx, addr, req, resp); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out, nil
+}
+
 // Stats returns STAT pairs from the bound node, including reset/sizes.
 func (a *AdminClient) Stats(ctx context.Context, args ...string) (map[string]string, error) {
 	addr, err := a.resolveTarget()

@@ -56,16 +56,16 @@ func TestMutateQuietSendsNoreply(t *testing.T) {
 	waitLastCmdContains(t, srv, "delete n noreply")
 
 	noError(t, storeOK(client.Set(ctx, []byte("n"), []byte("10"), 0, 0)))
-	got, err := client.Incr(ctx, []byte("n"), 3, MutateOpts{Quiet: true})
-	noError(t, err)
-	equal(t, uint64(0), got)
+	_, err := client.Incr(ctx, []byte("n"), 3, MutateOpts{Quiet: true})
+	isErrorIs(t, err, ErrInvalidArgument)
+	noError(t, client.IncrQuiet(ctx, []byte("n"), 3))
 	item, err := client.GetOne(ctx, []byte("n"))
 	noError(t, err)
 	equal(t, []byte("13"), item.Value)
 
-	got, err = client.Decr(ctx, []byte("n"), 1, MutateOpts{Quiet: true})
-	noError(t, err)
-	equal(t, uint64(0), got)
+	_, err = client.Decr(ctx, []byte("n"), 1, MutateOpts{Quiet: true})
+	isErrorIs(t, err, ErrInvalidArgument)
+	noError(t, client.DecrQuiet(ctx, []byte("n"), 1))
 
 	noError(t, client.Touch(ctx, []byte("n"), Rel(time.Second), MutateOpts{Quiet: true}))
 	waitLastCmdContains(t, srv, "touch n 1 noreply")
@@ -166,20 +166,37 @@ func TestMetaDebugStatus(t *testing.T) {
 	item, err = client.MetaDebug(ctx, []byte("k"), MetaDebug{})
 	noError(t, err)
 	equal(t, MetaStatusME, item.Status)
+
+	bin := []byte("bin-key")
+	noError(t, storeOK(client.Set(ctx, bin, []byte("v"), 0, 0)))
+	item, err = client.MetaDebug(ctx, bin, MetaDebug{BinaryKey: true})
+	noError(t, err)
+	equal(t, bin, item.Key)
+	isTrue(t, item.KeyBase64)
+	equal(t, base64Encode(bin), item.WireKey)
 }
 
 func TestGetEarlyRecacheWindow(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	_, _, err := client.GetEarlyRecache(ctx, []byte("k"), 31*24*time.Hour)
+	_, _, err := client.GetEarlyRecache(ctx, []byte("k"), 0)
+	isErrorIs(t, err, ErrInvalidArgument)
+	_, _, err = client.GetEarlyRecache(ctx, []byte("k"), -time.Second)
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
-	_, _, err = client.GetEarlyRecache(ctx, []byte("k"), 5*time.Second)
+	_, _, err = client.GetEarlyRecache(ctx, []byte("k"), 31*24*time.Hour)
 	noError(t, err)
 	srv.mu.Lock()
 	cmd := srv.lastCmd
+	srv.mu.Unlock()
+	contains(t, cmd, "R2678400")
+
+	_, _, err = client.GetEarlyRecache(ctx, []byte("k"), 5*time.Second)
+	noError(t, err)
+	srv.mu.Lock()
+	cmd = srv.lastCmd
 	srv.mu.Unlock()
 	contains(t, cmd, "R5")
 }

@@ -123,7 +123,7 @@ type MetaGet struct {
 	NewCAS    *uint64
 	Vivify    *Exptime
 	// Recache is the remaining-TTL window for R (seconds on the wire).
-	// Zero omits the flag. Values above 30 days are rejected.
+	// Zero omits the flag. This is not an item Exptime and has no 30-day cap.
 	Recache time.Duration
 	Touch   *Exptime
 	P       string // proxy hint (server ignores)

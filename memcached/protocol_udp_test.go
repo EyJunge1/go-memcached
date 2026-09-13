@@ -59,7 +59,7 @@ func Test_assembleUDPReassemblesAndDropsWrongID(t *testing.T) {
 			makeDgram(3, 0, 2, []byte("VALUE k 0 3\r\nabc\r\n")),
 		},
 	}
-	got, err := assembleUDP(cn, 3)
+	got, err := assembleUDP(cn, 3, udpFragmentCap(0))
 	noError(t, err)
 	equal(t, []byte("VALUE k 0 3\r\nabc\r\nEND\r\n"), got)
 }
@@ -111,7 +111,7 @@ func Test_assembleUDPAcceptsNineFragments(t *testing.T) {
 		datagrams = append(datagrams, makeDgram(3, i, total, p))
 	}
 	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: datagrams}
-	got, err := assembleUDP(cn, 3)
+	got, err := assembleUDP(cn, 3, udpFragmentCap(0))
 	noError(t, err)
 	equal(t, want, got)
 }
@@ -122,7 +122,7 @@ func Test_assembleUDPRejectsReserved(t *testing.T) {
 	binary.BigEndian.PutUint16(h[4:6], 1)
 	binary.BigEndian.PutUint16(h[6:8], 1)
 	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{h}}
-	_, err := assembleUDP(cn, 3)
+	_, err := assembleUDP(cn, 3, udpFragmentCap(0))
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 
@@ -138,7 +138,19 @@ func Test_assembleUDPRejectsFragmentConflict(t *testing.T) {
 		mockConn:  newMockConn(),
 		datagrams: [][]byte{makeDgram([]byte("A")), makeDgram([]byte("B"))},
 	}
-	_, err := assembleUDP(cn, 3)
+	_, err := assembleUDP(cn, 3, udpFragmentCap(0))
+	isErrorIs(t, err, ErrMalformedResponse)
+}
+
+func Test_udpFragmentCap(t *testing.T) {
+	equal(t, 2048, udpFragmentCap(0))
+	equal(t, 2048, udpFragmentCap(defaultMaxValueBytes))
+	greater(t, udpFragmentCap(4<<20), 2048)
+	h := make([]byte, 10)
+	binary.BigEndian.PutUint16(h[0:2], 3)
+	binary.BigEndian.PutUint16(h[4:6], 65)
+	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{h}}
+	_, err := assembleUDP(cn, 3, 64)
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 

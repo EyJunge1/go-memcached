@@ -26,6 +26,9 @@ func validFreeStatsArgs(args []string) error {
 		if strings.EqualFold(a, "cachedump") {
 			return fmt.Errorf("stats cachedump: %w", ErrInvalidArgument)
 		}
+		if strings.EqualFold(a, "detail") {
+			return fmt.Errorf("stats detail: use Admin().On().StatsDetail: %w", ErrInvalidArgument)
+		}
 		for _, r := range a {
 			if r <= ' ' || r == 0x7f || unicode.IsControl(r) {
 				return fmt.Errorf("stats arg %q: %w", a, ErrInvalidArgument)
@@ -52,7 +55,8 @@ func (c *Client) statsMapOnAddr(ctx context.Context, addr *Addr, args []string) 
 }
 
 // Stats returns STAT key/value pairs from one hashed node.
-// reset and sizes are only allowed on Admin().
+// reset and sizes are only allowed on Admin(). detail is rejected
+// (OK/PREFIX replies); use Admin().On().StatsDetail.
 func (c *Client) Stats(ctx context.Context, args ...string) (map[string]string, error) {
 	if err := validFreeStatsArgs(args); err != nil {
 		return nil, err

@@ -108,3 +108,14 @@ func Test_parseStatsMap(t *testing.T) {
 	noError(t, err)
 	equal(t, "2", got["items:1:number"])
 }
+
+func Test_parseStatsDetailDump(t *testing.T) {
+	got, err := parseStatsDetailDump([][]byte{
+		[]byte("PREFIX foo 1 2 3\r\n"),
+		[]byte("PREFIX bar 0 0 1\r\n"),
+		[]byte("END\r\n"),
+	})
+	noError(t, err)
+	equal(t, "1 2 3", got["foo"])
+	equal(t, "0 0 1", got["bar"])
+}

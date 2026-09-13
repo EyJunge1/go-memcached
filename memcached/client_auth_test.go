@@ -2,10 +2,39 @@ package memcached
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 )
+
+func Test_newAuthProbeKey(t *testing.T) {
+	a := string(newAuthProbeKey())
+	b := string(newAuthProbeKey())
+	isTrue(t, isAuthProbeKey(a))
+	isTrue(t, isAuthProbeKey(b))
+	if a == b {
+		t.Fatalf("expected unique probe keys, got %q", a)
+	}
+	isFalse(t, isAuthProbeKey("__mc_auth"))
+}
+
+func Test_newAuthProbeKeyFallback(t *testing.T) {
+	orig := readAuthRand
+	readAuthRand = func([]byte) (int, error) { return 0, errors.New("no rand") }
+	t.Cleanup(func() { readAuthRand = orig })
+
+	k1 := string(newAuthProbeKey())
+	k2 := string(newAuthProbeKey())
+	isTrue(t, isAuthProbeKey(k1))
+	isTrue(t, isAuthProbeKey(k2))
+	if k1 == authProbeKeyPrefix+"fallback" || k2 == authProbeKeyPrefix+"fallback" {
+		t.Fatal("constant fallback key")
+	}
+	if k1 == k2 {
+		t.Fatalf("fallback collision %q", k1)
+	}
+}
 
 func TestOpaqueTokenRejectedAndAuth(t *testing.T) {
 	srv := startFakeMemcachedAuth(t)
@@ -33,24 +62,33 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 	line := srv.lastSet
 	n := srv.authSets
 	srv.mu.Unlock()
-	contains(t, line, "set __mc_auth 0 0")
+	contains(t, line, "set __mc_auth_")
 	greater(t, n, 0)
 
 	plain := testClient(t, srv.Addr())
-	_, err = plain.GetOne(context.Background(), authProbeKey)
+	srv.mu.Lock()
+	for k := range srv.items {
+		if isAuthProbeKey(k) {
+			srv.mu.Unlock()
+			t.Fatalf("leftover probe key %q", k)
+		}
+	}
+	srv.mu.Unlock()
+	_, err = plain.GetOne(context.Background(), []byte("__mc_auth"))
 	isErrorIs(t, err, ErrNotFound)
 }
 
 func TestAuthLeavesUnrelatedProbeKey(t *testing.T) {
+	appKey := []byte("__mc_auth")
 	srv := startFakeMemcachedAuth(t)
 	srv.mu.Lock()
-	srv.items[string(authProbeKey)] = &fakeItem{value: []byte("app-data")}
+	srv.items[string(appKey)] = &fakeItem{value: []byte("app-data")}
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
 	noError(t, client.Ping(context.Background()))
-	item, err := client.GetOne(context.Background(), authProbeKey)
+	item, err := client.GetOne(context.Background(), appKey)
 	noError(t, err)
 	equal(t, []byte("app-data"), item.Value)
 }

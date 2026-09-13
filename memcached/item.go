@@ -100,7 +100,9 @@ func (m *MetaItem) String() string {
 //	size  = total size in bytes
 type MetaItemDebug struct {
 	Status         MetaStatus
-	Key            []byte // key
+	Key            []byte // decoded when the request used b
+	WireKey        []byte // ME key token as received (possibly Base64)
+	KeyBase64      bool   // set when the request used BinaryKey
 	TTL            int64  // exp, expiration time in seconds, -1 means never expire
 	LastAccessTime int64  // la, time in seconds since last access
 	CAS            uint64 // cas

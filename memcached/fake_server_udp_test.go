@@ -73,6 +73,19 @@ func (f *fakeUDP) serve() {
 			} else {
 				body = "END\r\n"
 			}
+		case "me":
+			if len(fields) < 2 {
+				body = "EN\r\n"
+				break
+			}
+			f.mu.Lock()
+			_, ok := f.items[fields[1]]
+			f.mu.Unlock()
+			if !ok {
+				body = "EN\r\n"
+				break
+			}
+			body = "ME " + fields[1] + " exp=-1 la=0 cas=1 fetch=no cls=1 size=1\r\n"
 		case "mg":
 			if len(fields) < 2 {
 				body = "EN\r\n"

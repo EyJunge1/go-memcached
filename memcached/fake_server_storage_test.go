@@ -52,10 +52,10 @@ func (f *fakeMemcached) store(fields []string, r *bufio.Reader, w *bufio.Writer)
 
 	f.mu.Lock()
 	f.lastSet = strings.Join(fields, " ")
-	if cmd == "set" && key == string(authProbeKey) {
+	if cmd == "set" && isAuthProbeKey(key) {
 		f.authSets++
 	}
-	if f.tokenAuth && cmd == "set" && key == string(authProbeKey) {
+	if f.tokenAuth && cmd == "set" && isAuthProbeKey(key) {
 		wantUser, wantPass := f.authUser, f.authPass
 		f.mu.Unlock()
 		user, pass, ok := strings.Cut(string(value), " ")

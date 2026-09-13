@@ -3,13 +3,36 @@ package memcached
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
 
-var authProbeKey = []byte("__mc_auth")
+const authProbeKeyPrefix = "__mc_auth_"
+
+var (
+	readAuthRand = crand.Read
+	authProbeSeq atomic.Uint64
+)
+
+func newAuthProbeKey() []byte {
+	var b [8]byte
+	if _, err := readAuthRand(b[:]); err == nil {
+		return []byte(authProbeKeyPrefix + hex.EncodeToString(b[:]))
+	}
+	// Unique even if the CSPRNG is unavailable: nano + monotonic counter.
+	n := authProbeSeq.Add(1)
+	t := uint64(nowFunc().UnixNano()) //nolint:gosec // uniqueness only
+	return []byte(fmt.Sprintf("%s%016x%08x", authProbeKeyPrefix, t, n))
+}
+
+func isAuthProbeKey(key string) bool {
+	return strings.HasPrefix(key, authProbeKeyPrefix)
+}
 
 func validAuthSecret(s string) error {
 	if strings.IndexFunc(s, func(r rune) bool {
@@ -20,14 +43,15 @@ func validAuthSecret(s string) error {
 	return nil
 }
 
-func buildAuthCommand(username, password string) (*request, *response) {
+func buildAuthCommand(username, password string, key []byte) (*request, *response) {
 	payload := []byte(username + " " + password)
-	return buildStorageCommand("set", authProbeKey, payload, 0, ExptimeNever, false)
+	return buildStorageCommand("set", key, payload, 0, ExptimeNever, false)
 }
 
 func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, writeTimeout, readTimeout time.Duration) error {
 	payload := []byte(user + " " + pass)
-	req, resp := buildAuthCommand(user, pass)
+	probeKey := newAuthProbeKey()
+	req, resp := buildAuthCommand(user, pass, probeKey)
 	defer releaseReqAndResp(req, resp)
 	resp.afterRecv = mapStorageReply
 	if err := req.send(ctx, cn, writeTimeout); err != nil {
@@ -42,7 +66,7 @@ func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, wri
 		}
 	}
 
-	greq, gresp := buildGetsCommand("get", authProbeKey)
+	greq, gresp := buildGetsCommand("get", probeKey)
 	defer releaseReqAndResp(greq, gresp)
 	var leftover []*Item
 	gresp.afterRecv = func(r *response) error {
@@ -72,7 +96,7 @@ func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, wri
 		return nil
 	}
 
-	dreq, dresp := buildDeleteCommand(authProbeKey, false)
+	dreq, dresp := buildDeleteCommand(probeKey, false)
 	defer releaseReqAndResp(dreq, dresp)
 	dresp.afterRecv = expectLine(_DeletedCRLFBytes)
 	_ = dreq.send(ctx, cn, writeTimeout)

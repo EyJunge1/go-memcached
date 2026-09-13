@@ -142,10 +142,15 @@ func buildQuietBarrierResponse() *response {
 	return resp
 }
 
-func appendMetaQuietBarrier(raw []byte) []byte {
-	out := make([]byte, 0, len(raw)+4)
+func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
+	b := newProtocolBuilder().AddString("mn")
+	defer b.release()
+	b.AddFlagString("P", f.P)
+	b.AddFlagString("L", f.L)
+	line := b.AddCRLF().build()
+	out := make([]byte, 0, len(raw)+len(line))
 	out = append(out, raw...)
-	out = append(out, []byte("mn\r\n")...)
+	out = append(out, line...)
 	return out
 }
 
@@ -181,7 +186,7 @@ func (resp *response) recv(ctx context.Context, rr memcachedConn, readTimeout ti
 
 	var reader protocolReader = rr
 	if resp.udpEnabled {
-		payload, err := assembleUDP(rr, resp.udpReqID)
+		payload, err := assembleUDP(rr, resp.udpReqID, udpFragmentCap(resp.maxValueBytes))
 		if err != nil {
 			return err
 		}

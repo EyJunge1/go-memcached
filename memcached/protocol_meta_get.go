@@ -82,7 +82,7 @@ func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) 
 
 	var resp *response
 	if flags.q {
-		req.raw = appendMetaQuietBarrier(req.raw)
+		req.raw = appendMetaQuietBarrier(req.raw, MetaNoop{})
 		resp = buildQuietBarrierResponse()
 	} else {
 		resp = buildLimitedLineResponse(1)

@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	udpHeaderSize   = 8
-	maxUDPDatagram  = 65507
-	maxUDPFragments = 64
+	udpHeaderSize          = 8
+	maxUDPDatagram         = 65507
+	minUDPFragments        = 2048
+	maxUDPFragments        = 65535
+	udpFragmentPayloadSize = 1392
 )
 
 var udpRequestID atomic.Uint32
@@ -53,7 +55,7 @@ func udpRequestAllowed(req *request) error {
 		return fmt.Errorf("udp: %w", ErrNotSupported)
 	}
 	switch string(req.cmd) {
-	case "get", "gets", "version":
+	case "get", "gets", "version", "me":
 		return nil
 	case "mg", "mn":
 		return udpMetaRawAllowed(req.raw)
@@ -69,7 +71,7 @@ func udpMetaRawAllowed(raw []byte) error {
 			continue
 		}
 		switch string(fields[0]) {
-		case "mn":
+		case "mn", "me":
 			continue
 		case "mg":
 			if mgLineHasSideEffect(fields) {
@@ -128,7 +130,24 @@ func (req *request) sendUDP(rr memcachedConn) (err error) {
 	return rr.Flush()
 }
 
-func assembleUDP(rr memcachedConn, wantID uint16) ([]byte, error) {
+func udpFragmentCap(maxValue int) int {
+	if maxValue <= 0 {
+		maxValue = defaultMaxValueBytes
+	}
+	n := (maxValue + udpFragmentPayloadSize - 1) / udpFragmentPayloadSize
+	if n < minUDPFragments {
+		n = minUDPFragments
+	}
+	if n > maxUDPFragments {
+		n = maxUDPFragments
+	}
+	return n
+}
+
+func assembleUDP(rr memcachedConn, wantID uint16, maxFragments int) ([]byte, error) {
+	if maxFragments <= 0 {
+		maxFragments = udpFragmentCap(0)
+	}
 	var slots [][]byte
 	var total int
 	got := 0
@@ -149,7 +168,7 @@ func assembleUDP(rr memcachedConn, wantID uint16) ([]byte, error) {
 		}
 		seq := int(binary.BigEndian.Uint16(dgram[2:4]))
 		tot := int(binary.BigEndian.Uint16(dgram[4:6]))
-		if tot <= 0 || tot > maxUDPFragments {
+		if tot <= 0 || tot > maxFragments {
 			return nil, fmt.Errorf("invalid udp total: %w", ErrMalformedResponse)
 		}
 		if slots == nil {

@@ -174,14 +174,30 @@ func parseWatchEvent(line string) WatchEvent {
 	raw := parseURIPairs(line)
 	ev := WatchEvent{Raw: raw}
 	if ts, ok := raw["ts"]; ok {
-		if n, err := strconv.ParseInt(ts, 10, 64); err == nil {
-			ev.TS = time.Unix(n, 0)
-		}
+		ev.TS = parseWatchTS(ts)
 	}
 	if gid, ok := raw["gid"]; ok {
 		ev.GID, _ = strconv.ParseUint(gid, 10, 64)
 	}
 	return ev
+}
+
+func parseWatchTS(ts string) time.Time {
+	secStr, frac, ok := strings.Cut(ts, ".")
+	sec, err := strconv.ParseInt(secStr, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	var nsec int64
+	if ok && frac != "" {
+		usec, uerr := strconv.ParseInt(frac, 10, 64)
+		// logger.c prints usec as an integer (typically 0–999999), not a
+		// fractional second. Out-of-range values stay at second precision.
+		if uerr == nil && usec >= 0 && usec <= 999999 {
+			nsec = usec * 1000
+		}
+	}
+	return time.Unix(sec, nsec)
 }
 
 func parseURIPairs(line string) map[string]string {

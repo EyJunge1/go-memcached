@@ -23,7 +23,7 @@ func (c *Client) MetaDebug(ctx context.Context, key []byte, f MetaDebug) (*MetaI
 		Key: key,
 	}
 	resp.afterRecv = func(r *response) error {
-		return parseMetaItemDebug(r.rawLines, item)
+		return parseMetaItemDebug(r.rawLines, item, mdFlags.b)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		if item.Status != MetaStatusUnknown {

@@ -58,6 +58,7 @@ type preparedMetaOp struct {
 	tok      string
 	getFlags *metaGetFlags
 	noop     bool
+	barrier  MetaNoop
 }
 
 func metaOpFlags(op MetaOp) (any, error) {
@@ -72,7 +73,7 @@ func metaOpFlags(op MetaOp) (any, error) {
 		case MetaOpArith:
 			return MetaArithmetic{}, nil
 		case MetaOpNoop:
-			return nil, nil
+			return MetaNoop{}, nil
 		default:
 			return nil, fmt.Errorf("meta op: %w", ErrInvalidArgument)
 		}
@@ -187,9 +188,17 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.Oset || ma.OtokenSet)
 	case MetaOpNoop:
 		// Trailing mn is the pipeline barrier; an extra mn here would end read2 early.
+		f, ok := flagsAny.(MetaNoop)
+		if flagsAny != nil && !ok {
+			return preparedMetaOp{}, fmt.Errorf("meta noop flags: %w", ErrInvalidArgument)
+		}
+		if err := f.validate(); err != nil {
+			return preparedMetaOp{}, err
+		}
 		prep.cmd = []byte("mn")
 		prep.line = nil
 		prep.noop = true
+		prep.barrier = f
 	default:
 		return preparedMetaOp{}, fmt.Errorf("meta op: %w", ErrInvalidArgument)
 	}
@@ -318,9 +327,13 @@ func (c *Client) MetaPipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 
 func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []preparedMetaOp, out []MetaResult) error {
 	var raw []byte
+	var barrier MetaNoop
 	byOpaque := make(map[string]int, len(group))
 	for _, p := range group {
 		raw = append(raw, p.line...)
+		if p.noop {
+			barrier = p.barrier
+		}
 		if p.tok == "" {
 			continue
 		}
@@ -329,7 +342,7 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []p
 		}
 		byOpaque[p.tok] = p.idx
 	}
-	raw = appendMetaQuietBarrier(raw)
+	raw = appendMetaQuietBarrier(raw, barrier)
 
 	req := buildRequest(group[0].cmd, group[0].key, raw)
 	resp := buildQuietBarrierResponse()

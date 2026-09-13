@@ -322,8 +322,20 @@ func (f *fakeMemcached) metaDebug(fields []string, w *bufio.Writer) {
 		return
 	}
 	key := fields[1]
+	binaryKey := false
+	for _, tok := range fields[2:] {
+		if tok == "b" {
+			binaryKey = true
+		}
+	}
+	lookup := key
+	if binaryKey {
+		if dec, err := base64Decode([]byte(key)); err == nil {
+			lookup = string(dec)
+		}
+	}
 	f.mu.Lock()
-	item, ok := f.items[key]
+	item, ok := f.items[lookup]
 	f.mu.Unlock()
 	if !ok {
 		_, _ = w.WriteString("EN\r\n")

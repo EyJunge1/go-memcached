@@ -175,12 +175,26 @@ func TestParseGeneralStats(t *testing.T) {
 
 func TestStatsDetailOnAllowedOnAppClient(t *testing.T) {
 	srv := startFakeMemcached(t)
-	client := testClient(t, srv.Addr())
-	got, err := client.Stats(context.Background(), "detail", "on")
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	_, err := client.Stats(context.Background(), "sizes_enable")
 	noError(t, err)
-	equal(t, "detail", got["arg"])
-	_, err = client.Stats(context.Background(), "sizes_enable")
+	_, err = client.Stats(context.Background(), "detail", "on")
+	isErrorIs(t, err, ErrInvalidArgument)
+
+	admin := mustAdminOn(t, client)
+	_, err = admin.Stats(context.Background(), "detail", "dump")
+	isErrorIs(t, err, ErrInvalidArgument)
+	got, err := admin.StatsDetail(context.Background(), "on")
 	noError(t, err)
+	equal(t, 0, len(got))
+	got, err = admin.StatsDetail(context.Background(), "off")
+	noError(t, err)
+	equal(t, 0, len(got))
+	got, err = admin.StatsDetail(context.Background(), "dump")
+	noError(t, err)
+	equal(t, "1 2 3", got["foo"])
+	_, err = admin.StatsDetail(context.Background(), "nope")
+	isErrorIs(t, err, ErrInvalidArgument)
 }
 
 func TestIdempotentReadCommandExcludesStats(t *testing.T) {
@@ -195,12 +209,18 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 	noError(t, storeOK(client.Set(ctx, []byte("a"), []byte("1"), 0, 0)))
 	got, err := client.MetaPipeline(ctx, []MetaOp{
 		{Op: MetaOpGet, Key: []byte("a"), Flags: MetaGet{Return: MetaGetReturn{Value: true}}},
-		{Op: MetaOpNoop},
+		{Op: MetaOpNoop, Flags: MetaNoop{P: "hint", L: "/path"}},
 	})
 	noError(t, err)
 	hasLen(t, got, 2)
 	equal(t, []byte("1"), got[0].Item.Value)
 	equal(t, MetaStatusMN, got[1].Status)
+	srv.mu.Lock()
+	cmd := srv.lastCmd
+	srv.mu.Unlock()
+	contains(t, cmd, "mn")
+	contains(t, cmd, "Phint")
+	contains(t, cmd, "L/path")
 	_, err = client.Version(ctx)
 	noError(t, err)
 }

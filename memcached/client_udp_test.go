@@ -48,6 +48,18 @@ func TestUDPMetaGetAndPingAllowed(t *testing.T) {
 	noError(t, client.Ping(context.Background()))
 }
 
+func TestUDPMetaDebugAllowed(t *testing.T) {
+	srv := startFakeMemcachedUDP(t)
+	srv.mu.Lock()
+	srv.items["k"] = []byte("v")
+	srv.mu.Unlock()
+	client := testClient(t, srv.Addr())
+	item, err := client.MetaDebug(context.Background(), []byte("k"), MetaDebug{})
+	noError(t, err)
+	equal(t, MetaStatusME, item.Status)
+	equal(t, []byte("k"), item.Key)
+}
+
 func TestUDPAdminBroadcastRejected(t *testing.T) {
 	srv := startFakeMemcachedUDP(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })

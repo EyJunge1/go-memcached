@@ -73,7 +73,7 @@ func (f *fakeMemcached) watch(_ []string, w *bufio.Writer, cn net.Conn) {
 	f.mu.Unlock()
 	_, _ = w.WriteString("OK\r\n")
 	_ = w.Flush()
-	_, _ = w.WriteString("ts=100 gid=1 key=foo\r\n")
+	_, _ = w.WriteString("ts=100.000789 gid=1 key=foo\r\n")
 	_ = w.Flush()
 	buf := make([]byte, 1)
 	_, _ = cn.Read(buf)
@@ -86,6 +86,22 @@ func (f *fakeMemcached) stats(fields []string, w *bufio.Writer) {
 	}
 	if arg == "reset" {
 		_, _ = w.WriteString("RESET\r\n")
+		_ = w.Flush()
+		return
+	}
+	if arg == "detail" {
+		sub := ""
+		if len(fields) > 2 {
+			sub = fields[2]
+		}
+		switch sub {
+		case "on", "off":
+			_, _ = w.WriteString("OK\r\n")
+		case "dump":
+			_, _ = w.WriteString("PREFIX foo 1 2 3\r\nEND\r\n")
+		default:
+			_, _ = w.WriteString("STAT arg detail\r\nEND\r\n")
+		}
 		_ = w.Flush()
 		return
 	}

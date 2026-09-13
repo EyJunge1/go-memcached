@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+func Test_parseWatchTS(t *testing.T) {
+	equal(t, time.Unix(100, 0), parseWatchTS("100"))
+	equal(t, time.Unix(100, 789*1000), parseWatchTS("100.000789"))
+	equal(t, time.Unix(1619123456, 123*1000), parseWatchTS("1619123456.123"))
+	equal(t, time.Unix(100, 0), parseWatchTS("100.1000000"))
+	equal(t, time.Time{}, parseWatchTS("not-a-ts"))
+}
+
 func TestAdminRequiresOptIn(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
@@ -89,6 +97,7 @@ func TestAdminWatchAndDumps(t *testing.T) {
 	ev := <-events
 	equal(t, "foo", ev.Raw["key"])
 	equal(t, uint64(1), ev.GID)
+	equal(t, time.Unix(100, 789*1000), ev.TS)
 	cancel()
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)

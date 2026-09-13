@@ -403,6 +403,46 @@ func buildStatsCommand(subCommand string) (*request, *response) {
 	return req, resp
 }
 
+func buildStatsDetailCommand(mode string) (*request, *response) {
+	b := newProtocolBuilder().AddString("stats").AddString("detail").AddString(mode)
+	defer b.release()
+	req := buildRequest([]byte("stats"), nil, b.AddCRLF().build())
+	if mode == "dump" {
+		return req, buildSpecEndLineResponse(_EndCRLFBytes, 64)
+	}
+	return req, buildLimitedLineResponse(1)
+}
+
+func parseStatsDetailDump(lines [][]byte) (map[string]string, error) {
+	out := make(map[string]string, len(lines))
+	for _, line := range lines {
+		trimmed := trimCRLF(line)
+		if bytes.Equal(trimmed, []byte("END")) {
+			continue
+		}
+		if bytes.HasPrefix(trimmed, []byte("PREFIX ")) {
+			rest := trimmed[len("PREFIX "):]
+			key, val, ok := bytes.Cut(rest, []byte(" "))
+			if !ok {
+				out[string(rest)] = ""
+				continue
+			}
+			out[string(key)] = string(val)
+			continue
+		}
+		hit := MapWireLine(line, WireStats)
+		if hit.Class == WireFault {
+			return nil, hit.Err
+		}
+		key, val, ok := cutStatLine(trimmed)
+		if !ok {
+			return nil, fmt.Errorf("%s: %w", trimmed, ErrMalformedResponse)
+		}
+		out[key] = val
+	}
+	return out, nil
+}
+
 func parseStatsMap(lines [][]byte) (map[string]string, error) {
 	out := make(map[string]string, len(lines))
 	for _, line := range lines {

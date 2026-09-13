@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -16,7 +17,11 @@ func (c *Client) GetOrVivify(ctx context.Context, key []byte, ttl Exptime) (Meta
 
 // GetEarlyRecache is mg with R. won is true when the server returned W.
 // window is remaining TTL in seconds on the wire (not an item Exptime).
+// window <= 0 is ErrInvalidArgument.
 func (c *Client) GetEarlyRecache(ctx context.Context, key []byte, window time.Duration) (MetaResult, bool, error) {
+	if window <= 0 {
+		return MetaResult{}, false, fmt.Errorf("recache window: %w", ErrInvalidArgument)
+	}
 	res, err := c.MetaGet(ctx, key, MetaGet{
 		Recache: window,
 		Return:  MetaGetReturn{Value: true},

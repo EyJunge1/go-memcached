@@ -6,27 +6,45 @@ import (
 )
 
 // Incr increments the key and returns the new value.
-// Quiet sends noreply and returns (0, nil) without inventing a sum.
+// MutateOpts.Quiet is rejected; use IncrQuiet for noreply.
 func (c *Client) Incr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
-	return c.arithmetic(ctx, "incr", key, delta, opts)
+	if opts.Quiet {
+		return 0, fmt.Errorf("incr Quiet: %w", ErrInvalidArgument)
+	}
+	return c.arithmetic(ctx, "incr", key, delta, false)
 }
 
 // Decr decrements the key and returns the new value.
-// Quiet sends noreply and returns (0, nil) without inventing a difference.
+// MutateOpts.Quiet is rejected; use DecrQuiet for noreply.
 func (c *Client) Decr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
-	return c.arithmetic(ctx, "decr", key, delta, opts)
+	if opts.Quiet {
+		return 0, fmt.Errorf("decr Quiet: %w", ErrInvalidArgument)
+	}
+	return c.arithmetic(ctx, "decr", key, delta, false)
 }
 
-func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
+// IncrQuiet sends incr with noreply and does not invent a sum.
+func (c *Client) IncrQuiet(ctx context.Context, key []byte, delta uint64) error {
+	_, err := c.arithmetic(ctx, "incr", key, delta, true)
+	return err
+}
+
+// DecrQuiet sends decr with noreply and does not invent a difference.
+func (c *Client) DecrQuiet(ctx context.Context, key []byte, delta uint64) error {
+	_, err := c.arithmetic(ctx, "decr", key, delta, true)
+	return err
+}
+
+func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64, quiet bool) (uint64, error) {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return 0, err
 	}
 
-	req, resp := buildArithmeticCommand(cmd, key, delta, opts.Quiet)
+	req, resp := buildArithmeticCommand(cmd, key, delta, quiet)
 	defer releaseReqAndResp(req, resp)
 
-	if opts.Quiet {
+	if quiet {
 		if err := c.dispatchQuiet(ctx, req, resp); err != nil {
 			return 0, err
 		}
