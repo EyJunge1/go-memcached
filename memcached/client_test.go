@@ -10,7 +10,11 @@ import (
 
 func setupLiveClient(t *testing.T) *Client {
 	t.Helper()
-	c, err := New("localhost:11211", WithDialTimeout(200*time.Millisecond))
+	cfg, err := testConfig("localhost:11211", func(cfg *Config) {
+		cfg.Transport.DialTimeout = 200 * time.Millisecond
+	})
+	noError(t, err)
+	c, err := New(cfg)
 	if err != nil {
 		t.Skip("no memcached on localhost:11211")
 	}
@@ -33,7 +37,7 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 	key := "Test_concurrent_dispatchRequest"
 	ctx := context.Background()
 
-	err := client.Set(ctx, key, []byte("Test_concurrent_dispatchRequest"), 0, 0)
+	_, err := client.Set(ctx, []byte(key), []byte("Test_concurrent_dispatchRequest"), 0, 0)
 	noError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -41,7 +45,7 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 	for range 10 {
 		wg.Go(func() {
 			for range limits {
-				req, resp := buildGetsCommand("get", key)
+				req, resp := buildGetsCommand("get", []byte(key))
 				err := client.dispatchRequest(ctx, req, resp)
 				noError(t, err)
 			}
@@ -56,17 +60,15 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 func Test_concurrent(t *testing.T) {
 	client := setupLiveClient(t)
 	// metaset options
-	msOptions := func(
-		cas uint64, clientFlags uint32,
-	) []MetaSetOption {
-		expiration := 2
-		return []MetaSetOption{
-			MetaSetFlagNewCAS(cas),
-			MetaSetFlagTTL(uint64(expiration)),
-			MetaSetFlagClientFlags(clientFlags),
-			MetaSetFlagReturnKey(),
-			MetaSetFlagReturnSize(),
-			MetaSetFlagReturnCAS(),
+	msOptions := func(cas uint64, clientFlags uint32) MetaSet {
+		exp := Exptime(2)
+		return MetaSet{
+			NewCAS:      &cas,
+			TTL:         &exp,
+			ClientFlags: clientFlags,
+			ReturnKey:   true,
+			ReturnSize:  true,
+			ReturnCAS:   true,
 		}
 	}
 
@@ -84,13 +86,13 @@ func Test_concurrent(t *testing.T) {
 
 		// update only
 		for counter <= 20 {
-			item, err := client.MetaSet(ctx, []byte(key), []byte(value), msOptions(cas, 0x1234)...)
+			item, err := client.MetaSet(ctx, []byte(key), []byte(value), msOptions(cas, 0x1234))
 			noError(t, err)
 			if err != nil {
 				return
 			}
 
-			cas = item.CAS
+			cas = item.Item.CAS
 			counter++
 
 			time.Sleep(20 * time.Millisecond)
@@ -102,7 +104,7 @@ func Test_concurrent(t *testing.T) {
 		counter := 0
 
 		for counter <= 200 {
-			item, err := client.Get(ctx, key)
+			item, err := client.GetOne(ctx, []byte(key))
 			if errors.Is(err, ErrNotFound) {
 				goto next
 			}
@@ -124,7 +126,7 @@ func Test_concurrent(t *testing.T) {
 		counter := 0
 
 		for counter <= 100 {
-			err := client.Touch(ctx, key, 3)
+			err := client.Touch(ctx, []byte(key), 3)
 			if !errors.Is(err, ErrNotFound) {
 				noError(t, err)
 			}
@@ -158,8 +160,8 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 	key1 := "Test_classicReadCommandsRoundTrip_1"
 	key2 := "Test_classicReadCommandsRoundTrip_2"
 
-	noError(t, client.Set(ctx, key1, value, flag, 0))
-	noError(t, client.Set(ctx, key2, value, flag, 0))
+	noError(t, storeOK(client.Set(ctx, []byte(key1), value, flag, 0)))
+	noError(t, storeOK(client.Set(ctx, []byte(key2), value, flag, 0)))
 
 	assertItem := func(item *Item) {
 		notNil(t, item)
@@ -167,11 +169,11 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 		equal(t, flag, item.Flags)
 	}
 
-	item, err := client.Get(ctx, key1)
+	item, err := client.GetOne(ctx, []byte(key1))
 	noError(t, err)
 	assertItem(item)
 
-	items, err := client.Gets(ctx, key1, key2)
+	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte(key1), []byte(key2))
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -179,11 +181,13 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 		notZero(t, item.CAS)
 	}
 
-	item, err = client.GetAndTouch(ctx, time.Second, key1)
+	exp := Rel(time.Second)
+	items, err = client.Get(ctx, GetOpts{Touch: &exp}, []byte(key1))
 	noError(t, err)
-	assertItem(item)
+	hasLen(t, items, 1)
+	assertItem(items[0])
 
-	items, err = client.GetAndTouches(ctx, time.Second, key1, key2)
+	items, err = client.Get(ctx, GetOpts{CAS: true, Touch: &exp}, []byte(key1), []byte(key2))
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -200,18 +204,24 @@ func Test_metaReadRoundTrip(t *testing.T) {
 	value := []byte("hello hello hello hello hello hello")
 	flag := uint32(0x2345)
 
-	stored, err := client.MetaSet(ctx, key, value, MetaSetFlagClientFlags(flag))
+	stored, err := client.MetaSet(ctx, key, value, MetaSet{ClientFlags: flag})
 	noError(t, err)
-	equal(t, flag, stored.Flags)
+	equal(t, flag, stored.Item.Flags)
 
-	item, err := client.MetaGet(ctx, key, MetaGetFlagReturnValue(), MetaGetFlagReturnClientFlags())
+	item, err := client.MetaGet(ctx, key, MetaGet{Return: MetaGetReturn{Value: true, Flags: true}})
 	noError(t, err)
-	equal(t, value, item.Value)
-	equal(t, flag, item.Flags)
+	equal(t, value, item.Item.Value)
+	equal(t, flag, item.Item.Flags)
 }
 
 func Test_udp(t *testing.T) {
-	c, err := New("udp://localhost:11211", WithDialTimeout(200*time.Millisecond))
+	udpCfg, err := testConfig("udp://localhost:11211", func(cfg *Config) {
+		cfg.Transport.DialTimeout = 200 * time.Millisecond
+	})
+	if err != nil {
+		t.Skip("no UDP memcached on localhost:11211")
+	}
+	c, err := New(udpCfg)
 	if err != nil {
 		t.Skip("no UDP memcached on localhost:11211")
 	}
@@ -226,7 +236,13 @@ func Test_udp(t *testing.T) {
 }
 
 func Test_unix(t *testing.T) {
-	c, err := New("unix:///tmp/memcached.sock", WithDialTimeout(200*time.Millisecond))
+	unixCfg, err := testConfig("unix:///tmp/memcached.sock", func(cfg *Config) {
+		cfg.Transport.DialTimeout = 200 * time.Millisecond
+	})
+	if err != nil {
+		t.Skip("no unix memcached at /tmp/memcached.sock")
+	}
+	c, err := New(unixCfg)
 	if err != nil {
 		t.Skip("no unix memcached at /tmp/memcached.sock")
 	}

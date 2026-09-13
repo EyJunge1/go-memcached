@@ -2,15 +2,76 @@ package memcached
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 )
 
+func testConfig(addr string, tweak ...func(*Config)) (Config, error) {
+	servers, err := ParseServers(addr)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := Config{Servers: servers}
+	for _, fn := range tweak {
+		fn(&cfg)
+	}
+	return cfg, nil
+}
+
+func mustAdmin(t *testing.T, c *Client) *AdminClient {
+	t.Helper()
+	admin, err := c.Admin()
+	noError(t, err)
+	return admin
+}
+
+func mustAdminOn(t *testing.T, c *Client) *AdminClient {
+	t.Helper()
+	sv := c.Servers()
+	if len(sv) == 0 {
+		t.Fatal("no servers")
+	}
+	return mustAdmin(t, c).On(sv[0])
+}
+
+func testClient(t *testing.T, addr string, tweak ...func(*Config)) *Client {
+	t.Helper()
+	cfg, err := testConfig(addr, tweak...)
+	noError(t, err)
+	c, err := New(cfg)
+	noError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
 func noError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func storeOK(res StoreResult, err error) error {
+	if err != nil {
+		return err
+	}
+	if res != StoreStored {
+		return fmt.Errorf("want StoreStored, got %v", res)
+	}
+	return nil
+}
+
+func expectStore(want StoreResult) func(StoreResult, error) error {
+	return func(res StoreResult, err error) error {
+		if err != nil {
+			return err
+		}
+		if res != want {
+			return fmt.Errorf("want %v, got %v", want, res)
+		}
+		return nil
 	}
 }
 

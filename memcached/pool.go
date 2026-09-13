@@ -130,47 +130,46 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 			continue
 		default:
 		}
-		break
-	}
 
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil, errPoolClosed
-	}
-	if int(p.numOpen.Load()) >= p.maxConns {
-		p.mu.Unlock()
-		select {
-		case cn := <-p.conns:
-			if p.connReusable(cn) {
-				return cn, nil
-			}
-			p.closeIdle(cn)
-			return p.get(ctx)
-		case <-p.closedCh:
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
 			return nil, errPoolClosed
-		case <-ctx.Done():
-			return nil, ctx.Err()
 		}
-	}
-	p.numOpen.Add(1)
-	p.mu.Unlock()
-
-	cn, err := p.createConn(ctx)
-	if err != nil {
-		p.numOpen.Add(-1)
-		return nil, err
-	}
-	cn.setConnPool(p)
-
-	p.mu.Lock()
-	if p.closed {
+		if int(p.numOpen.Load()) >= p.maxConns {
+			p.mu.Unlock()
+			select {
+			case cn := <-p.conns:
+				if p.connReusable(cn) {
+					return cn, nil
+				}
+				p.closeIdle(cn)
+				continue
+			case <-p.closedCh:
+				return nil, errPoolClosed
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		p.numOpen.Add(1)
 		p.mu.Unlock()
-		p.numOpen.Add(-1)
-		return nil, errors.Join(errPoolClosed, cn.Close())
+
+		cn, err := p.createConn(ctx)
+		if err != nil {
+			p.numOpen.Add(-1)
+			return nil, err
+		}
+		cn.setConnPool(p)
+
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			p.numOpen.Add(-1)
+			return nil, errors.Join(errPoolClosed, cn.Close())
+		}
+		p.mu.Unlock()
+		return cn, nil
 	}
-	p.mu.Unlock()
-	return cn, nil
 }
 
 func (p *connPool) discard(cn memcachedConn) error {
@@ -256,6 +255,7 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 			_ = cn.Close()
 			p.numOpen.Add(-1)
 		}
+		p.ensureMinIdle(context.Background())
 
 		if d < minInterval {
 			d = minInterval
@@ -332,18 +332,6 @@ func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, [
 		}
 
 		if shouldClose {
-			lifeExpired := checkLife && func() bool {
-				if !checkLife {
-					return false
-				}
-				_, ok := c.expired(expiredSince)
-				return ok
-			}()
-			if !lifeExpired && p.minIdle > 0 && len(kept) < p.minIdle {
-				shouldClose = false
-			}
-		}
-		if shouldClose {
 			closing = append(closing, c)
 		} else {
 			kept = append(kept, c)
@@ -386,6 +374,30 @@ func (p *connPool) stats() *connPoolStats {
 	return s
 }
 
+func (p *connPool) ensureMinIdle(ctx context.Context) {
+	if p.minIdle <= 0 {
+		return
+	}
+	for {
+		p.mu.Lock()
+		if p.closed || len(p.conns) >= p.minIdle || int(p.numOpen.Load()) >= p.maxConns {
+			p.mu.Unlock()
+			return
+		}
+		p.numOpen.Add(1)
+		p.mu.Unlock()
+		cn, err := p.createConn(ctx)
+		if err != nil {
+			p.numOpen.Add(-1)
+			return
+		}
+		cn.setConnPool(p)
+		if err := p.put(cn); err != nil {
+			return
+		}
+	}
+}
+
 func (p *connPool) warmup(ctx context.Context, n int) {
 	if n <= 0 {
 		return
@@ -402,8 +414,6 @@ func (p *connPool) warmup(ctx context.Context, n int) {
 		}
 		cn.setConnPool(p)
 		if err := p.put(cn); err != nil {
-			_ = cn.Close()
-			p.numOpen.Add(-1)
 			return
 		}
 	}

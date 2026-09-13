@@ -5,14 +5,14 @@ import (
 	"fmt"
 )
 
-// Incr increments the key. With no-reply it returns 0.
-func (c *Client) Incr(ctx context.Context, key string, delta uint64, opts ...ItemWriteOption) (uint64, error) {
-	key = c.nsString(key)
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
+// Incr increments the key and returns the new value.
+func (c *Client) Incr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
+	key = c.nsBytes(key)
+	if err := validateKeyAndValue(key, nil); err != nil {
 		return 0, err
 	}
 
-	req, resp := buildArithmeticCommand("incr", key, delta, c.resolveNoReply(opts))
+	req, resp := buildArithmeticCommand("incr", key, delta, false)
 	defer releaseReqAndResp(req, resp)
 
 	var value uint64
@@ -24,14 +24,14 @@ func (c *Client) Incr(ctx context.Context, key string, delta uint64, opts ...Ite
 	return value, nil
 }
 
-// Decr decrements the key. With no-reply it returns 0.
-func (c *Client) Decr(ctx context.Context, key string, delta uint64, opts ...ItemWriteOption) (uint64, error) {
-	key = c.nsString(key)
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
+// Decr decrements the key and returns the new value.
+func (c *Client) Decr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
+	key = c.nsBytes(key)
+	if err := validateKeyAndValue(key, nil); err != nil {
 		return 0, err
 	}
 
-	req, resp := buildArithmeticCommand("decr", key, delta, c.resolveNoReply(opts))
+	req, resp := buildArithmeticCommand("decr", key, delta, false)
 	defer releaseReqAndResp(req, resp)
 
 	var value uint64
@@ -45,9 +45,8 @@ func (c *Client) Decr(ctx context.Context, key string, delta uint64, opts ...Ite
 
 func parseArithmeticAfterRecv(dst *uint64) func(*response) error {
 	return func(resp *response) error {
-		if resp.endIndicator == endIndicatorNoReply || len(resp.rawLines) == 0 {
-			*dst = 0
-			return nil
+		if len(resp.rawLines) == 0 {
+			return fmt.Errorf("empty arithmetic reply: %w", ErrMalformedResponse)
 		}
 		value, err := parseArithmetic(resp.rawLines[0])
 		if err != nil {

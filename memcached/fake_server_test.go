@@ -3,28 +3,45 @@ package memcached
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"net"
-	"path/filepath"
+	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeItem struct {
-	value []byte
-	flags uint32
-	cas   uint64
+	value       []byte
+	flags       uint32
+	cas         uint64
+	stale       bool
+	recacheBusy bool
+	exptime     string
 }
 
 type fakeMemcached struct {
-	ln       net.Listener
-	mu       sync.Mutex
-	items    map[string]*fakeItem
-	cas      uint64
-	lastCmd  string
-	watchOK  bool
-	dumpSel  string
-	dumpBusy bool
+	ln             net.Listener
+	mu             sync.Mutex
+	items          map[string]*fakeItem
+	cas            uint64
+	lastCmd        string
+	lastSet        string
+	authSets       int
+	watchOK        bool
+	dumpSel        string
+	dumpBusy       bool
+	tokenAuth      bool
+	lastFlushDelay string
+	dumpSendOK     bool
+}
+
+func startFakeMemcachedAuth(t *testing.T) *fakeMemcached {
+	t.Helper()
+	f := startFakeMemcached(t)
+	f.tokenAuth = true
+	return f
 }
 
 func startFakeMemcached(t *testing.T) *fakeMemcached {
@@ -38,9 +55,14 @@ func startFakeMemcached(t *testing.T) *fakeMemcached {
 
 func startFakeMemcachedUnix(t *testing.T) (*fakeMemcached, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "memcached.sock")
+	// macOS sun_path is 104 bytes; t.TempDir() plus the test name overflows.
+	path := os.TempDir() + "/" + fmt.Sprintf("g%x.sock", time.Now().UnixNano())
+	t.Cleanup(func() { _ = os.Remove(path) })
 	ln, err := net.Listen("unix", path)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o770); err != nil {
 		t.Fatal(err)
 	}
 	return serveFake(t, ln), path
@@ -92,7 +114,12 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			_, _ = w.WriteString("VERSION fake-1.0\r\n")
 			_ = w.Flush()
 		case "flush_all":
+			delay := ""
+			if len(fields) > 1 && fields[1] != "noreply" {
+				delay = fields[1]
+			}
 			f.mu.Lock()
+			f.lastFlushDelay = delay
 			f.items = make(map[string]*fakeItem)
 			f.mu.Unlock()
 			_, _ = w.WriteString("OK\r\n")
@@ -114,6 +141,10 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			}
 		case "mg":
 			f.metaGet(fields, w)
+		case "md":
+			f.metaDelete(fields, w)
+		case "me":
+			f.metaDebug(fields, w)
 		case "stats":
 			f.stats(fields, w)
 		case "verbosity", "cache_memlimit":
@@ -135,12 +166,21 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			return
 		case "get", "gets":
 			f.retrieve(fields[1:], fields[0] == "gets", w)
+		case "touch":
+			f.touch(fields, w)
 		case "gat", "gats":
 			if len(fields) < 3 {
 				_, _ = w.WriteString("ERROR\r\n")
 				_ = w.Flush()
 				continue
 			}
+			f.mu.Lock()
+			for _, key := range fields[2:] {
+				if item, ok := f.items[key]; ok {
+					item.exptime = fields[1]
+				}
+			}
+			f.mu.Unlock()
 			f.retrieve(fields[2:], fields[0] == "gats", w)
 		default:
 			_, _ = w.WriteString("ERROR\r\n")
@@ -153,7 +193,7 @@ type prefixPicker struct {
 	addrs []*Addr
 }
 
-func (p prefixPicker) Pick(_ []*Addr, _, key []byte) (*Addr, error) {
+func (p prefixPicker) Pick(_ []*Addr, key []byte) (*Addr, error) {
 	if len(p.addrs) == 0 {
 		return nil, ErrInvalidAddress
 	}
@@ -165,7 +205,7 @@ func (p prefixPicker) Pick(_ []*Addr, _, key []byte) (*Addr, error) {
 
 type firstAddrPicker struct{}
 
-func (firstAddrPicker) Pick(addrs []*Addr, _, _ []byte) (*Addr, error) {
+func (firstAddrPicker) Pick(addrs []*Addr, _ []byte) (*Addr, error) {
 	if len(addrs) == 0 {
 		return nil, ErrInvalidAddress
 	}

@@ -4,19 +4,22 @@ import "strconv"
 
 // Item represents a key-value pair to be got or stored.
 type Item struct {
-	Key   string
+	Key   []byte
 	Value []byte
 
 	// Flags is the client flags stored with the item.
 	Flags uint32
 	// CAS is a unique value that is used to check-and-set operation.
-	// It ONLY returns when you use `Gets` command.
+	// It is set when GetOpts.CAS is true (gets/gats).
 	CAS uint64
+	// Exp is the expiration used by Pipeline.Set/Add/Replace/Cas.
+	// Retrieval leaves it 0.
+	Exp Exptime
 }
 
 func (i *Item) String() string {
 	return "Item{" +
-		"Key:" + i.Key +
+		"Key:" + string(i.Key) +
 		" Value:" + string(i.Value) +
 		" Flags:" + strconv.FormatUint(uint64(i.Flags), 10) +
 		" CAS:" + strconv.FormatUint(i.CAS, 10) +
@@ -30,28 +33,26 @@ type MetaItem struct {
 
 	/* Meta */
 	// CAS is a unique value that is used to check-and-set operation.
-	// use MetaGetFlagReturnCAS() or MetaSetFlagReturnCAS() to get this value.
+	// Request it with MetaGet.Return.CAS or MetaSet.ReturnCAS.
 	CAS uint64
 	// Flags is the client flags stored with the item when a value is returned.
-	// use MetaGetFlagReturnClientFlags() to request it from the server.
+	// Request it with MetaGet.Return.Flags.
 	Flags uint32
 	// TTL is the time-to-live of the item. -1 means never expire.
-	// use MetaGetFlagReturnTTL() to get this value.
+	// Request it with MetaGet.Return.TTL.
 	TTL int64
 	// LastAccessedTime is the time since item was last accessed in seconds.
-	// use MetaGetFlagReturnLastAccessedTime() to get this value.
+	// Request it with MetaGet.Return.LastAccess.
 	LastAccessedTime int64
 	// Size is the size of the stored item on success.
-	// use MetaGetFlagReturnSize() or MetaSetFlagReturnSize() to get this value.
+	// Request it with MetaGet.Return.Size or MetaSet.ReturnSize.
 	Size uint64
 	// Opaque is the opaque value when the token is decimal.
-	// use MetaGetFlagOpaque(token) to get this value.
 	Opaque uint64
 	// OpaqueToken is the raw opaque token (up to 32 bytes).
-	// use MetaGetFlagOpaqueToken(token) to request a string token.
 	OpaqueToken string
-	// HitBefore is the flag to return whether item has been hit before as a 0 or 1.
-	// use MetaGetFlagReturnHitBefore() to get this value.
+	// HitBefore is whether the item has been hit before.
+	// Request it with MetaGet.Return.Hit.
 	HitBefore bool
 	// Won is set when the server returned recache flag W.
 	Won bool
@@ -59,10 +60,15 @@ type MetaItem struct {
 	Stale bool
 	// RecacheBusy is set when the server returned winning-already-sent flag Z.
 	RecacheBusy bool
-	// CASMatched is true when MetaGetFlagCheckCAS was used with a value
-	// request (v) and the server returned HD (CAS still matches).
+	// CASMatched is true when MetaGet.CheckCAS was used with a value
+	// request and the server returned HD (CAS still matches).
 	CASMatched bool
-	gotHD      bool
+	// WireKey is the k token as received (possibly Base64).
+	WireKey []byte
+	// KeyBase64 is set when the server echoed response flag b.
+	KeyBase64 bool
+	Status    MetaStatus
+	gotHD     bool
 }
 
 func (m *MetaItem) String() string {
@@ -100,4 +106,7 @@ type MetaItemDebug struct {
 	HitBefore      bool   // fetch
 	SlabClassID    uint64 // cls
 	Size           uint64 // size
+	// Fields holds unknown me key=value tokens. The six known keys stay
+	// on the typed fields above and are not copied here.
+	Fields map[string]string
 }

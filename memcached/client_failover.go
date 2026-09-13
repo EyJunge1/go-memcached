@@ -18,7 +18,7 @@ func isRetryable(err error) bool {
 }
 
 func (c *Client) liveAddrs(addrs []*Addr) []*Addr {
-	if !c.options.failover.EjectFromHash || c.options.failover.FailureLimit <= 0 {
+	if !c.options.failover.Eject || c.options.failover.FailureLimit <= 0 {
 		return addrs
 	}
 	live := make([]*Addr, 0, len(addrs))
@@ -43,6 +43,20 @@ func (c *Client) isDead(addr *Addr) bool {
 	return ok && nowFunc().Before(until)
 }
 
+// deadUntilRevived is used when RetryAfter and DeadAfter are both 0:
+// the node stays ejected until noteSuccess.
+var deadUntilRevived = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func quarantineDuration(fo Failover, failures int) time.Duration {
+	if failures > fo.FailureLimit && fo.DeadAfter > 0 {
+		return fo.DeadAfter
+	}
+	if fo.RetryAfter > 0 {
+		return fo.RetryAfter
+	}
+	return fo.DeadAfter
+}
+
 func (c *Client) noteFailure(addr *Addr) {
 	if addr == nil || c.options.failover.FailureLimit <= 0 {
 		return
@@ -52,7 +66,11 @@ func (c *Client) noteFailure(addr *Addr) {
 	id := addr.id()
 	c.failCount[id]++
 	if c.failCount[id] >= c.options.failover.FailureLimit {
-		c.deadUntil[id] = nowFunc().Add(c.options.failover.RetryTimeout)
+		if dur := quarantineDuration(c.options.failover, c.failCount[id]); dur > 0 {
+			c.deadUntil[id] = nowFunc().Add(dur)
+		} else {
+			c.deadUntil[id] = deadUntilRevived
+		}
 	}
 }
 
@@ -67,15 +85,13 @@ func (c *Client) noteSuccess(addr *Addr) {
 	delete(c.deadUntil, id)
 }
 
-// DeadServers returns address IDs currently in failover quarantine.
-func (c *Client) DeadServers() []string {
-	c.healthMu.Lock()
-	defer c.healthMu.Unlock()
-	now := nowFunc()
-	var out []string
-	for id, until := range c.deadUntil {
-		if now.Before(until) {
-			out = append(out, id)
+// DeadServers returns nodes currently in failover quarantine.
+func (c *Client) DeadServers() []Server {
+	addrs, _ := c.snapshotCluster()
+	var out []Server
+	for _, a := range addrs {
+		if c.isDead(a) {
+			out = append(out, addrToServer(a))
 		}
 	}
 	return out
@@ -93,9 +109,18 @@ func (c *Client) startResolverRefresh() {
 			select {
 			case <-t.C:
 				c.mu.RLock()
-				raw := c.addrString
+				spec := c.resolveSpec
 				c.mu.RUnlock()
-				_ = c.SetServers(raw)
+				addrs, err := c.options.resolver.Resolve(spec)
+				if err != nil {
+					c.setResolverErr(err)
+					continue
+				}
+				if err = c.applyServers(addrsToServers(addrs), false); err != nil {
+					c.setResolverErr(err)
+					continue
+				}
+				c.setResolverErr(nil)
 			case <-c.refreshStop:
 				return
 			}

@@ -6,13 +6,10 @@ import (
 )
 
 // MetaDebug returns debug metadata for a key.
-func (c *Client) MetaDebug(ctx context.Context, key []byte, options ...MetaDebugOption) (*MetaItemDebug, error) {
-	mdFlags := &metaDebugFlags{}
-	for _, applyFn := range options {
-		applyFn(mdFlags)
-	}
+func (c *Client) MetaDebug(ctx context.Context, key []byte, f MetaDebug) (*MetaItemDebug, error) {
+	mdFlags := f.toFlags()
 	key = c.nsBytes(key)
-	if err := validateKeyAndValueFlags(key, nil, mdFlags.b); err != nil {
+	if err := c.checkKeyValueFlags(key, nil, mdFlags.b); err != nil {
 		return nil, err
 	}
 

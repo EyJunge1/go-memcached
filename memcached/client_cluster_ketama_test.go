@@ -125,7 +125,7 @@ func Test_ketamaPick_goldenUnweightedThreeNodes(t *testing.T) {
 		"ns:key":      "10.0.0.1:11211",
 	}
 	for key, want := range fixtures {
-		got, err := picker.Pick(addrs, nil, []byte(key))
+		got, err := picker.Pick(addrs, []byte(key))
 		noError(t, err)
 		equal(t, want, got.Address)
 	}
@@ -151,7 +151,7 @@ func Test_ketamaPick_goldenWeightedTwoNodes(t *testing.T) {
 		"ns:key":      "10.0.0.1:11211",
 	}
 	for key, want := range fixtures {
-		got, err := picker.Pick(addrs, nil, []byte(key))
+		got, err := picker.Pick(addrs, []byte(key))
 		noError(t, err)
 		equal(t, want, got.Address)
 	}
@@ -169,7 +169,7 @@ func Test_ketamaPick_goldenMixedPorts(t *testing.T) {
 		"session:abc": "10.0.0.2:11212",
 	}
 	for key, want := range fixtures {
-		got, err := picker.Pick(addrs, nil, []byte(key))
+		got, err := picker.Pick(addrs, []byte(key))
 		noError(t, err)
 		equal(t, want, got.Address)
 	}
@@ -236,9 +236,9 @@ func Test_ketamaEject_onlyDeadNodeKeysMove(t *testing.T) {
 	moved, stayed := 0, 0
 	for i := 0; i < 200; i++ {
 		key := []byte("k" + strconv.Itoa(i))
-		before, err := picker.Pick(full, nil, key)
+		before, err := picker.Pick(full, key)
 		noError(t, err)
-		after, err := picker.Pick(live, nil, key)
+		after, err := picker.Pick(live, key)
 		noError(t, err)
 		if before.Address == "10.0.0.2:11211" {
 			moved++

@@ -96,13 +96,51 @@ func (f *fakeMemcached) metaGet(fields []string, w *bufio.Writer) {
 		_ = w.Flush()
 		return
 	}
+	if fields[1] == "cerr" {
+		_, _ = w.WriteString("CLIENT_ERROR bad meta\r\n")
+		_ = w.Flush()
+		return
+	}
 	quiet, wantValue, returnCAS, cas, casSet, _, opaque := parseFakeMetaFlags(fields[2:])
+	returnKey, binaryKey, vivify, recache := false, false, false, false
+	for _, tok := range fields[2:] {
+		switch {
+		case tok == "k":
+			returnKey = true
+		case tok == "b":
+			binaryKey = true
+		case len(tok) > 0 && tok[0] == 'N':
+			vivify = true
+		case len(tok) > 0 && tok[0] == 'R':
+			recache = true
+		}
+	}
 	f.mu.Lock()
 	item, ok := f.items[fields[1]]
+	if !ok && vivify {
+		f.cas++
+		item = &fakeItem{cas: f.cas}
+		f.items[fields[1]] = item
+		ok = true
+		item.recacheBusy = true
+		f.mu.Unlock()
+		suffix := recacheSuffix(opaque, returnKey, binaryKey, fields[1], true, false, false)
+		if !quiet {
+			_, _ = w.WriteString("HD" + suffix + "\r\n")
+			_ = w.Flush()
+		}
+		return
+	}
 	f.mu.Unlock()
 	suffix := ""
 	if opaque != "" {
 		suffix = " O" + opaque
+	}
+	if returnKey {
+		suffix += " k" + fields[1]
+	}
+	if binaryKey {
+		suffix += " b"
 	}
 	if ok && returnCAS {
 		suffix += " c" + strconv.FormatUint(item.cas, 10)
@@ -114,6 +152,18 @@ func (f *fakeMemcached) metaGet(fields []string, w *bufio.Writer) {
 		}
 		return
 	}
+	won, stale, busy := false, item.stale, false
+	if recache {
+		f.mu.Lock()
+		if item.recacheBusy {
+			busy = true
+		} else {
+			won = true
+			item.recacheBusy = true
+		}
+		f.mu.Unlock()
+	}
+	suffix += recacheExtra(won, stale, busy)
 	if casSet && item.cas == cas {
 		if !quiet {
 			_, _ = w.WriteString("HD" + suffix + "\r\n")
@@ -132,4 +182,89 @@ func (f *fakeMemcached) metaGet(fields []string, w *bufio.Writer) {
 		_, _ = w.WriteString("HD" + suffix + "\r\n")
 		_ = w.Flush()
 	}
+}
+
+func recacheSuffix(opaque string, returnKey, binaryKey bool, key string, won, stale, busy bool) string {
+	s := ""
+	if opaque != "" {
+		s = " O" + opaque
+	}
+	if returnKey {
+		s += " k" + key
+	}
+	if binaryKey {
+		s += " b"
+	}
+	return s + recacheExtra(won, stale, busy)
+}
+
+func recacheExtra(won, stale, busy bool) string {
+	s := ""
+	if won {
+		s += " W"
+	}
+	if stale {
+		s += " X"
+	}
+	if busy {
+		s += " Z"
+	}
+	return s
+}
+
+func (f *fakeMemcached) metaDelete(fields []string, w *bufio.Writer) {
+	if len(fields) < 2 {
+		_, _ = w.WriteString("CLIENT_ERROR bad command line\r\n")
+		_ = w.Flush()
+		return
+	}
+	quiet, _, _, _, _, _, _ := parseFakeMetaFlags(fields[2:])
+	invalidate := false
+	for _, tok := range fields[2:] {
+		if tok == "I" {
+			invalidate = true
+		}
+	}
+	key := fields[1]
+	f.mu.Lock()
+	item, ok := f.items[key]
+	if !ok {
+		f.mu.Unlock()
+		if !quiet {
+			_, _ = w.WriteString("NF\r\n")
+			_ = w.Flush()
+		}
+		return
+	}
+	if invalidate {
+		item.stale = true
+		f.cas++
+		item.cas = f.cas
+	} else {
+		delete(f.items, key)
+	}
+	f.mu.Unlock()
+	if !quiet {
+		_, _ = w.WriteString("HD\r\n")
+		_ = w.Flush()
+	}
+}
+
+func (f *fakeMemcached) metaDebug(fields []string, w *bufio.Writer) {
+	if len(fields) < 2 {
+		_, _ = w.WriteString("CLIENT_ERROR bad command line\r\n")
+		_ = w.Flush()
+		return
+	}
+	key := fields[1]
+	f.mu.Lock()
+	item, ok := f.items[key]
+	f.mu.Unlock()
+	if !ok {
+		_, _ = w.WriteString("EN\r\n")
+		_ = w.Flush()
+		return
+	}
+	_, _ = fmt.Fprintf(w, "ME %s exp=-1 la=0 cas=%d fetch=no cls=1 size=%d extra=yes\r\n", key, item.cas, len(item.value))
+	_ = w.Flush()
 }

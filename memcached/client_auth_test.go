@@ -2,25 +2,124 @@ package memcached
 
 import (
 	"context"
+	"net"
+	"sync/atomic"
 	"testing"
 )
 
 func TestOpaqueTokenRejectedAndAuth(t *testing.T) {
-	srv := startFakeMemcached(t)
-	client, err := New(srv.Addr(), WithAuth("u", "p"))
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
+	srv := startFakeMemcachedAuth(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Auth = &Auth{User: "u", Pass: "p"}
+	})
 
-	_, err = client.MetaGet(context.Background(), []byte("k"), MetaGetFlagOpaqueToken("bad token"))
+	_, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
 
-	plain, err := New(srv.Addr())
-	noError(t, err)
-	t.Cleanup(func() { _ = plain.Close() })
-	isErrorIs(t, plain.Authenticate(context.Background(), "u\r\n", "p"), ErrInvalidArgument)
-
-	noError(t, client.Set(context.Background(), "k", []byte("v"), 0, 0, NoReply()))
-	item, err := client.Get(context.Background(), "k")
+	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	item, err := client.GetOne(context.Background(), []byte("k"))
 	noError(t, err)
 	equal(t, []byte("v"), item.Value)
+}
+
+func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Auth = &Auth{User: "u", Pass: "p"}
+	})
+	err := client.Ping(context.Background())
+	isErrorIs(t, err, ErrInvalidArgument)
+	srv.mu.Lock()
+	line := srv.lastSet
+	n := srv.authSets
+	srv.mu.Unlock()
+	contains(t, line, "set _ 0 -1")
+	greater(t, n, 0)
+
+	plain := testClient(t, srv.Addr())
+	_, err = plain.GetOne(context.Background(), []byte("_"))
+	isErrorIs(t, err, ErrNotFound)
+}
+
+func TestAuthHitsEveryNode(t *testing.T) {
+	a := startFakeMemcachedAuth(t)
+	b := startFakeMemcachedAuth(t)
+	var dials atomic.Int32
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.Auth = &Auth{User: "u", Pass: "p"}
+		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
+		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			dials.Add(1)
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}
+	})
+	noError(t, client.Ping(context.Background()))
+	equal(t, int32(2), dials.Load())
+	a.mu.Lock()
+	aSets := a.authSets
+	a.mu.Unlock()
+	b.mu.Lock()
+	bSets := b.authSets
+	b.mu.Unlock()
+	equal(t, 1, aSets)
+	equal(t, 1, bSets)
+}
+
+func TestAuthRejectsWhitespaceUser(t *testing.T) {
+	cfg, err := testConfig("127.0.0.1:11211")
+	noError(t, err)
+	cfg.Auth = &Auth{User: "u p", Pass: "p"}
+	_, err = New(cfg)
+	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestNewRejectsAuthOnUDP(t *testing.T) {
+	cfg, err := testConfig("udp://127.0.0.1:11211")
+	noError(t, err)
+	cfg.Auth = &Auth{User: "u", Pass: "p", AllowPlaintext: true}
+	_, err = New(cfg)
+	isErrorIs(t, err, ErrNotSupported)
+}
+
+func TestNewRejectsEmptyAuthUser(t *testing.T) {
+	cfg, err := testConfig("127.0.0.1:11211")
+	noError(t, err)
+	cfg.Auth = &Auth{User: "", Pass: "p"}
+	_, err = New(cfg)
+	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestNewRejectsPlaintextAuthRemote(t *testing.T) {
+	cfg, err := testConfig("10.1.2.3:11211")
+	noError(t, err)
+	cfg.Auth = &Auth{User: "u", Pass: "p"}
+	_, err = New(cfg)
+	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestAuthAllowsUnix(t *testing.T) {
+	srv, path := startFakeMemcachedUnix(t)
+	srv.tokenAuth = true
+	client := testClient(t, "unix://"+path, func(cfg *Config) {
+		cfg.Auth = &Auth{User: "u", Pass: "p"}
+	})
+	noError(t, client.Ping(context.Background()))
+}
+
+func TestSetServersRejectsAuthBypass(t *testing.T) {
+	srv := startFakeMemcachedAuth(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Auth = &Auth{User: "u", Pass: "p"}
+		cfg.AllowSetServers = true
+	})
+
+	remote, err := ParseServers("10.1.2.3:11211")
+	noError(t, err)
+	isErrorIs(t, client.SetServers(remote), ErrInvalidArgument)
+	equal(t, srv.Addr(), client.Servers()[0].Address)
+
+	udp, err := ParseServers("udp://127.0.0.1:11211")
+	noError(t, err)
+	isErrorIs(t, client.SetServers(udp), ErrNotSupported)
+	equal(t, srv.Addr(), client.Servers()[0].Address)
 }

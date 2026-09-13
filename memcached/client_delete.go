@@ -6,13 +6,13 @@ import (
 )
 
 // Delete removes the key.
-func (c *Client) Delete(ctx context.Context, key string, opts ...ItemWriteOption) error {
-	key = c.nsString(key)
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
+func (c *Client) Delete(ctx context.Context, key []byte) error {
+	key = c.nsBytes(key)
+	if err := validateKeyAndValue(key, nil); err != nil {
 		return err
 	}
 
-	req, resp := buildDeleteCommand(key, c.resolveNoReply(opts))
+	req, resp := buildDeleteCommand(key, false)
 	defer releaseReqAndResp(req, resp)
 
 	resp.afterRecv = expectLine(_DeletedCRLFBytes)

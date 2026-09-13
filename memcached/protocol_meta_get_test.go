@@ -23,7 +23,7 @@ func Test_parseFlags(t *testing.T) {
 				item:     &MetaItem{},
 			},
 			want: &MetaItem{
-				// Key:              []byte("foo"),
+				Key:              []byte("foo"),
 				Value:            nil,
 				CAS:              26,
 				Flags:            0,
@@ -33,6 +33,8 @@ func Test_parseFlags(t *testing.T) {
 				Opaque:           456,
 				OpaqueToken:      "456",
 				HitBefore:        false,
+				WireKey:          []byte("Zm9v"),
+				KeyBase64:        true,
 			},
 		},
 		{
@@ -43,7 +45,7 @@ func Test_parseFlags(t *testing.T) {
 				item:     &MetaItem{},
 			},
 			want: &MetaItem{
-				// Key:              []byte("foo"),
+				Key:              []byte("foo"),
 				Value:            nil,
 				CAS:              29,
 				Flags:            123,
@@ -53,6 +55,8 @@ func Test_parseFlags(t *testing.T) {
 				Opaque:           789,
 				OpaqueToken:      "789",
 				HitBefore:        true,
+				WireKey:          []byte("Zm9v"),
+				KeyBase64:        true,
 			},
 		},
 		{
@@ -141,7 +145,7 @@ func Test_parseMetaItem(t *testing.T) {
 			},
 			wantErr: false,
 			wantItem: &MetaItem{
-				// Key:              []byte("foo"),
+				Key:              []byte("foo"),
 				Value:            nil,
 				CAS:              26,
 				Flags:            0,
@@ -151,6 +155,9 @@ func Test_parseMetaItem(t *testing.T) {
 				Opaque:           456,
 				OpaqueToken:      "456",
 				HitBefore:        false,
+				WireKey:          []byte("Zm9v"),
+				KeyBase64:        true,
+				Status:           MetaStatusHD,
 				gotHD:            true,
 			},
 		},
@@ -168,7 +175,7 @@ func Test_parseMetaItem(t *testing.T) {
 			},
 			wantErr: false,
 			wantItem: &MetaItem{
-				// Key:              []byte("foo"), // key is not set in parseMetaItem
+				Key:              []byte("foo"),
 				Value:            []byte("bar"),
 				CAS:              29,
 				Flags:            123,
@@ -178,6 +185,9 @@ func Test_parseMetaItem(t *testing.T) {
 				Opaque:           789,
 				OpaqueToken:      "789",
 				HitBefore:        true,
+				WireKey:          []byte("Zm9v"),
+				KeyBase64:        true,
+				Status:           MetaStatusVA,
 			},
 		},
 		{
@@ -253,9 +263,6 @@ func Test_buildMetaGetCommand(t *testing.T) {
 				N: 3,
 				R: 4,
 				T: 5,
-				W: true,
-				X: true,
-				Z: true,
 			},
 			wantRequestRaw:    []byte("mg Zm9v b c f h k l O1 q s t u v E2 N3 R4 T5\r\nmn\r\n"),
 			wantRespIndicator: endIndicatorQuietBarrier,
@@ -279,9 +286,6 @@ func Test_buildMetaGetCommand(t *testing.T) {
 				N: 3,
 				R: 4,
 				T: 5,
-				W: true,
-				X: true,
-				Z: true,
 			},
 			wantRequestRaw:    []byte("mg foo c f h k l O1 s t u v E2 N3 R4 T5\r\n"),
 			wantRespIndicator: endIndicatorLimitedLines,
@@ -328,6 +332,11 @@ func Test_buildMetaGetCommand_checkCASAndOpaqueToken(t *testing.T) {
 func Test_buildMetaGetCommand_emitsO0(t *testing.T) {
 	req, _ := buildMetaGetCommand([]byte("foo"), &metaGetFlags{O: 0, Oset: true})
 	equal(t, []byte("mg foo O0\r\n"), req.raw)
+}
+
+func Test_buildMetaGetCommand_PL(t *testing.T) {
+	req, _ := buildMetaGetCommand([]byte("foo"), &metaGetFlags{P: "h", L: "/p"})
+	equal(t, []byte("mg foo Ph L/p\r\n"), req.raw)
 }
 
 func Test_parseMetaPipeline_flagError(t *testing.T) {

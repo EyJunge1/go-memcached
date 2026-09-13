@@ -1,12 +1,10 @@
 package memcached
 
-import "time"
-
 // touch <key> <exptime> [noreply]\r\n
-func buildTouchCommand(key string, expTime time.Duration, noReply bool) (*request, *response) {
+func buildTouchCommand(key []byte, expTime Exptime, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString("touch").
-		AddString(key).
+		AddBytes(key).
 		AddInt64(expiryToken(expTime))
 	defer b.release()
 
@@ -14,7 +12,7 @@ func buildTouchCommand(key string, expTime time.Duration, noReply bool) (*reques
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	req := buildRequest([]byte("touch"), []byte(key), b.AddCRLF().build())
+	req := buildRequest([]byte("touch"), key, b.AddCRLF().build())
 
 	var resp *response
 	if noReply {

@@ -4,108 +4,66 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
-// Get returns the item for key. Use Gets if you need the CAS value.
-func (c *Client) Get(ctx context.Context, key string) (*Item, error) {
-	key = c.nsString(key)
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
-		return nil, err
-	}
-
-	req, resp := buildGetsCommand("get", key)
-	defer releaseReqAndResp(req, resp)
-
-	var item *Item
-	resp.afterRecv = func(r *response) error {
-		items, err := parseValueItems(r.rawLines, false, false)
-		if err != nil {
-			return fmt.Errorf("parse values failed: %w", err)
-		}
-		if len(items) == 0 {
-			return fmt.Errorf("no items found: %w", ErrNotFound)
-		}
-		item = items[0]
-		return nil
-	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-
-	return item, nil
+// GetOpts selects get vs gets vs gat vs gats.
+type GetOpts struct {
+	CAS   bool     // gets / gats
+	Touch *Exptime // gat / gats
 }
 
-// Gets returns items including CAS. Keys are grouped by cluster node and fetched in parallel.
-func (c *Client) Gets(ctx context.Context, keys ...string) ([]*Item, error) {
-	if len(keys) == 0 {
-		return []*Item{}, nil
-	}
-	items, err := c.getFromNodes(ctx, "gets", 0, keys, true)
-	return clusterGetItems(items, err)
-}
-
-// GetAndTouch returns the item and updates its expiration.
-func (c *Client) GetAndTouch(ctx context.Context, expiry time.Duration, key string) (*Item, error) {
-	key = c.nsString(key)
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
-		return nil, err
-	}
-
-	req, resp := buildGetAndTouchesCommand("gat", expiry, key)
-	defer releaseReqAndResp(req, resp)
-
-	var item *Item
-	resp.afterRecv = func(r *response) error {
-		items, err := parseValueItems(r.rawLines, false, false)
-		if err != nil {
-			return fmt.Errorf("parse values failed: %w", err)
-		}
-		if len(items) == 0 {
-			return fmt.Errorf("no items found: %w", ErrNotFound)
-		}
-		item = items[0]
-		return nil
-	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-
-	return item, nil
-}
-
-// GetAndTouches returns items, updates their expiration, and includes CAS.
+// Get fetches keys. Missing keys are omitted. An empty result is not ErrNotFound.
 // Keys are grouped by cluster node and fetched in parallel.
-func (c *Client) GetAndTouches(ctx context.Context, expiry time.Duration, keys ...string) ([]*Item, error) {
+// Item.Key is the wire key, including Config.Cluster.Namespace when set.
+func (c *Client) Get(ctx context.Context, opts GetOpts, keys ...[]byte) ([]*Item, error) {
 	if len(keys) == 0 {
 		return []*Item{}, nil
 	}
-	items, err := c.getFromNodes(ctx, "gats", expiry, keys, true)
-	return clusterGetItems(items, err)
+	command, withCAS := getCommand(opts)
+	var exp Exptime
+	if opts.Touch != nil {
+		exp = *opts.Touch
+	}
+	return c.getFromNodes(ctx, command, exp, keys, withCAS)
 }
 
-func clusterGetItems(items []*Item, err error) ([]*Item, error) {
+// GetOne fetches a single key. A miss returns ErrNotFound.
+func (c *Client) GetOne(ctx context.Context, key []byte) (*Item, error) {
+	items, err := c.Get(ctx, GetOpts{}, key)
+	if err != nil {
+		return nil, err
+	}
 	if len(items) == 0 {
-		if err != nil {
-			return nil, err
-		}
 		return nil, fmt.Errorf("no items found: %w", ErrNotFound)
 	}
-	return items, err
+	return items[0], nil
 }
 
-// GetMulti fetches keys in parallel per cluster node. Missing keys are omitted.
-// A non-nil error is only returned for I/O or parse failures.
-func (c *Client) GetMulti(ctx context.Context, keys []string) (map[string]*Item, error) {
-	items, err := c.getFromNodes(ctx, "gets", 0, keys, true)
+// GetMulti fetches keys in parallel per cluster node and returns a map with CAS.
+// Missing keys are omitted. Map keys are the wire key (string form of Item.Key).
+func (c *Client) GetMulti(ctx context.Context, keys [][]byte) (map[string]*Item, error) {
+	items, err := c.Get(ctx, GetOpts{CAS: true}, keys...)
 	out := make(map[string]*Item, len(items))
 	for _, item := range items {
-		out[item.Key] = item
+		out[string(item.Key)] = item
 	}
 	return out, err
 }
 
-func (c *Client) getFromAddr(ctx context.Context, addr *Addr, command string, expiry time.Duration, keys []string, withCAS bool) ([]*Item, error) {
+func getCommand(opts GetOpts) (command string, withCAS bool) {
+	if opts.Touch != nil {
+		if opts.CAS {
+			return "gats", true
+		}
+		return "gat", false
+	}
+	if opts.CAS {
+		return "gets", true
+	}
+	return "get", false
+}
+
+func (c *Client) getFromAddr(ctx context.Context, addr *Addr, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
 	var req *request
 	var resp *response
 	if command == "gats" || command == "gat" {
@@ -130,7 +88,7 @@ func (c *Client) getFromAddr(ctx context.Context, addr *Addr, command string, ex
 	return items, nil
 }
 
-func (c *Client) getFromNodes(ctx context.Context, command string, expiry time.Duration, keys []string, withCAS bool) ([]*Item, error) {
+func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -138,10 +96,10 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry time.D
 		return []*Item{}, nil
 	}
 
-	wired := make([]string, len(keys))
+	wired := make([][]byte, len(keys))
 	for i, key := range keys {
-		wired[i] = c.nsString(key)
-		if err := validateKeyAndValue([]byte(wired[i]), nil); err != nil {
+		wired[i] = c.nsBytes(key)
+		if err := validateKeyAndValue(wired[i], nil); err != nil {
 			return nil, err
 		}
 	}
@@ -152,9 +110,9 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry time.D
 	}
 	addrs = c.liveAddrs(addrs)
 
-	groups := make(map[*Addr][]string, len(addrs))
+	groups := make(map[*Addr][][]byte, len(addrs))
 	for _, key := range wired {
-		addr, err := picker.Pick(addrs, []byte(command), c.hashKey([]byte(key)))
+		addr, err := picker.Pick(addrs, c.hashKey(key))
 		if err != nil {
 			return nil, fmt.Errorf("pick node failed: %w", err)
 		}
@@ -173,7 +131,7 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry time.D
 	}
 	ch := make(chan nodeResult, len(groups))
 	for addr, nodeKeys := range groups {
-		go func(addr *Addr, nodeKeys []string) {
+		go func(addr *Addr, nodeKeys [][]byte) {
 			items, err := c.getFromAddr(ctx, addr, command, expiry, nodeKeys, withCAS)
 			ch <- nodeResult{items: items, err: err}
 		}(addr, nodeKeys)

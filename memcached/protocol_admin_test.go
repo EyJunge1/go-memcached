@@ -40,7 +40,15 @@ func Test_mapAdminStatus(t *testing.T) {
 	noError(t, mapAdminStatus([]byte("OK\r\n")))
 	isErrorIs(t, mapAdminStatus([]byte("BUSY\r\n")), ErrBusy)
 	isErrorIs(t, mapAdminStatus([]byte("SAME\r\n")), ErrSame)
+	isErrorIs(t, mapAdminStatus([]byte("SAME class\r\n")), ErrSame)
 	isErrorIs(t, mapAdminStatus([]byte("BADCLASS\r\n")), ErrBadClass)
+	isErrorIs(t, mapAdminStatus([]byte("NOSPARE no class\r\n")), ErrNoSpare)
+	isErrorIs(t, mapAdminStatus([]byte("NOTFULL\r\n")), ErrNotFull)
+	isErrorIs(t, mapAdminStatus([]byte("NOTFULL class\r\n")), ErrNotFull)
+	isErrorIs(t, mapAdminStatus([]byte("UNSAFE\r\n")), ErrUnsafe)
+	isErrorIs(t, mapAdminStatus([]byte("UNSAFE class\r\n")), ErrUnsafe)
+	isErrorIs(t, mapAdminStatus([]byte("ERROR\r\n")), ErrNonexistentCommand)
+	isErrorIs(t, mapAdminStatus([]byte("ERROR bad args\r\n")), ErrInvalidArgument)
 }
 
 func Test_adminStreamLineError(t *testing.T) {
@@ -48,5 +56,10 @@ func Test_adminStreamLineError(t *testing.T) {
 	isErrorIs(t, adminStreamLineError("BUSY"), ErrBusy)
 	isErrorIs(t, adminStreamLineError("BUSY crawler"), ErrBusy)
 	isErrorIs(t, adminStreamLineError("ERROR"), ErrNonexistentCommand)
+	isErrorIs(t, adminStreamLineError("ERROR bad args"), ErrInvalidArgument)
+	isErrorIs(t, adminStreamLineError("NOSPARE no class"), ErrNoSpare)
+	isErrorIs(t, adminStreamLineError("NOTFULL class"), ErrNotFull)
+	isErrorIs(t, adminStreamLineError("UNSAFE class"), ErrUnsafe)
+	isErrorIs(t, adminStreamLineError("SAME class"), ErrSame)
 	isErrorIs(t, adminStreamLineError("CLIENT_ERROR bad"), ErrClientError)
 }

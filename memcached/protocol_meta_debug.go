@@ -6,16 +6,10 @@ import (
 	"strconv"
 )
 
-// MetaDebugOption is used to set options for MetaDebug command.
-type MetaDebugOption func(*metaDebugFlags)
-
 type metaDebugFlags struct {
 	b bool // b: interpret key as base64 encoded binary value
-}
-
-// MetaDebugFlagBinaryKey sets the flag to interpret key as base64 encoded binary value.
-func MetaDebugFlagBinaryKey() MetaDebugOption {
-	return func(flags *metaDebugFlags) { flags.b = true }
+	P string
+	L string
 }
 
 // me <key> <flag>\r\n
@@ -29,7 +23,10 @@ func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *respon
 		AddBytes(key)
 	defer b.release()
 
-	b.AddFlagBool("b", flags.b).AddCRLF()
+	b.AddFlagBool("b", flags.b)
+	b.AddFlagString("P", flags.P)
+	b.AddFlagString("L", flags.L)
+	b.AddCRLF()
 
 	req := buildRequest([]byte("me"), key, b.build())
 	resp := buildLimitedLineResponse(1)
@@ -65,27 +62,34 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 		return fmt.Errorf("unexpected cd<=%s>: %w", string(cd), ErrMalformedResponse)
 	}
 
-	// parse key
-	// item.Key = parts[KeyIndex]
+	if len(parts) > KeyIndex {
+		item.Key = append(item.Key[:0], parts[KeyIndex]...)
+	}
 	for i := KeyIndex + 1; i < len(parts); i++ {
 		kv := bytes.Split(parts[i], []byte("="))
 		if len(kv) != 2 {
 			continue
 		}
 
-		switch string(kv[0]) {
+		key, val := string(kv[0]), string(kv[1])
+		switch key {
 		case "exp":
-			item.TTL, _ = strconv.ParseInt(string(kv[1]), 10, 64)
+			item.TTL, _ = strconv.ParseInt(val, 10, 64)
 		case "la":
-			item.LastAccessTime, _ = strconv.ParseInt(string(kv[1]), 10, 64)
+			item.LastAccessTime, _ = strconv.ParseInt(val, 10, 64)
 		case "cas":
-			item.CAS, _ = strconv.ParseUint(string(kv[1]), 10, 64)
+			item.CAS, _ = strconv.ParseUint(val, 10, 64)
 		case "fetch":
-			item.HitBefore = string(kv[1]) == "yes"
+			item.HitBefore = val == "yes"
 		case "cls":
-			item.SlabClassID, _ = strconv.ParseUint(string(kv[1]), 10, 32)
+			item.SlabClassID, _ = strconv.ParseUint(val, 10, 32)
 		case "size":
-			item.Size, _ = strconv.ParseUint(string(kv[1]), 10, 64)
+			item.Size, _ = strconv.ParseUint(val, 10, 64)
+		default:
+			if item.Fields == nil {
+				item.Fields = make(map[string]string)
+			}
+			item.Fields[key] = val
 		}
 	}
 

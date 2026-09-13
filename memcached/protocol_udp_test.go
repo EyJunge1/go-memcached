@@ -88,8 +88,41 @@ func Test_nextUDPRequestIDChanges(t *testing.T) {
 }
 
 func Test_nextUDPRequestIDSkipsZero(t *testing.T) {
-	udpRequestID.Store(0xffff)
-	id := nextUDPRequestID()
-	equal(t, uint16(1), id)
-	notZero(t, id)
+	for range 32 {
+		notZero(t, nextUDPRequestID())
+	}
+}
+
+func Test_assembleUDPRejectsReserved(t *testing.T) {
+	h := make([]byte, 10)
+	binary.BigEndian.PutUint16(h[0:2], 3)
+	binary.BigEndian.PutUint16(h[4:6], 1)
+	binary.BigEndian.PutUint16(h[6:8], 1)
+	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{h}}
+	_, err := assembleUDP(cn, 3)
+	isErrorIs(t, err, ErrMalformedResponse)
+}
+
+func Test_assembleUDPRejectsFragmentConflict(t *testing.T) {
+	makeDgram := func(payload []byte) []byte {
+		h := make([]byte, 8+len(payload))
+		binary.BigEndian.PutUint16(h[0:2], 3)
+		binary.BigEndian.PutUint16(h[4:6], 2)
+		copy(h[8:], payload)
+		return h
+	}
+	cn := &recordUDPConn{
+		mockConn:  newMockConn(),
+		datagrams: [][]byte{makeDgram([]byte("A")), makeDgram([]byte("B"))},
+	}
+	_, err := assembleUDP(cn, 3)
+	isErrorIs(t, err, ErrMalformedResponse)
+}
+
+func Test_sendUDPRejectsOversized(t *testing.T) {
+	req := buildRequest([]byte("get"), []byte("k"), make([]byte, maxUDPDatagram))
+	req.udpEnabled = true
+	req.udpReqID = 1
+	err := req.sendUDP(&recordUDPConn{mockConn: newMockConn()})
+	isErrorIs(t, err, ErrNotSupported)
 }

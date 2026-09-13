@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"sync"
@@ -13,11 +14,12 @@ import (
 type Client struct {
 	options *clientOptions
 
-	mu         sync.RWMutex
-	addrs      []*Addr
-	picker     Picker
-	connPools  map[string]*connPool
-	addrString string
+	mu               sync.RWMutex
+	addrs            []*Addr
+	picker           Picker
+	connPools        map[string]*connPool
+	resolveSpec      string
+	resolveSpecFixed bool
 
 	healthMu  sync.Mutex
 	failCount map[string]int
@@ -25,53 +27,71 @@ type Client struct {
 
 	refreshStop chan struct{}
 	refreshOnce sync.Once
+
+	resolverMu  sync.Mutex
+	resolverErr error
 }
 
-// New creates a memcached client for the given address and options.
-//
-// The address may be a single node or a comma-separated cluster list.
-// The same key is always sent to the same instance. Gets, GetAndTouches,
-// and GetMulti group keys by node and fetch them in parallel.
-func New(addr string, opts ...ClientOption) (*Client, error) {
-	options := newClientOptions()
-	for _, opt := range opts {
-		opt(options)
+// New creates a memcached client from Config.
+func New(cfg Config) (*Client, error) {
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
 	}
-	if err := applyTLSDialer(options); err != nil {
+	addrs, err := serversToAddrs(cfg.Servers)
+	if err != nil {
+		return nil, err
+	}
+	options, err := optionsFromConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
 
-	addrs, err := options.resolver.Resolve(addr)
-	if err != nil {
-		return nil, fmt.Errorf("resolve failed: %w", err)
-	}
-
-	if len(addrs) == 0 {
-		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
+	resolveSpec := cfg.Cluster.ResolveSpec
+	resolveSpecFixed := resolveSpec != ""
+	if resolveSpec == "" {
+		resolveSpec = formatServerSpec(cfg.Servers)
 	}
 
 	c := &Client{
-		options:    options,
-		addrs:      addrs,
-		picker:     options.pickBuilder.Build(addrs),
-		connPools:  make(map[string]*connPool, 4),
-		addrString: addr,
-		failCount:  make(map[string]int),
-		deadUntil:  make(map[string]time.Time),
+		options:          options,
+		addrs:            addrs,
+		picker:           options.pickBuilder.Build(addrs),
+		connPools:        make(map[string]*connPool, 4),
+		resolveSpec:      resolveSpec,
+		resolveSpecFixed: resolveSpecFixed,
+		failCount:        make(map[string]int),
+		deadUntil:        make(map[string]time.Time),
 	}
 	c.startResolverRefresh()
 	return c, nil
 }
 
-// SetServers replaces the cluster address list. Existing pools for hosts
-// that remain are reused; pools for removed hosts are closed.
-func (c *Client) SetServers(addr string) error {
-	addrs, err := c.options.resolver.Resolve(addr)
-	if err != nil {
-		return fmt.Errorf("resolve failed: %w", err)
+// SetServers replaces the cluster address list. Requires Config.AllowSetServers.
+// Existing pools for hosts that remain are reused; pools for removed hosts are
+// closed. Health state for removed IDs is dropped.
+func (c *Client) SetServers(servers []Server) error {
+	if c.options == nil || !c.options.allowSetServers {
+		return ErrSetServersNotAllowed
 	}
-	if len(addrs) == 0 {
-		return fmt.Errorf("empty address: %w", ErrInvalidAddress)
+	return c.applyServers(servers, true)
+}
+
+func (c *Client) applyServers(servers []Server, updateSpec bool) error {
+	var tlsCfg *tls.Config
+	if c.options != nil && c.options.tlsSet {
+		tlsCfg = c.options.tlsConfig
+	}
+	if err := validateTransportServers(servers, tlsCfg); err != nil {
+		return err
+	}
+	if c.options != nil && (c.options.authUser != "" || c.options.authPass != "") {
+		if err := validateAuthAgainstServers(servers, c.options.authAllowPlain, c.options.tlsSet); err != nil {
+			return err
+		}
+	}
+	addrs, err := serversToAddrs(servers)
+	if err != nil {
+		return err
 	}
 
 	picker := c.options.pickBuilder.Build(addrs)
@@ -92,10 +112,25 @@ func (c *Client) SetServers(addr string) error {
 		_ = pool.close()
 	}
 
+	c.healthMu.Lock()
+	for id := range c.failCount {
+		if _, ok := keep[id]; !ok {
+			delete(c.failCount, id)
+		}
+	}
+	for id := range c.deadUntil {
+		if _, ok := keep[id]; !ok {
+			delete(c.deadUntil, id)
+		}
+	}
+	c.healthMu.Unlock()
+
 	c.addrs = addrs
 	c.picker = picker
 	c.connPools = next
-	c.addrString = addr
+	if updateSpec && !c.resolveSpecFixed {
+		c.resolveSpec = formatServerSpec(servers)
+	}
 	return nil
 }
 
@@ -128,19 +163,23 @@ func (c *Client) snapshotCluster() ([]*Addr, Picker) {
 	return c.addrs, c.picker
 }
 
-// Servers returns a copy of the configured cluster addresses.
-func (c *Client) Servers() []Addr {
+// Servers returns a copy of the configured cluster.
+func (c *Client) Servers() []Server {
 	addrs, _ := c.snapshotCluster()
-	out := make([]Addr, 0, len(addrs))
-	for _, a := range addrs {
-		if a == nil {
-			continue
-		}
-		cp := *a
-		cp.metadata = nil
-		out = append(out, cp)
-	}
-	return out
+	return addrsToServers(addrs)
+}
+
+// LastResolverError returns the last error from periodic resolver refresh.
+func (c *Client) LastResolverError() error {
+	c.resolverMu.Lock()
+	defer c.resolverMu.Unlock()
+	return c.resolverErr
+}
+
+func (c *Client) setResolverErr(err error) {
+	c.resolverMu.Lock()
+	c.resolverErr = err
+	c.resolverMu.Unlock()
 }
 
 // PoolStat is a snapshot of one node's connection pool.

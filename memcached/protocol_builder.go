@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"math"
 	"strconv"
 	"sync"
 )
 
 const (
-	maxKeySize   = 250
-	maxValueSize = math.MaxUint32
+	maxKeySize           = 250
+	defaultMaxValueBytes = 1 << 20
+	maxValueSize         = defaultMaxValueBytes
 )
 
 var (
@@ -173,19 +173,19 @@ func (b *protocolBuilder) AddBytes(bs []byte) *protocolBuilder {
 }
 
 func (b *protocolBuilder) AddInt(i int) *protocolBuilder {
-	b.buf.WriteString(strconv.Itoa(i))
+	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), int64(i), 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
 func (b *protocolBuilder) AddUint(i uint64) *protocolBuilder {
-	b.buf.WriteString(strconv.FormatUint(i, 10))
+	b.buf.Write(strconv.AppendUint(b.buf.AvailableBuffer(), i, 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
 
 func (b *protocolBuilder) AddInt64(i int64) *protocolBuilder {
-	b.buf.WriteString(strconv.FormatInt(i, 10))
+	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), i, 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
@@ -215,7 +215,7 @@ func (b *protocolBuilder) AddFlagBool(flag string, v bool) *protocolBuilder {
 // AddFlagUint adds a flag with uint64 value, including token 0 (e.g. "D0 ").
 func (b *protocolBuilder) AddFlagUint(flag string, tok uint64) *protocolBuilder {
 	b.buf.WriteString(flag)
-	b.buf.WriteString(strconv.FormatUint(tok, 10))
+	b.buf.Write(strconv.AppendUint(b.buf.AvailableBuffer(), tok, 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
 }
@@ -226,6 +226,17 @@ func (b *protocolBuilder) AddFlagUintPresent(flag string, tok uint64, set bool) 
 		return b
 	}
 	return b.AddFlagUint(flag, tok)
+}
+
+// AddFlagInt64Present writes a signed flag token when set (Meta T/N/R, including -1).
+func (b *protocolBuilder) AddFlagInt64Present(flag string, tok int64, set bool) *protocolBuilder {
+	if !set && tok == 0 {
+		return b
+	}
+	b.buf.WriteString(flag)
+	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), tok, 10))
+	b.buf.WriteByte(_SpaceByte)
+	return b
 }
 
 // AddFlagUintNonZero writes the flag only when tok != 0 (used for F0 omit).
@@ -286,4 +297,13 @@ func base64Encode(src []byte) []byte {
 	dst := make([]byte, base64.StdEncoding.EncodedLen(len(src)))
 	base64.StdEncoding.Encode(dst, src)
 	return dst
+}
+
+func base64Decode(src []byte) ([]byte, error) {
+	dst := make([]byte, base64.StdEncoding.DecodedLen(len(src)))
+	n, err := base64.StdEncoding.Decode(dst, src)
+	if err != nil {
+		return nil, err
+	}
+	return dst[:n], nil
 }

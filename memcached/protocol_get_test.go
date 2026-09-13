@@ -34,11 +34,11 @@ func Test_parseValueItems(t *testing.T) {
 			},
 			want: []*Item{
 				{
-					Key:   "key",
+					Key:   []byte("key"),
 					Value: []byte("value"),
 				},
 				{
-					Key:   "key2",
+					Key:   []byte("key2"),
 					Value: []byte("value2"),
 				},
 			},
@@ -59,13 +59,13 @@ func Test_parseValueItems(t *testing.T) {
 			},
 			want: []*Item{
 				{
-					Key:   "key",
+					Key:   []byte("key"),
 					Value: []byte("value"),
 					Flags: 123,
 					CAS:   1,
 				},
 				{
-					Key:   "key2",
+					Key:   []byte("key2"),
 					Value: []byte("value2"),
 					Flags: 123,
 					CAS:   2,
@@ -87,13 +87,13 @@ func Test_parseValueItems(t *testing.T) {
 			},
 			want: []*Item{
 				{
-					Key:   "key",
+					Key:   []byte("key"),
 					Value: []byte("value"),
 					Flags: 123,
 					CAS:   1,
 				},
 				{
-					Key:   "key2",
+					Key:   []byte("key2"),
 					Value: []byte("value2"),
 					Flags: 123,
 					CAS:   2,
@@ -171,7 +171,7 @@ func Test_parseValueItemsPreservesOpaqueValue(t *testing.T) {
 }
 
 func Test_buildGetAndTouchesCommand(t *testing.T) {
-	req, resp := buildGetAndTouchesCommand("gats", time.Second, "key1", "key2")
+	req, resp := buildGetAndTouchesCommand("gats", Rel(time.Second), []byte("key1"), []byte("key2"))
 	defer releaseReqAndResp(req, resp)
 
 	equal(t, []byte("gats 1 key1 key2\r\n"), req.raw)
@@ -303,7 +303,7 @@ func Test_parseValueLine(t *testing.T) {
 			line:    []byte("VALUE mykey 123 456"),
 			withCas: false,
 			wantItem: &Item{
-				Key:   "mykey",
+				Key:   []byte("mykey"),
 				Flags: 123,
 				CAS:   0,
 			},
@@ -315,7 +315,7 @@ func Test_parseValueLine(t *testing.T) {
 			line:    []byte("VALUE mykey 123 456 789"),
 			withCas: true,
 			wantItem: &Item{
-				Key:   "mykey",
+				Key:   []byte("mykey"),
 				Flags: 123,
 				CAS:   789,
 			},
@@ -326,7 +326,7 @@ func Test_parseValueLine(t *testing.T) {
 			name:       "invalid flags",
 			line:       []byte("VALUE mykey abc 456"),
 			withCas:    false,
-			wantItem:   &Item{Key: "mykey"},
+			wantItem:   &Item{Key: []byte("mykey")},
 			wantLen:    0,
 			wantErr:    true,
 			wantErrMsg: "invalid flags",
@@ -335,7 +335,7 @@ func Test_parseValueLine(t *testing.T) {
 			name:       "invalid data length",
 			line:       []byte("VALUE mykey 123 abc "),
 			withCas:    false,
-			wantItem:   &Item{Key: "mykey", Flags: 123},
+			wantItem:   &Item{Key: []byte("mykey"), Flags: 123},
 			wantLen:    0,
 			wantErr:    true,
 			wantErrMsg: "invalid data length",
@@ -367,6 +367,15 @@ func Test_parseValueLine(t *testing.T) {
 			wantErr:    true,
 			wantErrMsg: "empty VALUE key",
 		},
+		{
+			name:       "missing CAS when required",
+			line:       []byte("VALUE mykey 123 456"),
+			withCas:    true,
+			wantItem:   &Item{Key: []byte("mykey"), Flags: 123},
+			wantLen:    456,
+			wantErr:    true,
+			wantErrMsg: "missing CAS field",
+		},
 	}
 
 	for _, tt := range tests {
@@ -390,21 +399,21 @@ func Test_parseValueLine(t *testing.T) {
 }
 
 func Test_buildGetsCommand_setsPickKey(t *testing.T) {
-	req, resp := buildGetsCommand("get", "only")
+	req, resp := buildGetsCommand("get", []byte("only"))
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("only"), req.key)
 
-	req, resp = buildGetsCommand("get", "a", "b")
+	req, resp = buildGetsCommand("get", []byte("a"), []byte("b"))
 	defer releaseReqAndResp(req, resp)
 	isNil(t, req.key)
 }
 
 func Test_buildGetAndTouchesCommand_setsPickKey(t *testing.T) {
-	req, resp := buildGetAndTouchesCommand("gat", time.Second, "only")
+	req, resp := buildGetAndTouchesCommand("gat", Rel(time.Second), []byte("only"))
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("only"), req.key)
 
-	req, resp = buildGetAndTouchesCommand("gat", time.Second, "a", "b")
+	req, resp = buildGetAndTouchesCommand("gat", Rel(time.Second), []byte("a"), []byte("b"))
 	defer releaseReqAndResp(req, resp)
 	isNil(t, req.key)
 }
@@ -420,4 +429,7 @@ func Test_dataBlockValueUsesDeclaredLength(t *testing.T) {
 	got, err = dataBlockValue(valueCRLF, 2)
 	noError(t, err)
 	equal(t, []byte("\r\n"), got)
+
+	_, err = dataBlockValue([]byte("ab"), 2)
+	isErrorIs(t, err, ErrMalformedResponse)
 }

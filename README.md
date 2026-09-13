@@ -3,80 +3,88 @@
 ### Features
 
 - Text- and meta-protocol for **application commands** (get/set/… and mg/ms/md/ma/me/mn).
-  Admin ops (`verbosity`, `shutdown`, slabs, LRU, `watch`, dumps) exist only behind `WithAdminCommands()` + `Admin()`.
+  Admin ops (`verbosity`, `shutdown`, slabs, LRU, `watch`, dumps) exist only behind `Config.AllowAdmin` + `Admin()`.
 - Values are raw `[]byte` plus `uint32` flags. Encode or compress in the caller.
-- Cluster: CRC-32 IEEE modulo N (default, same family as bradfitz/gomemcache), murmur3, rendezvous, optional **Ketama** (`NewKetamaPickBuilder`, libmemcached-awesome 1.1.4 / php-memcached), or a custom `Picker`.
-  Default CRC32 is **not** Ketama and **not** libmemcached `HASH_CRC`. Do not mix this client with php-memcached on the same cluster unless you opt into Ketama.
-- Connection pool per node: `WithMaxConns`, `WithMaxIdleConns`, `WithMaxLifetime`, `WithMaxIdleTimeout`, optional `WithMinIdleConns`. No automatic failover unless `WithFailover` is set.
-- Transport: TCP (default, **plaintext**), `unix://`, `udp://`. TLS via `WithTLS` or `WithDialContext`.
+- Cluster default is **weighted Ketama/MD5** (libmemcached / php-memcached). Use
+  `NewCRC32HashPickBuilder` for gomemcache-style modulo hashing. murmur3 and
+  rendezvous are also available.
+- Connection pool per node via `Config.Pool`. Failover is on when more than one
+  server is configured (`FailureLimit=2`, `RetryAfter=1s`, `DeadAfter=30s`,
+  `Eject=true`).
+- Transport: TCP (default, **plaintext**), `unix://`, `udp://`. TLS via `Config.Transport.TLS`.
+  `Transport.RequireTLS` makes `New` fail without TLS; it does not flip the default.
+  TCP_NODELAY is on by default (`Transport.TCPNoDelay`). Unix sockets that are
+  world-writable (other-write `002`) are rejected unless `UnixSocketAnyMode`.
 
 ### Out of scope
 
 - Binary protocol (deprecated; see https://docs.memcached.org/protocols/ )
-- SASL (binary). Text token auth (`-Y`) is `WithAuth` / `Authenticate`.
+- SASL (binary). Text token auth (`-Y`) is `Config.Auth` at dial time.
 - TAP, VBucket, Range-Ops (`RGet`/`RSet`)
 - Serialization or compression libraries
+
+Unlike gomemcache and yeqown, SASL is not offered; `FlushAll` and Admin
+require explicit `Config` flags.
 
 ### Transport
 
 TCP is the default (`host:port`). Unix sockets use `unix:///path/to.sock`.
-UDP addresses use `udp://host:port` and are only suitable for fire-and-forget
-(see protocol.txt “UDP protocol”). `WithUDPEnabled()` is a no-op; framing is
-used only for `udp` / `udp4` / `udp6`.
+UDP addresses use `udp://host:port`. Framing is used only for `udp` / `udp4` / `udp6`.
 
 ```go
 tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-client, err := memcached.New("memcached.example.com:11211",
-    memcached.WithTLS(tlsCfg),
-)
+servers, err := memcached.ParseServers("memcached.example.com:11211")
+if err != nil {
+	panic(err)
+}
+client, err := memcached.New(memcached.Config{
+	Servers:   servers,
+	Transport: memcached.Transport{TLS: tlsCfg},
+})
 ```
 
-`WithDialContext` remains the hook for proxies and mTLS. Do not set
-`InsecureSkipVerify` except in tests. The default is plaintext: any on-path
+`Transport.Dial` is the raw socket. If `Transport.TLS` is set, the client
+always wraps that socket with `tls.Client` and handshakes — Dial is never a
+silent plaintext escape. `InsecureSkipVerify` requires
+`Transport.AllowInsecureTLS`. `MinVersion == 0` defaults to TLS 1.2.
+UDP and TLS together are a `New` error. The default is plaintext: any on-path
 party is a full cache admin.
 
 ### Cluster hashing
 
-The default picker is CRC-32 IEEE modulo N — the same family as
-bradfitz/gomemcache, **not** libmemcached `MEMCACHED_HASH_CRC` and **not**
-Ketama/MD5. murmur3 here is a 64-bit digest; libhashkit murmur3 is 32-bit.
-Rendezvous (HRW) is also not Ketama.
+The default picker is weighted Ketama/MD5. CRC-32 IEEE modulo N is available
+via `NewCRC32HashPickBuilder` for gomemcache interop — it is **not**
+libmemcached `MEMCACHED_HASH_CRC`. murmur3 here is a 64-bit digest; libhashkit
+murmur3 is 32-bit. Rendezvous (HRW) is also not Ketama.
 
-For php-memcached / libmemcached consistent hashing, use:
+Weights: `10.0.0.1:11211?weight=2` or `Server.Weight`.
 
-```go
-memcached.New(addrs, memcached.WithPickBuilder(memcached.NewKetamaPickBuilder(memcached.KetamaOptions{
-    Weighted: true,
-})))
-```
-
-Weights: `10.0.0.1:11211?weight=2` or `NewAddrWeighted`. `Addr.Priority` is only
-an HRW tie-break.
-
-`Ping`, `FlushAll`, `VersionAll`, and `StatsAll` hit every node. `Version` and
-`Stats` hit one node. `SetServers` is a privileged trust-anchor change.
-
-`WithFailover` + CRC32 remaps every key when a node is ejected; prefer Ketama
-or Rendezvous.
+`Ping`, `VersionAll`, and `StatsAll` hit every node. `Version` and `Stats`
+hit one node. `Admin().FlushAll` hits every node. `SetServers` requires
+`Config.AllowSetServers`. UDP clients cannot mix with TCP/Unix and cannot
+mutate. UDP allows Get/GetOne/gets, Version/Ping, and MetaGet without
+side-effect flags (`N`/`R`/`T`/`E`).
 
 ### Security
 
 Memcached text without TLS is a full data and admin plane.
 
-**FlushAll** invalidates every item on every configured server. It requires
-`WithAllowFlushAll()`.
+**FlushAll** invalidates every item on every configured server. Call
+`Admin().FlushAll` after `Config.AllowAdmin` **and** `Config.AllowFlushAll`.
 
 **Admin** (`watch`, `metadump`, `mgdump`, `shutdown`, slabs/LRU) can exfiltrate
-keys or take a node down. Enable only with `WithAdminCommands()` and call
-`client.Admin()`. Always cancel/timeout watch and dump streams.
+keys or take a node down. Enable only with `Config.AllowAdmin` and call
+`client.Admin()`. Node-local commands require `On(addr)`; `Shutdown` cannot
+run without `On`. `All()` is Verbosity, CacheMemLimit, and Stats only.
+Watch and dump streams require a context deadline.
 
-**Unsafe unless you know the spec traps:**
+**UDP** has no integrity; request IDs help but the path is spoofable.
 
-- `WithNoReply()` — client-wide; the server may still send `CLIENT_ERROR`.
-- UDP — no integrity; request IDs help but the path is spoofable.
+Without `AllowFlushAll`, `Admin().FlushAll` returns `ErrFlushAllNotAllowed`
+and does not send `flush_all`.
 
-Without `WithAllowFlushAll()`, `FlushAll` returns `ErrFlushAllNotAllowed` and
-does not send `flush_all`.
+Token auth (`Config.Auth`) is rejected on plaintext TCP except Unix, loopback,
+or `Auth.AllowPlaintext`. UDP + Auth is `ErrNotSupported`.
 
 ### Installation
 
@@ -90,25 +98,22 @@ go get github.com/EyJunge1/go-memcached/memcached@latest
 package main
 
 import (
-    "context"
-    "time"
+	"context"
+	"time"
 
-    "github.com/EyJunge1/go-memcached/memcached"
+	"github.com/EyJunge1/go-memcached/memcached"
 )
 
 func main() {
-	// 1. build client
-	// addrs is a string, if you have multiple memcached servers, you can use comma to separate them.
-	// e.g. "localhost:11211,localhost:11212,localhost:11213"
-	addrs := "localhost:11211"
-
-	// Options: WithDialTimeout, WithTLS, WithPickBuilder, ...
-	client, err := memcached.New(addrs)
+	servers, err := memcached.ParseServers("localhost:11211")
+	if err != nil {
+		panic(err)
+	}
+	client, err := memcached.New(memcached.Config{Servers: servers})
 	if err != nil {
 		panic(err)
 	}
 
-	// 2. use the client
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -118,35 +123,35 @@ func main() {
 	}
 	println("Version: ", version)
 
-	if err = client.Set(ctx, "key", []byte("value"), 0, 0); err != nil {
+	if _, err = client.Set(ctx, []byte("key"), []byte("value"), 0, memcached.ExptimeNever); err != nil {
 		panic(err)
 	}
-	if err = client.Set(ctx, "key2", []byte("value2"), 0, 0); err != nil {
+	if _, err = client.Set(ctx, []byte("key2"), []byte("value2"), 0, memcached.ExptimeNever); err != nil {
 		panic(err)
 	}
 
-	items, err := client.Gets(ctx, "key", "key2")
+	items, err := client.Get(ctx, memcached.GetOpts{CAS: true}, []byte("key"), []byte("key2"))
 	if err != nil {
 		panic(err)
 	}
 
 	for _, item := range items {
-		println("key: ", item.Key, " value: ", string(item.Value))
+		println("key: ", string(item.Key), " value: ", string(item.Value))
 	}
 }
 ```
 
 ### Values and flags
 
-The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode (JSON, Protobuf, …) or compress in your application before `Set`; decode after `Get`. The library does not pull serialization or compression dependencies.
+The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode (JSON, Protobuf, …) or compress in your application before `Set`; decode after `Get`/`GetOne`. The library does not pull serialization or compression dependencies.
 
-Keys must be 1–250 bytes and must not contain whitespace or control characters. Meta commands with a binary-key flag skip the whitespace check; the Base64 form on the wire must still be ≤250 bytes.
+Keys are `[]byte` (1–250 bytes, no whitespace or control characters). Meta commands with a binary-key flag skip the whitespace check; the Base64 form on the wire must still be ≤250 bytes. After a get, `Item.Key` is the **wire key**, including a configured namespace prefix.
 
-Expiration: `0` never expires; durations ≤30 days are relative seconds; longer durations are sent as Unix timestamps (`now+ttl`).
+Expiration is `Exptime`: `0` never expires; 1..2592000 are relative seconds; larger values are Unix timestamps. Use `Rel(d)` or `UnixExp(t)`.
 
-Single-Get miss and an empty multi-`Gets` map to `ErrNotFound`. `GetMulti` omits missing keys.
+`GetOne` maps a miss to `ErrNotFound`. Multi-`Get` and `GetMulti` omit missing keys and never return `ErrNotFound` for an empty result.
 
-`Gets`, `GetAndTouches`, and `GetMulti` split keys across cluster nodes and fetch in parallel. `GetAndTouches` is multi-key `gats` (with CAS). `Ping` checks every node. `SetServers` replaces the node list at runtime.
+`Get` and `GetMulti` split keys across cluster nodes and fetch in parallel. `GetOpts.CAS` selects `gets`/`gats`; `GetOpts.Touch` selects `gat`/`gats`. `Store` returns `StoreResult` for STORED/NOT_STORED/EXISTS/NOT_FOUND; transport and CLIENT/SERVER_ERROR stay `error`. `Pipeline()` writes every text frame, then reads every reply (no text `noreply`). Quiet mutations stay on `MetaPipeline`. Recache helpers: `GetOrVivify`, `GetEarlyRecache`, `Invalidate`. Meta structs accept proxy hints `P`/`L`. `Ping` checks every node. `SetServers` replaces the node list when `AllowSetServers` is set.
 
 ### Support Commands
 
@@ -155,25 +160,24 @@ arbitrary raw command passthrough.
 
 | Command         | Status | API Usage | Description |
 |-----------------|--------|-----------|-------------|
-| Set             | ✅ | `Set(ctx, key, value, flag, expiry, opts...)` | Optional `NoReply()` |
-| Add / Replace / Append / Prepend / Cas | ✅ | same pattern | Storage commands |
-| Gets            | ✅ | `Gets(ctx, keys...)` | With CAS; per-node parallel |
-| GetMulti        | ✅ | `GetMulti(ctx, keys)` | Map; missing keys omitted |
-| Get             | ✅ | `Get(ctx, key)` | Single key; miss → `ErrNotFound` |
-| GetAndTouch     | ✅ | `GetAndTouch(ctx, expiry, key)` | Single-key `gat` |
-| GetAndTouches   | ✅ | `GetAndTouches(ctx, expiry, keys...)` | Multi-key `gats` (CAS) |
-| Delete / Incr / Decr / Touch | ✅ | typed methods | Incr/Decr + noreply → `(0, nil)` |
-| Stats           | ✅ | `Stats(ctx)` | General-purpose `stats` (one node) |
-| StatsArgs       | ✅ | `StatsArgs(ctx, args...)` | Allowlisted args only |
+| Set             | ✅ | `Set` / `Store(StoreSet, …)` | `StoreResult`; Quiet only via `StoreRequest.Quiet` |
+| Add / Replace / Cas | ✅ | typed + `Store` | Flags and `Exptime`; outcomes as `StoreResult` |
+| Append / Prepend | ✅ | `Append(ctx, key, value)` | No dummy flags/expiry |
+| Get             | ✅ | `Get(ctx, GetOpts, keys...)` | Multi-key; miss omitted |
+| GetOne          | ✅ | `GetOne(ctx, key)` | Single key; miss → `ErrNotFound` |
+| GetMulti        | ✅ | `GetMulti(ctx, keys)` | Map with CAS; missing keys omitted |
+| Delete / Incr / Decr / Touch | ✅ | typed methods | Incr/Decr return the new uint64 |
+| Pipeline        | ✅ | `Pipeline().Set/Delete; Flush` | Write-then-read; TTL via `Item.Exp`; no text `noreply` |
+| Stats           | ✅ | `Stats(ctx, args...)` | Free tokens; `reset`/`sizes` only Admin |
 | StatsAll / VersionAll | ✅ | cluster maps | Every node; partial errors joined |
-| Meta*           | ✅ | `MetaGet`/`MetaSet`/… | `mn` on the wire; modes `S/E/R/A/P`; `q` still reads errors |
-| MetaGetPipeline | ✅ | quiet multi-mg + `mn` | |
+| Meta*           | ✅ | `MetaGet`/`MetaSet`/… structs | `MetaResult` + `k`/`b`/`P`/`L`; `q` still reads errors |
+| Recache         | ✅ | `GetOrVivify` / `GetEarlyRecache` / `Invalidate` | `mg N` / `mg R` / `md I T` |
+| MetaPipeline    | ✅ | mixed ops + auto-`O` + `mn` | Parallel per node; miss is empty slot |
 | Version / Ping  | ✅ | | `Version` one node; `Ping` all |
-| FlushAll        | ✅ | requires `WithAllowFlushAll()` | Destructive; all nodes |
-| FlushAllAfter   | ✅ | delay / `FlushAllStaggered` | |
-| Authenticate    | ✅ | `WithAuth` or `Authenticate` | Token auth `-Y` |
-| SetServers      | ✅ | runtime node list | Trust-anchor |
-| Admin()         | opt-in | `WithAdminCommands()` | Verbosity, Shutdown, slabs, LRU, Watch, dumps |
+| FlushAll        | ✅ | `Admin().FlushAll(FlushOpts)` | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger` as `Exptime`; no `noreply` |
+| Auth            | ✅ | `Config.Auth` | Token auth `-Y` on every new dial |
+| SetServers      | ✅ | requires `AllowSetServers` | Trust-anchor |
+| Admin()         | opt-in | `On(addr)` / `All()` | Shutdown only with `On` |
 
 ### Development Guide
 

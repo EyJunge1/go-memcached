@@ -10,20 +10,15 @@ import (
 
 func TestAdminRequiresOptIn(t *testing.T) {
 	srv := startFakeMemcached(t)
-	client, err := New(srv.Addr())
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	_, err = client.Admin()
+	client := testClient(t, srv.Addr())
+	_, err := client.Admin()
 	isErrorIs(t, err, ErrAdminNotEnabled)
 }
 
 func TestAdminSyncCommands(t *testing.T) {
 	srv := startFakeMemcached(t)
-	client, err := New(srv.Addr(), WithAdminCommands())
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	admin, err := client.Admin()
-	noError(t, err)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
 
 	ctx := context.Background()
 	noError(t, admin.Verbosity(ctx, 1))
@@ -44,13 +39,47 @@ func TestAdminSyncCommands(t *testing.T) {
 	noError(t, admin.Shutdown(ctx, false))
 }
 
+func TestAdminRequiresOnForNodeOps(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdmin(t, client)
+	ctx := context.Background()
+	isErrorIs(t, admin.Shutdown(ctx, false), ErrAdminTargetRequired)
+	isErrorIs(t, admin.SlabsAutomove(ctx, 1), ErrAdminTargetRequired)
+	isErrorIs(t, admin.LRUMode(ctx, "flat"), ErrAdminTargetRequired)
+	_, err := admin.Watch(ctx, WatchFetchers)
+	isErrorIs(t, err, ErrDeadlineRequired)
+	_, err = admin.Watch(context.Background(), WatchFetchers)
+	isErrorIs(t, err, ErrDeadlineRequired)
+	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = admin.Watch(ctx2, WatchFetchers)
+	isErrorIs(t, err, ErrAdminTargetRequired)
+}
+
+func TestAdminAllBroadcast(t *testing.T) {
+	a := startFakeMemcached(t)
+	b := startFakeMemcached(t)
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
+	})
+	all := mustAdmin(t, client).All()
+	ctx := context.Background()
+	noError(t, all.Verbosity(ctx, 1))
+	noError(t, all.CacheMemLimit(ctx, 32))
+	stats, err := all.Stats(ctx)
+	noError(t, err)
+	equal(t, 2, len(stats))
+}
+
 func TestAdminWatchAndDumps(t *testing.T) {
 	srv := startFakeMemcached(t)
-	client, err := New(srv.Addr(), WithAdminCommands())
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	admin, err := client.Admin()
-	noError(t, err)
+	srv.mu.Lock()
+	srv.dumpSendOK = true
+	srv.mu.Unlock()
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -77,33 +106,53 @@ func TestAdminWatchAndDumps(t *testing.T) {
 	equal(t, "mg foo", line)
 }
 
+func TestAdminDumpWithoutLaunchOK(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	meta, err := admin.LRUCrawlerMetaDump(ctx, "all")
+	noError(t, err)
+	row := <-meta
+	equal(t, "foo", row["key"])
+	_, ok := <-meta
+	isFalse(t, ok)
+
+	mg, err := admin.LRUCrawlerMgDump(ctx, "all")
+	noError(t, err)
+	line := <-mg
+	equal(t, "mg foo", line)
+}
+
 func TestAdminDumpBusy(t *testing.T) {
 	srv := startFakeMemcached(t)
 	srv.mu.Lock()
 	srv.dumpBusy = true
 	srv.mu.Unlock()
-	client, err := New(srv.Addr(), WithAdminCommands())
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	admin, err := client.Admin()
-	noError(t, err)
-	_, err = admin.LRUCrawlerMetaDump(context.Background(), "all")
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := admin.LRUCrawlerMetaDump(ctx, "all")
 	isErrorIs(t, err, ErrBusy)
 }
 
 func TestAdminWatchCancelDiscardsConn(t *testing.T) {
 	srv := startFakeMemcached(t)
 	var dials atomic.Int32
-	client, err := New(srv.Addr(), WithAdminCommands(), WithMaxIdleConns(4), WithDialContext(func(_ context.Context, network, address string) (net.Conn, error) {
-		dials.Add(1)
-		return net.Dial(network, address)
-	}))
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	admin, err := client.Admin()
-	noError(t, err)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.Pool.MaxIdle = 4
+		cfg.Pool.MaxOpen = 100
+		cfg.Transport.Dial = func(_ context.Context, network, address string) (net.Conn, error) {
+			dials.Add(1)
+			return net.Dial(network, address)
+		}
+	})
+	admin := mustAdminOn(t, client)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	events, err := admin.Watch(ctx, WatchMutations)
 	noError(t, err)
 	<-events
@@ -114,5 +163,38 @@ func TestAdminWatchCancelDiscardsConn(t *testing.T) {
 	noError(t, err)
 	if dials.Load() <= afterWatch {
 		t.Fatalf("watch cancel should discard the conn; dials watch=%d after=%d", afterWatch, dials.Load())
+	}
+}
+
+func TestAdminWatchLineCap(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	noError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		cn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = cn.Close() }()
+		buf := make([]byte, 64)
+		_, _ = cn.Read(buf)
+		_, _ = cn.Write([]byte("OK\r\n"))
+		huge := make([]byte, adminStreamLineLimit+8)
+		for i := range huge {
+			huge[i] = 'x'
+		}
+		_, _ = cn.Write(huge)
+	}()
+
+	client := testClient(t, ln.Addr().String(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	events, err := admin.Watch(ctx, WatchFetchers)
+	noError(t, err)
+	ev, ok := <-events
+	isFalse(t, ok)
+	if ev.Raw != nil {
+		t.Fatalf("oversized watch line must not be delivered, got %#v", ev)
 	}
 }

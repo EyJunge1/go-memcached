@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"strconv"
+	"strings"
 )
 
 func (f *fakeMemcached) store(fields []string, r *bufio.Reader, w *bufio.Writer) bool {
@@ -50,6 +51,18 @@ func (f *fakeMemcached) store(fields []string, r *bufio.Reader, w *bufio.Writer)
 	value := append([]byte(nil), body[:nbytes]...)
 
 	f.mu.Lock()
+	f.lastSet = strings.Join(fields, " ")
+	if cmd == "set" && key == "_" {
+		f.authSets++
+	}
+	if f.tokenAuth && cmd == "set" && key == "_" {
+		f.mu.Unlock()
+		if !noReply {
+			_, _ = w.WriteString("STORED\r\n")
+			_ = w.Flush()
+		}
+		return true
+	}
 	existing, ok := f.items[key]
 	switch cmd {
 	case "add":
@@ -139,6 +152,26 @@ func (f *fakeMemcached) delete(fields []string, w *bufio.Writer) {
 	}
 	if ok {
 		_, _ = w.WriteString("DELETED\r\n")
+	} else {
+		_, _ = w.WriteString("NOT_FOUND\r\n")
+	}
+	_ = w.Flush()
+}
+
+func (f *fakeMemcached) touch(fields []string, w *bufio.Writer) {
+	if len(fields) < 3 {
+		_, _ = w.WriteString("CLIENT_ERROR bad command line\r\n")
+		_ = w.Flush()
+		return
+	}
+	f.mu.Lock()
+	item, ok := f.items[fields[1]]
+	if ok {
+		item.exptime = fields[2]
+	}
+	f.mu.Unlock()
+	if ok {
+		_, _ = w.WriteString("TOUCHED\r\n")
 	} else {
 		_, _ = w.WriteString("NOT_FOUND\r\n")
 	}

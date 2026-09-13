@@ -65,7 +65,7 @@ func Test_buildMetaSetCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, resp := buildMetaSetCommand(key, value, tt.flags)
-			equal(t, string(tt.wantRequestRaw), string(req.raw))
+			equal(t, string(tt.wantRequestRaw), string(req.wire()))
 			equal(t, tt.wantRespIndicator, resp.endIndicator)
 		})
 	}

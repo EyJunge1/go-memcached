@@ -15,15 +15,39 @@ func newMurmur3(seed uint64) *murmur3 {
 }
 
 func (h *murmur3) hash(key []byte) uint64 {
-	length := len(key)
+	return h.hash2(key, nil)
+}
+
+func copyJoin(dst, a, b []byte, off int) {
+	n := len(dst)
+	if off < len(a) {
+		take := len(a) - off
+		if take > n {
+			take = n
+		}
+		copy(dst, a[off:off+take])
+		if take == n {
+			return
+		}
+		copy(dst[take:], b[:n-take])
+		return
+	}
+	start := off - len(a)
+	copy(dst, b[start:start+n])
+}
+
+func (h *murmur3) hash2(a, b []byte) uint64 {
+	length := len(a) + len(b)
 	sum := h.seed
 
 	nblocks := length / 8
+	var block [8]byte
 	for i := range nblocks {
-		k := uint64(key[i*8]) | uint64(key[i*8+1])<<8 |
-			uint64(key[i*8+2])<<16 | uint64(key[i*8+3])<<24 |
-			uint64(key[i*8+4])<<32 | uint64(key[i*8+5])<<40 |
-			uint64(key[i*8+6])<<48 | uint64(key[i*8+7])<<56
+		copyJoin(block[:], a, b, i*8)
+		k := uint64(block[0]) | uint64(block[1])<<8 |
+			uint64(block[2])<<16 | uint64(block[3])<<24 |
+			uint64(block[4])<<32 | uint64(block[5])<<40 |
+			uint64(block[6])<<48 | uint64(block[7])<<56
 
 		k *= murmur3c1
 		k = (k << 31) | (k >> 33)
@@ -34,33 +58,37 @@ func (h *murmur3) hash(key []byte) uint64 {
 		sum = sum*5 + 0x52dce729
 	}
 
-	tail := key[nblocks*8:]
-	k2 := uint64(0)
-	switch length & 7 {
-	case 7:
-		k2 ^= uint64(tail[6]) << 48
-		fallthrough
-	case 6:
-		k2 ^= uint64(tail[5]) << 40
-		fallthrough
-	case 5:
-		k2 ^= uint64(tail[4]) << 32
-		fallthrough
-	case 4:
-		k2 ^= uint64(tail[3]) << 24
-		fallthrough
-	case 3:
-		k2 ^= uint64(tail[2]) << 16
-		fallthrough
-	case 2:
-		k2 ^= uint64(tail[1]) << 8
-		fallthrough
-	case 1:
-		k2 ^= uint64(tail[0])
-		k2 *= murmur3c1
-		k2 = (k2 << 31) | (k2 >> 33)
-		k2 *= murmur3c2
-		sum ^= k2
+	rem := length & 7
+	if rem > 0 {
+		var tail [7]byte
+		copyJoin(tail[:rem], a, b, nblocks*8)
+		k2 := uint64(0)
+		switch rem {
+		case 7:
+			k2 ^= uint64(tail[6]) << 48
+			fallthrough
+		case 6:
+			k2 ^= uint64(tail[5]) << 40
+			fallthrough
+		case 5:
+			k2 ^= uint64(tail[4]) << 32
+			fallthrough
+		case 4:
+			k2 ^= uint64(tail[3]) << 24
+			fallthrough
+		case 3:
+			k2 ^= uint64(tail[2]) << 16
+			fallthrough
+		case 2:
+			k2 ^= uint64(tail[1]) << 8
+			fallthrough
+		case 1:
+			k2 ^= uint64(tail[0])
+			k2 *= murmur3c1
+			k2 = (k2 << 31) | (k2 >> 33)
+			k2 *= murmur3c2
+			sum ^= k2
+		}
 	}
 
 	sum ^= uint64(length)

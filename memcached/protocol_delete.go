@@ -1,17 +1,17 @@
 package memcached
 
 // delete <key> [noreply]\r\n
-func buildDeleteCommand(key string, noReply bool) (*request, *response) {
+func buildDeleteCommand(key []byte, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString("delete").
-		AddString(key)
+		AddBytes(key)
 	defer b.release()
 
 	if noReply {
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	req := buildRequest([]byte("delete"), []byte(key), b.AddCRLF().build())
+	req := buildRequest([]byte("delete"), key, b.AddCRLF().build())
 
 	var resp *response
 	if noReply {

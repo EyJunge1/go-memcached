@@ -486,3 +486,67 @@ func Test_connPool_discard(t *testing.T) {
 	equal(t, 0, pool.stats().IdleConns)
 	isTrue(t, cn.(*closeTrackingConn).closed.Load())
 }
+
+func TestMinIdleDoesNotRetainIdleExpired(t *testing.T) {
+	var created atomic.Int32
+	pool := newConnPool(2, 4, 0, time.Hour, func(context.Context) (memcachedConn, error) {
+		created.Add(1)
+		return newMockConn(), nil
+	})
+	pool.minIdle = 1
+	fixed := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	orig := nowFunc
+	nowFunc = func() time.Time { return fixed }
+	t.Cleanup(func() { nowFunc = orig })
+
+	old := newMockConn()
+	old.createdAt = fixed.Add(-time.Minute)
+	old.returnedAt = fixed.Add(-2 * time.Hour)
+	pool.conns <- old
+	pool.numOpen.Store(1)
+
+	_, closing := pool.connectionCleanerRunLocked(time.Hour)
+	hasLen(t, closing, 1)
+	equal(t, 0, len(pool.conns))
+	for _, cn := range closing {
+		_ = cn.Close()
+		pool.numOpen.Add(-1)
+	}
+	pool.ensureMinIdle(context.Background())
+	equal(t, 1, len(pool.conns))
+	equal(t, 1, int(pool.numOpen.Load()))
+	equal(t, int32(1), created.Load())
+	fresh := <-pool.conns
+	if fresh == old {
+		t.Fatal("minIdle retained the idle-expired connection")
+	}
+}
+
+func TestCleanerDoesNotExceedMaxConnsUnderGet(t *testing.T) {
+	pool := newConnPool(2, 2, 0, 50*time.Millisecond, createConn)
+	pool.minIdle = 2
+	ctx := context.Background()
+	cn, err := pool.get(ctx)
+	noError(t, err)
+	noError(t, pool.put(cn))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 20 {
+			got, err := pool.get(ctx)
+			if err != nil {
+				return
+			}
+			_ = pool.put(got)
+		}
+	}()
+	_, closing := pool.connectionCleanerRunLocked(time.Hour)
+	for _, c := range closing {
+		_ = c.Close()
+		pool.numOpen.Add(-1)
+	}
+	pool.ensureMinIdle(ctx)
+	<-done
+	lessOrEqual(t, int(pool.numOpen.Load()), pool.maxConns)
+}

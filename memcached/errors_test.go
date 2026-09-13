@@ -31,6 +31,11 @@ type ioTimeoutError struct{}
 
 func (ioTimeoutError) Error() string { return "i/o timeout" }
 
+func TestTransportSentinel(t *testing.T) {
+	err := wrapTransport(fmt.Errorf("dial failed: %w", ioTimeoutError{}))
+	isErrorIs(t, err, ErrTransport)
+}
+
 func TestErrorsJoinPreservesJoinedSentinels(t *testing.T) {
 	joined := errors.Join(
 		fmt.Errorf("node-a: %w", ErrNotFound),

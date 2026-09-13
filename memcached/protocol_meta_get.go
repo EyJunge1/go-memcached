@@ -24,9 +24,9 @@ type metaGetFlags struct {
 
 	// These flags can modify the item:
 	E uint64 // E(token): use token as new CAS value if item is modified
-	N uint64 // N(token): vivify on miss, takes TTL as a argument
-	R uint64 // R(token): if remaining TTL is less than token, win for recache
-	T uint64 // T(token): update remaining TTL
+	N int64  // N(token): vivify on miss, takes TTL as a argument
+	R int64  // R(token): if remaining TTL is less than token, win for recache
+	T int64  // T(token): update remaining TTL
 
 	Oset      bool
 	OtokenSet bool
@@ -36,126 +36,8 @@ type metaGetFlags struct {
 	Tset      bool
 	C         uint64
 	Cset      bool
-
-	// These extra flags can be added to the response:
-	W bool // W: client has "won" the recache flag
-	X bool // X: item is stale
-	Z bool // Z: item has already sent a winning flag
-}
-
-// MetaGetOption is the option to set flags for meta get command.
-type MetaGetOption func(*metaGetFlags)
-
-// MetaGetFlagBinaryKey sets the flag to interpret key as base64 encoded binary value.
-func MetaGetFlagBinaryKey() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.b = true }
-}
-
-// MetaGetFlagReturnCAS sets the flag to return item cas token.
-func MetaGetFlagReturnCAS() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.c = true }
-}
-
-// MetaGetFlagReturnClientFlags sets the flag to return client flags token.
-func MetaGetFlagReturnClientFlags() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.f = true }
-}
-
-// MetaGetFlagReturnHitBefore sets the flag to return whether item has been hit before as a 0 or 1.
-func MetaGetFlagReturnHitBefore() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.h = true }
-}
-
-// MetaGetFlagReturnKey sets the flag to return key as a token.
-func MetaGetFlagReturnKey() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.k = true }
-}
-
-// MetaGetFlagReturnLastAccessedTime sets the flag to return time since item was last accessed in seconds.
-func MetaGetFlagReturnLastAccessedTime() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.l = true }
-}
-
-// MetaGetFlagOpaque sets the flag to opaque value, consumes a token and copies back with response.
-func MetaGetFlagOpaque(token uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.O = token; flags.Oset = true }
-}
-
-// MetaGetFlagOpaqueToken sets a string opaque token (1–32 bytes, no whitespace).
-func MetaGetFlagOpaqueToken(token string) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.Otoken = token; flags.OtokenSet = true }
-}
-
-// MetaGetFlagCheckCAS requests a value only when the item CAS differs from cas.
-// A match returns HD without a body (CASMatched on MetaItem).
-func MetaGetFlagCheckCAS(cas uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.C = cas; flags.Cset = true }
-}
-
-// MetaGetFlagNoReply sets the flag to use noreply semantics for return codes.
-func MetaGetFlagNoReply() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.q = true }
-}
-
-// MetaGetFlagReturnSize sets the flag to return item size token.
-func MetaGetFlagReturnSize() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.s = true }
-}
-
-// MetaGetFlagReturnTTL sets the flag to return item TTL remaining in seconds (-1 for unlimited).
-func MetaGetFlagReturnTTL() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.t = true }
-}
-
-// MetaGetFlagDontBumpLRU sets the flag to don't bump the item in the LRU.
-func MetaGetFlagDontBumpLRU() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.u = true }
-}
-
-// MetaGetFlagReturnValue sets the flag to return item value in <data block>.
-func MetaGetFlagReturnValue() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.v = true }
-}
-
-// MetaGetFlagNewCAS sets the flag to use token as new CAS value if item is modified.
-func MetaGetFlagNewCAS(casUnique uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.E = casUnique; flags.Eset = true }
-}
-
-// MetaGetFlagVivifyOnMiss sets the flag to vivify on miss, takes TTL as an argument.
-func MetaGetFlagVivifyOnMiss(ttl uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.N = ttl; flags.Nset = true }
-}
-
-// MetaGetFlagWinForRecache sets the flag to if remaining TTL is less than token, win for recache.
-func MetaGetFlagWinForRecache(ttl uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.R = ttl; flags.Rset = true }
-}
-
-// MetaGetFlagUpdateRemainingTTL sets the flag to update remaining TTL.
-func MetaGetFlagUpdateRemainingTTL(ttl uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.T = ttl; flags.Tset = true }
-}
-
-// MetaGetFlagClientHasWonRecache is a no-op. W is a response-only flag.
-//
-// Deprecated: W is parsed onto MetaItem.Won; do not send it on requests.
-func MetaGetFlagClientHasWonRecache() MetaGetOption {
-	return func(*metaGetFlags) {}
-}
-
-// MetaGetFlagItemIsStale is a no-op. X is a response-only flag.
-//
-// Deprecated: X is parsed onto MetaItem.Stale; do not send it on requests.
-func MetaGetFlagItemIsStale() MetaGetOption {
-	return func(*metaGetFlags) {}
-}
-
-// MetaGetFlagItemHasSentWinningFlag is a no-op. Z is a response-only flag.
-//
-// Deprecated: Z is parsed onto MetaItem.RecacheBusy; do not send it on requests.
-func MetaGetFlagItemHasSentWinningFlag() MetaGetOption {
-	return func(*metaGetFlags) {}
+	P         string
+	L         string
 }
 
 func encodeMetaGetLine(key []byte, flags *metaGetFlags) ([]byte, []byte) {
@@ -184,9 +66,11 @@ func encodeMetaGetLine(key []byte, flags *metaGetFlags) ([]byte, []byte) {
 
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)
-	b.AddFlagUintPresent("N", flags.N, flags.Nset)
-	b.AddFlagUintPresent("R", flags.R, flags.Rset)
-	b.AddFlagUintPresent("T", flags.T, flags.Tset)
+	b.AddFlagInt64Present("N", flags.N, flags.Nset)
+	b.AddFlagInt64Present("R", flags.R, flags.Rset)
+	b.AddFlagInt64Present("T", flags.T, flags.Tset)
+	b.AddFlagString("P", flags.P)
+	b.AddFlagString("L", flags.L)
 
 	return wireKey, b.AddCRLF().build()
 }
@@ -257,14 +141,19 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, wantValue bool) erro
 	)
 	cd := parts[CDIndex]
 
+	item.Status = metaStatusFromCD(cd)
 	switch string(cd) {
 	case "NF":
+		_ = parseFlags(parts, 1, item)
 		return ErrNotFound
 	case "NS":
+		_ = parseFlags(parts, 1, item)
 		return ErrNotStored
 	case "EX":
+		_ = parseFlags(parts, 1, item)
 		return ErrExists
 	case "EN":
+		_ = parseFlags(parts, 1, item)
 		return ErrNotFound
 	}
 
@@ -381,6 +270,11 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 			var hitBefore uint64
 			hitBefore, err = parseUint(flag, value)
 			item.HitBefore = hitBefore == 1
+		case 'k':
+			item.WireKey = append([]byte(nil), value...)
+			item.Key = item.WireKey
+		case 'b':
+			item.KeyBase64 = true
 		case 'W':
 			item.Won = true
 		case 'X':
@@ -391,6 +285,13 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 		if err != nil {
 			return err
 		}
+	}
+	if item.KeyBase64 && len(item.WireKey) > 0 {
+		dec, derr := base64Decode(item.WireKey)
+		if derr != nil {
+			return fmt.Errorf("invalid k/b key: %w", ErrMalformedResponse)
+		}
+		item.Key = dec
 	}
 
 	return nil
@@ -411,7 +312,7 @@ func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
 		if len(parts) == 0 {
 			return nil, fmt.Errorf("empty meta line: %w", ErrMalformedResponse)
 		}
-		item := &MetaItem{}
+		item := &MetaItem{Status: metaStatusFromCD(parts[0])}
 		if bytes.Equal(parts[0], []byte("VA")) {
 			if i+1 >= len(lines) {
 				return nil, fmt.Errorf("missing value: %w", ErrMalformedResponse)

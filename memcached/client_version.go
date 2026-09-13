@@ -12,14 +12,8 @@ func (c *Client) Ping(ctx context.Context) error {
 	call := func(ctx context.Context, addr *Addr, cn memcachedConn) error {
 		req, resp := buildVersionCommand()
 		defer releaseReqAndResp(req, resp)
-
-		c.enableUDPFraming(addr, req, resp)
-
-		if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
-			return wrapTransport(fmt.Errorf("send failed: %w", err))
-		}
-		if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
-			return wrapRecvError(fmt.Errorf("recv failed: %w", err))
+		if err := c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
+			return err
 		}
 		if len(resp.rawLines) == 0 || !bytes.HasPrefix(resp.rawLines[0], _VersionBytes) {
 			return wrapRecvError(fmt.Errorf("unexpected ping response: %w", ErrMalformedResponse))
@@ -59,12 +53,8 @@ func (c *Client) VersionAll(ctx context.Context) (map[string]string, error) {
 	err := c.broadcastRequest(ctx, func(ctx context.Context, addr *Addr, cn memcachedConn) error {
 		req, resp := buildVersionCommand()
 		defer releaseReqAndResp(req, resp)
-		c.enableUDPFraming(addr, req, resp)
-		if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
-			return wrapTransport(fmt.Errorf("send failed: %w", err))
-		}
-		if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
-			return wrapRecvError(fmt.Errorf("recv failed: %w", err))
+		if err := c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
+			return err
 		}
 		ver, err := parseVersionLine(resp.rawLines)
 		if err != nil {

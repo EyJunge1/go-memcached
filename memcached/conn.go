@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +16,46 @@ import (
 type nowFuncType func() time.Time
 
 var nowFunc nowFuncType = time.Now
+
+const connWriteBufferSize = 16 << 10
+
+var udpScratchPool = sync.Pool{New: func() any {
+	b := make([]byte, 65535)
+	return b
+}}
+
+func applyTCPNoDelay(c net.Conn, on bool) {
+	type netConner interface{ NetConn() net.Conn }
+	for i := 0; i < 3 && c != nil; i++ {
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetNoDelay(on)
+			return
+		}
+		if nc, ok := c.(netConner); ok {
+			c = nc.NetConn()
+			continue
+		}
+		return
+	}
+}
+
+func checkUnixSocketMode(path string, anyMode bool, maxMode os.FileMode) error {
+	if anyMode && maxMode == 0 {
+		return nil
+	}
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("unix socket: %w", err)
+	}
+	perm := fi.Mode().Perm()
+	if !anyMode && perm&0o002 != 0 {
+		return fmt.Errorf("unix socket is world-writable: %w", ErrInvalidArgument)
+	}
+	if maxMode != 0 && perm&^maxMode.Perm() != 0 {
+		return fmt.Errorf("unix socket mode %#o exceeds max %#o: %w", perm, maxMode.Perm(), ErrInvalidArgument)
+	}
+	return nil
+}
 
 // memcachedConn wraps a net.Conn and provides a way to read and write data
 // from the connection.
@@ -42,6 +84,7 @@ type memcachedConn interface {
 
 	setReadDeadline(d time.Time) error
 	setWriteDeadline(d time.Time) error
+	Flush() error
 }
 
 var _ memcachedConn = (*conn)(nil) // tcp socket
@@ -66,12 +109,20 @@ type conn struct {
 	wr *bufio.Writer
 }
 
-// newConnWithContext dials a TCP connection
-func newConnContext(ctx context.Context, addr *Addr, dialTimeout, keepAlive time.Duration, dialFn DialContextFunc) (*conn, error) {
-	rawConn, err := addr.dial(ctx, dialTimeout, keepAlive, dialFn)
+func newConnContext(ctx context.Context, addr *Addr, o *clientOptions) (*conn, error) {
+	if o == nil {
+		o = &clientOptions{tcpNoDelay: true}
+	}
+	if addr != nil && strings.HasPrefix(addr.Network, "unix") {
+		if err := checkUnixSocketMode(addr.Address, o.unixSocketAnyMode, o.unixSocketMaxMode); err != nil {
+			return nil, err
+		}
+	}
+	rawConn, err := addr.dial(ctx, o.dialTimeout, o.keepAlive, o.dialContext)
 	if err != nil {
 		return nil, fmt.Errorf("dialContext: %w", err)
 	}
+	applyTCPNoDelay(rawConn, o.tcpNoDelay)
 
 	cn := &conn{
 		createdAt:  nowFunc(),
@@ -79,7 +130,7 @@ func newConnContext(ctx context.Context, addr *Addr, dialTimeout, keepAlive time
 		raw:        rawConn,
 		addr:       rawConn.RemoteAddr(),
 		rr:         bufio.NewReader(rawConn),
-		wr:         bufio.NewWriter(rawConn),
+		wr:         bufio.NewWriterSize(rawConn, connWriteBufferSize),
 	}
 
 	return cn, nil
@@ -132,6 +183,7 @@ func (c *conn) readExact(n int) ([]byte, error) {
 	if n < 0 {
 		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
 	}
+	// Owned buffer: VALUE/VA payloads are stored on the response and Item.
 	buf := make([]byte, n)
 	_, err := io.ReadFull(c.rr, buf)
 	return buf, err
@@ -141,12 +193,16 @@ func (c *conn) readDatagram() ([]byte, error) {
 	if c.isClosed() {
 		return nil, errors.New("connection is closed")
 	}
-	buf := make([]byte, 65535)
-	n, err := c.raw.Read(buf)
+	scratch := udpScratchPool.Get().([]byte)
+	n, err := c.raw.Read(scratch)
 	if err != nil {
+		udpScratchPool.Put(scratch)
 		return nil, err
 	}
-	return buf[:n], nil
+	out := make([]byte, n)
+	copy(out, scratch[:n])
+	udpScratchPool.Put(scratch)
+	return out, nil
 }
 
 // Read reads data from the connection
@@ -164,11 +220,14 @@ func (c *conn) Write(p []byte) (n int, err error) {
 		return 0, errors.New("connection is closed")
 	}
 
-	n, err = c.wr.Write(p)
-	if err != nil {
-		return n, err
+	return c.wr.Write(p)
+}
+
+func (c *conn) Flush() error {
+	if c.isClosed() {
+		return errors.New("connection is closed")
 	}
-	return n, c.wr.Flush()
+	return c.wr.Flush()
 }
 
 // Close closes the connection

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
 
 // libmemcached-awesome 1.1.4 continuum constants (hosts.cc / constants).
@@ -36,8 +36,7 @@ const (
 
 // KetamaOptions configures NewKetamaPickBuilder.
 //
-// The default picker of this package is CRC32-IEEE modulo N — not Ketama.
-// Use this builder only when sharing a cluster with libmemcached / php-memcached.
+// The default picker of this package is weighted Ketama/MD5.
 // php-memcached OPT_LIBKETAMA_COMPATIBLE is Weighted: true and Hash MD5.
 type KetamaOptions struct {
 	Hash            KetamaHash
@@ -77,17 +76,19 @@ type ketamaPoint struct {
 	index int
 }
 
-type ketamaPicker struct {
-	hash     KetamaHash
-	weighted bool
-	points   int
-
-	mu        sync.Mutex
+type ketamaHot struct {
 	cacheKey  string
 	continuum []ketamaPoint
 }
 
-func (p *ketamaPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error) {
+type ketamaPicker struct {
+	hash     KetamaHash
+	weighted bool
+	points   int
+	hot      atomic.Pointer[ketamaHot]
+}
+
+func (p *ketamaPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
 	n := len(addrs)
 	if n == 0 {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
@@ -114,17 +115,14 @@ func (p *ketamaPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error) {
 
 func (p *ketamaPicker) continuumFor(addrs []*Addr) ([]ketamaPoint, error) {
 	key := ketamaCacheKey(addrs)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cacheKey == key && p.continuum != nil {
-		return p.continuum, nil
+	if h := p.hot.Load(); h != nil && h.cacheKey == key && h.continuum != nil {
+		return h.continuum, nil
 	}
 	cont, err := buildKetamaContinuum(addrs, p.hash, p.weighted, p.points)
 	if err != nil {
 		return nil, err
 	}
-	p.cacheKey = key
-	p.continuum = cont
+	p.hot.Store(&ketamaHot{cacheKey: key, continuum: cont})
 	return cont, nil
 }
 

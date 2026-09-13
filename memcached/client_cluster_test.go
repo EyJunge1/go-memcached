@@ -162,7 +162,7 @@ func Test_rendezvousHash_Pick(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			addr, err := picker.Pick(addrs, []byte(tt.args.cmd), []byte(tt.args.key))
+			addr, err := picker.Pick(addrs, []byte(tt.args.key))
 			noError(t, err)
 			notNil(t, addr)
 			equal(t, tt.wantAddress, addr.Address)
@@ -174,14 +174,14 @@ func Test_crc32HashPicker_distributes(t *testing.T) {
 	addrs, err := newDefaultResolver().Resolve("localhost:11211,localhost:11212")
 	noError(t, err)
 	p := NewCRC32HashPickBuilder().Build(addrs)
-	a, err := p.Pick(addrs, nil, []byte("alpha"))
+	a, err := p.Pick(addrs, []byte("alpha"))
 	noError(t, err)
-	b, err := p.Pick(addrs, nil, []byte("beta"))
+	b, err := p.Pick(addrs, []byte("beta"))
 	noError(t, err)
 	notNil(t, a)
 	notNil(t, b)
 	// Deterministic: same key always same node.
-	a2, err := p.Pick(addrs, nil, []byte("alpha"))
+	a2, err := p.Pick(addrs, []byte("alpha"))
 	noError(t, err)
 	equal(t, a.Address, a2.Address)
 }
@@ -200,9 +200,15 @@ func Test_murmur3_knownVector(t *testing.T) {
 	addr, err := p.Pick([]*Addr{
 		NewAddr("tcp", "127.0.0.1:11211", 0),
 		NewAddr("tcp", "127.0.0.1:11212", 1),
-	}, nil, []byte("hello"))
+	}, []byte("hello"))
 	noError(t, err)
 	notNil(t, addr)
+}
+
+func Test_rendezvousHash_Pick_empty(t *testing.T) {
+	p := NewRendezvousHashPickBuilder(1).Build(nil)
+	_, err := p.Pick(nil, []byte("k"))
+	isErrorIs(t, err, ErrInvalidAddress)
 }
 
 func Test_rendezvousHash_Pick_stable(t *testing.T) {
@@ -212,7 +218,7 @@ func Test_rendezvousHash_Pick_stable(t *testing.T) {
 	builder := NewRendezvousHashPickBuilder(120)
 	picker := builder.Build(addrsBefore)
 
-	addr, err := picker.Pick(addrsBefore, []byte("set"), []byte("key"))
+	addr, err := picker.Pick(addrsBefore, []byte("key"))
 	noError(t, err)
 	notNil(t, addr)
 	equal(t, addrsBefore[0], addr)
@@ -222,7 +228,7 @@ func Test_rendezvousHash_Pick_stable(t *testing.T) {
 	addrsAfter, err := newDefaultResolver().Resolve("localhost:11211,localhost:11213")
 	noError(t, err)
 
-	addr2, err := picker.Pick(addrsAfter, []byte("set"), []byte("key"))
+	addr2, err := picker.Pick(addrsAfter, []byte("key"))
 	noError(t, err)
 	notNil(t, addr2)
 	equal(t, "localhost:11211", addr2.Address)

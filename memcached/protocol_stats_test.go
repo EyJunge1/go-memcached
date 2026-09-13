@@ -85,6 +85,21 @@ func Test_parseStats(t *testing.T) {
 	}
 }
 
+func Test_parseStats_protocolTxtFixture(t *testing.T) {
+	got, err := parseStats([][]byte{
+		[]byte("STAT pid 668\r\n"),
+		[]byte("STAT uptime 135645\r\n"),
+		[]byte("STAT time 1256570097\r\n"),
+		[]byte("STAT version 1.4.3\r\n"),
+		[]byte("END\r\n"),
+	})
+	noError(t, err)
+	equal(t, int64(668), got.PID)
+	equal(t, int64(135645), got.Uptime)
+	equal(t, int64(1256570097), got.Time)
+	equal(t, "1.4.3", got.Version)
+}
+
 func Test_parseStatsMap(t *testing.T) {
 	got, err := parseStatsMap([][]byte{
 		[]byte("STAT items:1:number 2\r\n"),

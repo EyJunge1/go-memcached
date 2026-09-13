@@ -3,17 +3,16 @@ package memcached
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // Touch updates expiration without fetching the item.
-func (c *Client) Touch(ctx context.Context, key string, expiry time.Duration, opts ...ItemWriteOption) error {
-	key = c.nsString(key)
-	if err := validateKeyAndValue([]byte(key), nil); err != nil {
+func (c *Client) Touch(ctx context.Context, key []byte, expiry Exptime) error {
+	key = c.nsBytes(key)
+	if err := validateKeyAndValue(key, nil); err != nil {
 		return err
 	}
 
-	req, resp := buildTouchCommand(key, expiry, c.resolveNoReply(opts))
+	req, resp := buildTouchCommand(key, expiry, false)
 	defer releaseReqAndResp(req, resp)
 
 	resp.afterRecv = expectLine(_TouchedCRLFBytes)

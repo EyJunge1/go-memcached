@@ -6,33 +6,30 @@ import (
 )
 
 // MetaDelete deletes a key with meta flags.
-func (c *Client) MetaDelete(ctx context.Context, key []byte, options ...MetaDeleteOption) (*MetaItem, error) {
-	mdFlags := &metaDeleteFlags{}
-	for _, applyFn := range options {
-		applyFn(mdFlags)
+func (c *Client) MetaDelete(ctx context.Context, key []byte, f MetaDelete) (MetaResult, error) {
+	if err := f.validate(); err != nil {
+		return MetaResult{}, err
 	}
+	mdFlags := f.toFlags()
 	key = c.nsBytes(key)
-	if err := validateKeyAndValueFlags(key, nil, mdFlags.b); err != nil {
-		return nil, err
+	if err := c.checkKeyValueFlags(key, nil, mdFlags.b); err != nil {
+		return MetaResult{}, err
 	}
 	if mdFlags.OtokenSet {
 		if err := validOpaqueToken(mdFlags.Otoken); err != nil {
-			return nil, err
+			return MetaResult{}, err
 		}
 	}
 
 	req, resp := buildMetaDeleteCommand(key, mdFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItem{
-		Key: key,
-	}
+	item := &MetaItem{Key: key}
 	resp.afterRecv = func(r *response) error {
 		return parseMetaItem(r.rawLines, item, mdFlags.q, false)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
 	}
-
-	return item, nil
+	return metaResultFrom(item, item.Status), nil
 }

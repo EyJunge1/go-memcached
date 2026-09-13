@@ -21,11 +21,26 @@ type request struct {
 	cmd []byte // command name
 	key []byte // key is nil if the command DOES NOT need key
 	raw []byte
+	// body and tail are written after raw so storage values are not copied
+	// into the builder buffer.
+	body []byte
+	tail []byte
 
 	// this field is used to indicate whether the request is UDP enabled.
 	// And it's set by the memcached client before sending the request.
 	udpEnabled bool
 	udpReqID   uint16
+}
+
+func (req *request) wire() []byte {
+	if len(req.body) == 0 && len(req.tail) == 0 {
+		return req.raw
+	}
+	out := make([]byte, 0, len(req.raw)+len(req.body)+len(req.tail))
+	out = append(out, req.raw...)
+	out = append(out, req.body...)
+	out = append(out, req.tail...)
+	return out
 }
 
 func buildRequest(cmd []byte, key []byte, raw []byte) *request {
@@ -40,6 +55,8 @@ func (req *request) release() {
 	req.cmd = nil
 	req.key = nil
 	req.raw = nil
+	req.body = nil
+	req.tail = nil
 	req.udpEnabled = false
 	req.udpReqID = 0
 
@@ -56,8 +73,24 @@ func (req *request) send(ctx context.Context, rr memcachedConn, writeTimeout tim
 	if req.udpEnabled {
 		return req.sendUDP(rr)
 	}
+	if err = req.write(rr); err != nil {
+		return err
+	}
+	return rr.Flush()
+}
 
-	_, err = rr.Write(req.raw)
+func (req *request) write(rr memcachedConn) (err error) {
+	if _, err = rr.Write(req.raw); err != nil {
+		return err
+	}
+	if len(req.body) > 0 {
+		if _, err = rr.Write(req.body); err != nil {
+			return err
+		}
+	}
+	if len(req.tail) > 0 {
+		_, err = rr.Write(req.tail)
+	}
 	return err
 }
 

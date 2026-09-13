@@ -37,6 +37,12 @@ func (f *fakeMemcached) lruCrawler(fields []string, w *bufio.Writer) {
 			_ = w.Flush()
 			return
 		}
+		f.mu.Lock()
+		sendOK := f.dumpSendOK
+		f.mu.Unlock()
+		if sendOK {
+			_, _ = w.WriteString("OK\r\n")
+		}
 		if fields[1] == "metadump" {
 			_, _ = w.WriteString("key=foo exp=-1 la=0 cas=1 fetch=no cls=1 size=3\r\nEND\r\n")
 		} else {
@@ -72,7 +78,7 @@ func (f *fakeMemcached) stats(fields []string, w *bufio.Writer) {
 		return
 	}
 	if arg == "" {
-		_, _ = w.WriteString("STAT pid 1\r\nSTAT version fake-1.0\r\nEND\r\n")
+		_, _ = w.WriteString("STAT pid 668\r\nSTAT uptime 135645\r\nSTAT version fake-1.0\r\nEND\r\n")
 	} else {
 		_, _ = w.WriteString("STAT arg " + arg + "\r\nEND\r\n")
 	}

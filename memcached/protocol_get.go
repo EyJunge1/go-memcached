@@ -4,24 +4,23 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"time"
 )
 
 // buildGetsCommand constructs gets command.
 // get/gets <key>*\r\n
-func buildGetsCommand(command string, keys ...string) (*request, *response) {
+func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command)
 	defer b.release()
 
 	for _, key := range keys {
-		b.AddString(key)
+		b.AddBytes(key)
 	}
 	b.AddCRLF()
 
 	var pickKey []byte
 	if len(keys) == 1 {
-		pickKey = []byte(keys[0])
+		pickKey = keys[0]
 	}
 	req := buildRequest([]byte(command), pickKey, b.build())
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
@@ -31,21 +30,21 @@ func buildGetsCommand(command string, keys ...string) (*request, *response) {
 
 // buildGetAndTouchCommand constructs get and touch command.
 // gat/gats <exptime> <key>*\r\n
-func buildGetAndTouchesCommand(command string, expiry time.Duration, keys ...string) (*request, *response) {
+func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command).
 		AddInt64(expiryToken(expiry))
 	defer b.release()
 
 	for _, key := range keys {
-		b.AddString(key)
+		b.AddBytes(key)
 	}
 
 	b.AddCRLF()
 
 	var pickKey []byte
 	if len(keys) == 1 {
-		pickKey = []byte(keys[0])
+		pickKey = keys[0]
 	}
 	req := buildRequest([]byte(command), pickKey, b.build())
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
@@ -118,11 +117,7 @@ func dataBlockValue(raw []byte, size uint64) ([]byte, error) {
 	if uint64(len(raw)) == size+2 && bytes.HasSuffix(raw, _CRLFBytes) {
 		return raw[:size], nil
 	}
-	trimmed := trimCRLF(raw)
-	if uint64(len(trimmed)) != size {
-		return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
-	}
-	return trimmed, nil
+	return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
 }
 
 // parseValueLine extract item from VALUE line, like following:
@@ -156,7 +151,7 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 		// the 'i' is the index of space or the last byte.
 		switch nField {
 		case keyIndex:
-			item.Key = byteSliceToString(line[fieldStart:i])
+			item.Key = append(item.Key[:0], line[fieldStart:i]...)
 		case flagsIndex:
 			flags, err := parseUintFromBytes(line[fieldStart:i])
 			if err != nil {
@@ -190,8 +185,11 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 		nField++
 	}
 
-	if item.Key == "" {
+	if len(item.Key) == 0 {
 		return 0, fmt.Errorf("empty VALUE key: %w", ErrMalformedResponse)
+	}
+	if withCas && nField < 5 {
+		return 0, fmt.Errorf("missing CAS field: %w", ErrMalformedResponse)
 	}
 
 	return dataLen, nil
@@ -224,8 +222,4 @@ func parseUintFromBytes(bs []byte) (uint64, error) {
 	}
 
 	return r, nil
-}
-
-func byteSliceToString(bs []byte) string {
-	return string(bs)
 }

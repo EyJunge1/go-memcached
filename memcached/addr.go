@@ -27,7 +27,8 @@ type Addr struct {
 	// Priority is not a weight.
 	Weight uint32
 
-	metadata map[string]any
+	metadata       map[string]any
+	cachedShortcut []byte
 }
 
 // NewAddr creates a new Addr with the given network, address and priority.
@@ -37,13 +38,15 @@ func NewAddr(network, address string, priority int) *Addr {
 
 // NewAddrWeighted creates a new Addr with an optional Ketama weight (0 means 1).
 func NewAddrWeighted(network, address string, priority int, weight uint32) *Addr {
-	return &Addr{
+	a := &Addr{
 		Network:  network,
 		Address:  address,
 		Priority: priority,
 		Weight:   weight,
 		metadata: make(map[string]any, 2),
 	}
+	a.cachedShortcut = shortcutBytes(a)
+	return a
 }
 
 func (a *Addr) ketamaWeight() uint32 {
@@ -53,8 +56,18 @@ func (a *Addr) ketamaWeight() uint32 {
 	return a.Weight
 }
 
-func (a *Addr) shortcut() []byte {
+func shortcutBytes(a *Addr) []byte {
 	return []byte(a.Network + "-" + a.Address + strconv.Itoa(a.Priority))
+}
+
+func (a *Addr) shortcut() []byte {
+	if a == nil {
+		return nil
+	}
+	if a.cachedShortcut != nil {
+		return a.cachedShortcut
+	}
+	return shortcutBytes(a)
 }
 
 // GetMetadata returns the metadata value by the given key.

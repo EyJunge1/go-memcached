@@ -36,7 +36,7 @@ type Resolver interface {
 // Picker is responsible for picking a given key to a specific Addr
 // while considering the cluster state.
 type Picker interface {
-	Pick(addr []*Addr, cmd, key []byte) (*Addr, error)
+	Pick(addrs []*Addr, key []byte) (*Addr, error)
 }
 
 // Builder is responsible for building a Picker from a given list of Addr.
@@ -155,7 +155,7 @@ func (r defaultResolver) resolveAddr(address string) (network, addr string, err 
 // It will pick an Addr by using the crc32 hash algorithm.
 type crc32HashPicker struct{}
 
-func (p *crc32HashPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error) {
+func (p *crc32HashPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
 	n := len(addrs)
 	if n == 0 {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
@@ -189,7 +189,7 @@ type murmur3HashPicker struct {
 	hash func([]byte) uint64
 }
 
-func (p *murmur3HashPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error) {
+func (p *murmur3HashPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
 	n := len(addrs)
 	if n == 0 {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
@@ -237,10 +237,17 @@ func (b murmur3HashPickBuilder) Build(_ []*Addr) Picker {
 // key1(node2 highest, node2) key2(node2 highest, node2), key3(node3 highest, node3)
 // only 1/3 keys was affected.
 type rendezvousHashPicker struct {
-	hash func([]byte) uint64
+	hash2 func(addrKey, itemKey []byte) uint64
 }
 
-func (p *rendezvousHashPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error) {
+func (p *rendezvousHashPicker) Pick(addrs []*Addr, key []byte) (*Addr, error) {
+	n := len(addrs)
+	if n == 0 {
+		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
+	}
+	if n == 1 {
+		return addrs[0], nil
+	}
 	highest := uint64(0)
 	var winner int
 
@@ -266,30 +273,31 @@ func (p *rendezvousHashPicker) Pick(addrs []*Addr, _, key []byte) (*Addr, error)
 }
 
 func (p *rendezvousHashPicker) score(addr *Addr, key []byte) uint64 {
-	_key := append(addr.shortcut(), key...)
-	return p.hash(_key)
+	return p.hash2(addr.shortcut(), key)
 }
 
 type rendezvousHashPickBuilder struct {
-	hash func(key []byte) uint64
+	hash2 func(addrKey, itemKey []byte) uint64
 }
 
 // NewRendezvousHashPickBuilder creates a new Builder with the given seed and hash function.
 func NewRendezvousHashPickBuilder(seed uint64) Builder {
-	return rendezvousHashPickBuilder{
-		hash: newMurmur3(seed).hash,
-	}
+	m := newMurmur3(seed)
+	return rendezvousHashPickBuilder{hash2: m.hash2}
 }
 
 // NewRendezvousHashPickBuilderWithHash creates a new Builder with the given hash function.
 func NewRendezvousHashPickBuilderWithHash(hash func(key []byte) uint64) Builder {
 	return rendezvousHashPickBuilder{
-		hash: hash,
+		hash2: func(addrKey, itemKey []byte) uint64 {
+			buf := make([]byte, 0, len(addrKey)+len(itemKey))
+			buf = append(buf, addrKey...)
+			buf = append(buf, itemKey...)
+			return hash(buf)
+		},
 	}
 }
 
 func (b rendezvousHashPickBuilder) Build(_ []*Addr) Picker {
-	return &rendezvousHashPicker{
-		hash: b.hash,
-	}
+	return &rendezvousHashPicker{hash2: b.hash2}
 }

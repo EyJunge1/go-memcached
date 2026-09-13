@@ -1,13 +1,18 @@
 package memcached
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"sync/atomic"
 )
 
-const udpHeaderSize = 8
+const (
+	udpHeaderSize   = 8
+	maxUDPDatagram  = 65507
+	maxUDPFragments = 8
+)
 
 var udpRequestID atomic.Uint32
 
@@ -24,7 +29,13 @@ func seedUDPRequestID() {
 }
 
 func nextUDPRequestID() uint16 {
-	// 16-bit field; skip 0 so an unset/spoofed header never matches a live request.
+	var b [2]byte
+	if _, err := crand.Read(b[:]); err == nil {
+		id := binary.BigEndian.Uint16(b[:])
+		if id != 0 {
+			return id
+		}
+	}
 	for {
 		id := uint16(udpRequestID.Add(1) & 0xffff) //nolint:gosec // G115: protocol field is 16-bit
 		if id != 0 {
@@ -37,19 +48,88 @@ func isUDPNetwork(network string) bool {
 	return network == "udp" || network == "udp4" || network == "udp6"
 }
 
+func udpRequestAllowed(req *request) error {
+	if req == nil {
+		return fmt.Errorf("udp: %w", ErrNotSupported)
+	}
+	switch string(req.cmd) {
+	case "get", "gets", "version":
+		return nil
+	case "mg", "mn":
+		return udpMetaRawAllowed(req.raw)
+	default:
+		return fmt.Errorf("udp %s: %w", req.cmd, ErrNotSupported)
+	}
+}
+
+func udpMetaRawAllowed(raw []byte) error {
+	for _, line := range bytes.Split(raw, []byte("\r\n")) {
+		fields := bytes.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch string(fields[0]) {
+		case "mn":
+			continue
+		case "mg":
+			if mgLineHasSideEffect(fields) {
+				return fmt.Errorf("udp meta side-effect: %w", ErrNotSupported)
+			}
+		default:
+			return fmt.Errorf("udp %s: %w", fields[0], ErrNotSupported)
+		}
+	}
+	return nil
+}
+
+func mgLineHasSideEffect(fields [][]byte) bool {
+	if len(fields) < 3 {
+		return false
+	}
+	for _, f := range fields[2:] {
+		if len(f) == 0 {
+			continue
+		}
+		switch f[0] {
+		case 'N', 'R', 'T', 'E':
+			return true
+		}
+	}
+	return false
+}
+
+func metaRawHasSideEffect(raw []byte) bool {
+	return udpMetaRawAllowed(raw) != nil
+}
+
+func idempotentReadCommand(cmd []byte) bool {
+	switch string(cmd) {
+	case "get", "gets", "version", "mg", "mn", "me":
+		return true
+	default:
+		return false
+	}
+}
+
 // sendUDP sends the request to the memcached server.
 // https://github.com/memcached/memcached/blob/master/doc/protocol.txt#L1875-L1914
 func (req *request) sendUDP(rr memcachedConn) (err error) {
+	payload := req.wire()
+	if udpHeaderSize+len(payload) > maxUDPDatagram {
+		return fmt.Errorf("udp datagram too large: %w", ErrNotSupported)
+	}
 	header := make([]byte, udpHeaderSize)
 	binary.BigEndian.PutUint16(header[0:2], req.udpReqID)
 	binary.BigEndian.PutUint16(header[2:4], 0)
 	binary.BigEndian.PutUint16(header[4:6], 1)
-	datagram := make([]byte, 0, udpHeaderSize+len(req.raw))
+	datagram := make([]byte, 0, udpHeaderSize+len(payload))
 	datagram = append(datagram, header...)
-	datagram = append(datagram, req.raw...)
+	datagram = append(datagram, payload...)
 
-	_, err = rr.Write(datagram)
-	return err
+	if _, err = rr.Write(datagram); err != nil {
+		return err
+	}
+	return rr.Flush()
 }
 
 func assembleUDP(rr memcachedConn, wantID uint16) ([]byte, error) {
@@ -68,9 +148,12 @@ func assembleUDP(rr memcachedConn, wantID uint16) ([]byte, error) {
 		if id != wantID {
 			continue
 		}
+		if binary.BigEndian.Uint16(dgram[6:8]) != 0 {
+			return nil, fmt.Errorf("udp reserved must be 0: %w", ErrMalformedResponse)
+		}
 		seq := int(binary.BigEndian.Uint16(dgram[2:4]))
 		tot := int(binary.BigEndian.Uint16(dgram[4:6]))
-		if tot <= 0 {
+		if tot <= 0 || tot > maxUDPFragments {
 			return nil, fmt.Errorf("invalid udp total: %w", ErrMalformedResponse)
 		}
 		if slots == nil {
@@ -82,10 +165,14 @@ func assembleUDP(rr memcachedConn, wantID uint16) ([]byte, error) {
 		if seq < 0 || seq >= total {
 			return nil, fmt.Errorf("udp sequence out of range: %w", ErrMalformedResponse)
 		}
+		payload := dgram[udpHeaderSize:]
 		if slots[seq] != nil {
+			if !bytes.Equal(slots[seq], payload) {
+				return nil, fmt.Errorf("udp fragment conflict: %w", ErrMalformedResponse)
+			}
 			continue
 		}
-		slots[seq] = dgram[udpHeaderSize:]
+		slots[seq] = payload
 		got++
 		if got == total {
 			n := 0

@@ -38,6 +38,8 @@ func (m *mockConn) Read(_ []byte) (b int, err error) { return 0, nil }
 
 func (m *mockConn) Write(_ []byte) (n int, err error) { return 0, nil }
 
+func (m *mockConn) Flush() error { return nil }
+
 func (m *mockConn) Close() error { return nil }
 
 func (m *mockConn) readLine(_ byte) ([]byte, error) { return nil, nil }

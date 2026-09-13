@@ -122,6 +122,29 @@ func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 	return req, buildLimitedLineResponse(1)
 }
 
+func mapAdminKeyword(tok string) error {
+	switch {
+	case tok == "BUSY" || strings.HasPrefix(tok, "BUSY "):
+		return ErrBusy
+	case tok == "BADCLASS" || strings.HasPrefix(tok, "BADCLASS "):
+		return ErrBadClass
+	case tok == "NOSPARE" || strings.HasPrefix(tok, "NOSPARE "):
+		return ErrNoSpare
+	case tok == "NOTFULL" || strings.HasPrefix(tok, "NOTFULL "):
+		return ErrNotFull
+	case tok == "UNSAFE" || strings.HasPrefix(tok, "UNSAFE "):
+		return ErrUnsafe
+	case tok == "SAME" || strings.HasPrefix(tok, "SAME "):
+		return ErrSame
+	case tok == "ERROR":
+		return ErrNonexistentCommand
+	case strings.HasPrefix(tok, "ERROR "):
+		return fmt.Errorf("%s: %w", tok, ErrInvalidArgument)
+	default:
+		return nil
+	}
+}
+
 func adminStreamLineError(s string) error {
 	if s == "" {
 		return nil
@@ -129,22 +152,7 @@ func adminStreamLineError(s string) error {
 	if err := forecastCommonFaultLine([]byte(s + "\r\n")); err != nil {
 		return err
 	}
-	switch {
-	case s == "BUSY" || strings.HasPrefix(s, "BUSY "):
-		return ErrBusy
-	case s == "BADCLASS" || strings.HasPrefix(s, "BADCLASS "):
-		return ErrBadClass
-	case s == "NOSPARE":
-		return ErrNoSpare
-	case s == "NOTFULL":
-		return ErrNotFull
-	case s == "UNSAFE":
-		return ErrUnsafe
-	case s == "SAME":
-		return ErrSame
-	default:
-		return nil
-	}
+	return mapAdminKeyword(s)
 }
 
 func parseAdminReply(resp *response) error {
@@ -159,26 +167,13 @@ func mapAdminStatus(line []byte) error {
 		return err
 	}
 	tok := string(trimCRLF(line))
-	switch {
-	case tok == "OK":
+	if tok == "OK" {
 		return nil
-	case tok == "BUSY" || strings.HasPrefix(tok, "BUSY "):
-		return ErrBusy
-	case tok == "BADCLASS" || strings.HasPrefix(tok, "BADCLASS "):
-		return ErrBadClass
-	case tok == "NOSPARE":
-		return ErrNoSpare
-	case tok == "NOTFULL":
-		return ErrNotFull
-	case tok == "UNSAFE":
-		return ErrUnsafe
-	case tok == "SAME":
-		return ErrSame
-	case tok == "ERROR" || strings.HasPrefix(tok, "ERROR "):
-		return fmt.Errorf("%s: %w", tok, ErrNonexistentCommand)
-	default:
-		return fmt.Errorf("%s: %w", tok, ErrMalformedResponse)
 	}
+	if err := mapAdminKeyword(tok); err != nil {
+		return err
+	}
+	return fmt.Errorf("%s: %w", tok, ErrMalformedResponse)
 }
 
 func isShutdownClosed(err error) bool {

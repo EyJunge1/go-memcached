@@ -3,11 +3,14 @@ package memcached
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const adminStreamLineLimit = 64 * 1024
 
 // WatchTopic is a typed watch stream name. Free strings are rejected.
 type WatchTopic string
@@ -30,40 +33,34 @@ type WatchEvent struct {
 	Raw map[string]string
 }
 
-func (c *Client) pickAdminAddr() (*Addr, error) {
-	addrs, picker := c.snapshotCluster()
-	addrs = c.liveAddrs(addrs)
-	if len(addrs) == 0 {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
-	}
-	if isUDPNetwork(addrs[0].Network) {
-		return nil, fmt.Errorf("admin streams: %w", ErrNotSupported)
-	}
-	if picker == nil {
-		return addrs[0], nil
-	}
-	return picker.Pick(addrs, []byte("version"), nil)
-}
-
-func (c *Client) acquireDedicated(ctx context.Context, addr *Addr) (memcachedConn, error) {
-	if addr == nil {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
-	}
-	if isUDPNetwork(addr.Network) {
-		return nil, fmt.Errorf("admin streams: %w", ErrNotSupported)
-	}
-	return c.getConn(ctx, addr)
-}
-
 func releaseDedicated(cn memcachedConn) {
 	if cn == nil {
 		return
 	}
-	if p := cn.getConnPool(); p != nil {
-		_ = p.discard(cn)
-		return
-	}
 	_ = cn.Close()
+}
+
+func readAdminStreamLine(cn memcachedConn) ([]byte, error) {
+	var buf []byte
+	tmp := make([]byte, 1)
+	for {
+		n, err := cn.Read(tmp)
+		if n == 1 {
+			buf = append(buf, tmp[0])
+			if tmp[0] == '\n' {
+				return buf, nil
+			}
+			if len(buf) > adminStreamLineLimit {
+				return nil, fmt.Errorf("admin line too long: %w", ErrMalformedResponse)
+			}
+		}
+		if err != nil {
+			if len(buf) > 0 && err == io.EOF {
+				return buf, io.EOF
+			}
+			return buf, err
+		}
+	}
 }
 
 func (a *AdminClient) sendAdminLine(ctx context.Context, cn memcachedConn, req *request, resp *response) error {
@@ -80,8 +77,22 @@ func (a *AdminClient) sendAdminLine(ctx context.Context, cn memcachedConn, req *
 	return nil
 }
 
-// Watch starts a watcher stream. The connection is dedicated until ctx is
-// cancelled or the server closes. Always pass a timeout or cancel.
+func (a *AdminClient) acquireStream(ctx context.Context) (memcachedConn, error) {
+	if err := requireDeadline(ctx); err != nil {
+		return nil, err
+	}
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return nil, err
+	}
+	cn, err := a.c.dialDedicated(ctx, addr)
+	if err != nil {
+		return nil, wrapTransport(err)
+	}
+	return cn, nil
+}
+
+// Watch starts a watcher stream on the bound node. ctx must have a deadline.
 func (a *AdminClient) Watch(ctx context.Context, topics ...WatchTopic) (<-chan WatchEvent, error) {
 	if len(topics) == 0 {
 		return nil, fmt.Errorf("watch: %w", ErrInvalidArgument)
@@ -91,13 +102,9 @@ func (a *AdminClient) Watch(ctx context.Context, topics ...WatchTopic) (<-chan W
 			return nil, fmt.Errorf("watch topic %q: %w", t, ErrInvalidArgument)
 		}
 	}
-	addr, err := a.c.pickAdminAddr()
+	cn, err := a.acquireStream(ctx)
 	if err != nil {
 		return nil, err
-	}
-	cn, err := a.c.acquireDedicated(ctx, addr)
-	if err != nil {
-		return nil, wrapTransport(err)
 	}
 
 	req, resp := buildWatchCommand(topics)
@@ -124,7 +131,10 @@ func (a *AdminClient) readWatch(ctx context.Context, cn memcachedConn, out chan 
 			return
 		}
 		_ = cn.setReadDeadline(time.Time{})
-		line, err := cn.readLine('\n')
+		if dl, ok := ctx.Deadline(); ok {
+			_ = cn.setReadDeadline(dl)
+		}
+		line, err := readAdminStreamLine(cn)
 		if err != nil {
 			return
 		}
@@ -167,7 +177,6 @@ func parseURIPairs(line string) map[string]string {
 }
 
 // LRUCrawlerMetaDump streams URI-encoded item metadata until END.
-// The connection is discarded when the stream ends or ctx is cancelled.
 func (a *AdminClient) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-chan map[string]string, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
@@ -208,17 +217,12 @@ func (a *AdminClient) LRUCrawlerMgDump(ctx context.Context, selector string) (<-
 }
 
 func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string, onLine func(string, bool), done func()) error {
-	addr, err := a.c.pickAdminAddr()
+	cn, err := a.acquireStream(ctx)
 	if err != nil {
 		return err
 	}
-	cn, err := a.c.acquireDedicated(ctx, addr)
-	if err != nil {
-		return wrapTransport(err)
-	}
 
 	req, resp := buildLRUCrawlerCommand(kind, selector)
-	// dumps do not send OK then END; they stream lines until END.
 	a.c.enableUDPFraming(nil, req, resp)
 	if err = req.send(ctx, cn, a.c.options.writeTimeout); err != nil {
 		releaseReqAndResp(req, resp)
@@ -228,12 +232,14 @@ func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string
 	releaseReqAndResp(req, resp)
 
 	stopFirst := context.AfterFunc(ctx, func() { _ = cn.Close() })
-	if a.c.options.readTimeout > 0 {
+	if dl, ok := ctx.Deadline(); ok {
+		_ = cn.setReadDeadline(dl)
+	} else if a.c.options.readTimeout > 0 {
 		_ = cn.setReadDeadline(time.Now().Add(a.c.options.readTimeout))
 	} else {
 		_ = cn.setReadDeadline(time.Time{})
 	}
-	line, err := cn.readLine('\n')
+	line, err := readAdminStreamLine(cn)
 	stopFirst()
 	if err != nil {
 		releaseDedicated(cn)
@@ -243,6 +249,22 @@ func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 	}
 	s := string(trimCRLF(line))
+	if s == "OK" {
+		stopAgain := context.AfterFunc(ctx, func() { _ = cn.Close() })
+		if dl, ok := ctx.Deadline(); ok {
+			_ = cn.setReadDeadline(dl)
+		}
+		line, err = readAdminStreamLine(cn)
+		stopAgain()
+		if err != nil {
+			releaseDedicated(cn)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return wrapRecvError(fmt.Errorf("recv failed: %w", err))
+		}
+		s = string(trimCRLF(line))
+	}
 	if s == "END" {
 		releaseDedicated(cn)
 		go func() {
@@ -267,7 +289,10 @@ func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string
 				return
 			}
 			_ = cn.setReadDeadline(time.Time{})
-			line, err := cn.readLine('\n')
+			if dl, ok := ctx.Deadline(); ok {
+				_ = cn.setReadDeadline(dl)
+			}
+			line, err := readAdminStreamLine(cn)
 			if err != nil {
 				return
 			}

@@ -68,6 +68,11 @@ type response struct {
 	// afterRecv runs after a successful frame read and before the conn is
 	// returned to the pool, so parse/expect failures can discard a desynced conn.
 	afterRecv func(*response) error
+
+	maxValueBytes int
+	readTimeout   time.Duration
+	readCtx       context.Context
+	readConn      memcachedConn
 }
 
 func buildNoReplyResponse() *response {
@@ -80,7 +85,7 @@ func buildLimitedLineResponse(lines uint8) *response {
 	resp := responsePool.Get().(*response)
 	resp.endIndicator = endIndicatorLimitedLines
 	resp.limitedLines = lines
-	resp.rawLines = make([][]byte, 0, lines)
+	resetRawLines(resp, int(lines))
 	return resp
 }
 
@@ -92,18 +97,42 @@ func buildSpecEndLineResponse(endLine []byte, predictLines int) *response {
 	resp := responsePool.Get().(*response)
 	resp.endIndicator = endIndicatorSpecificEndLine
 	resp.specEndLine = endLine
-	resp.rawLines = make([][]byte, 0, predictLines)
+	resetRawLines(resp, predictLines)
 	return resp
+}
+
+const rawLinesKeepCap = 32
+
+func resetRawLines(resp *response, hint int) {
+	if hint < 1 {
+		hint = 1
+	}
+	if cap(resp.rawLines) >= hint {
+		resp.rawLines = resp.rawLines[:0]
+		return
+	}
+	resp.rawLines = make([][]byte, 0, hint)
 }
 
 func (resp *response) release() {
 	resp.endIndicator = endIndicatorUnknown
 	resp.limitedLines = 0
 	resp.specEndLine = nil
-	resp.rawLines = nil
+	for i := range resp.rawLines {
+		resp.rawLines[i] = nil
+	}
+	if cap(resp.rawLines) > rawLinesKeepCap {
+		resp.rawLines = make([][]byte, 0, rawLinesKeepCap)
+	} else {
+		resp.rawLines = resp.rawLines[:0]
+	}
 	resp.udpEnabled = false
 	resp.udpReqID = 0
 	resp.afterRecv = nil
+	resp.maxValueBytes = 0
+	resp.readTimeout = 0
+	resp.readCtx = nil
+	resp.readConn = nil
 	responsePool.Put(resp)
 }
 
@@ -216,7 +245,8 @@ func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
 	switch {
 	case bytes.HasPrefix(trimmed, []byte("VALUE ")):
 		item := &Item{}
-		size, err = parseValueLine(trimmed, item, true)
+		// Framing only needs <bytes>; CAS is optional on the wire (get vs gets).
+		size, err = parseValueLine(trimmed, item, false)
 		return size, true, err
 	case bytes.HasPrefix(trimmed, []byte("VA ")):
 		rest := trimmed[3:]
@@ -243,7 +273,11 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 		resp.rawLines = append(resp.rawLines, header)
 		return 1, nil
 	}
-	if size > uint64(maxValueSize) {
+	limit := resp.maxValueBytes
+	if limit <= 0 {
+		limit = defaultMaxValueBytes
+	}
+	if size > uint64(limit) {
 		return 0, fmt.Errorf("data block too large: %w", ErrMalformedResponse)
 	}
 	payload, err := rr.readExact(int(size) + 2)
@@ -261,6 +295,9 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 	}
 	resp.rawLines = append(resp.rawLines, header)
 	resp.rawLines = append(resp.rawLines, payload)
+	if resp.readConn != nil {
+		_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, nowFunc, true)
+	}
 	return 2, nil
 }
 

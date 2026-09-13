@@ -9,9 +9,7 @@ import (
 func TestPingAndSetServers(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
-	client, err := New(a.Addr())
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
+	client := testClient(t, a.Addr(), func(cfg *Config) { cfg.AllowSetServers = true })
 
 	ctx := context.Background()
 	noError(t, client.Ping(ctx))
@@ -21,22 +19,36 @@ func TestPingAndSetServers(t *testing.T) {
 	deadAddr := dead.Addr().String()
 	_ = dead.Close()
 
-	noError(t, client.SetServers(a.Addr()+","+deadAddr))
+	servers, err := ParseServers(a.Addr() + "," + deadAddr)
+	noError(t, err)
+	noError(t, client.SetServers(servers))
 	isError(t, client.Ping(ctx))
 
-	noError(t, client.SetServers(a.Addr()+","+b.Addr()))
+	servers, err = ParseServers(a.Addr() + "," + b.Addr())
+	noError(t, err)
+	noError(t, client.SetServers(servers))
 	noError(t, client.Ping(ctx))
 
-	noError(t, client.SetServers(a.Addr()))
+	servers, err = ParseServers(a.Addr())
+	noError(t, err)
+	noError(t, client.SetServers(servers))
 	noError(t, client.Ping(ctx))
+}
+
+func TestSetServersRequiresPrivilege(t *testing.T) {
+	a := startFakeMemcached(t)
+	client := testClient(t, a.Addr())
+	servers, err := ParseServers(a.Addr())
+	noError(t, err)
+	isErrorIs(t, client.SetServers(servers), ErrSetServersNotAllowed)
 }
 
 func TestVersionAllStatsAllAndServers(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
-	client, err := New(a.Addr() + "," + b.Addr())
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.Cluster.PickBuilder = NewCRC32HashPickBuilder()
+	})
 
 	ctx := context.Background()
 	servers := client.Servers()
@@ -55,10 +67,10 @@ func TestVersionAllStatsAllAndServers(t *testing.T) {
 	hasLen(t, stats, 2)
 	for _, st := range stats {
 		notNil(t, st)
-		equal(t, "fake-1.0", st.Version)
+		equal(t, "fake-1.0", st["version"])
 	}
 
-	noError(t, client.Set(ctx, "k", []byte("v"), 0, 0))
+	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
 	ps := client.PoolStats()
 	greater(t, len(ps), 0)
 	greater(t, ps[0].Total, 0)
@@ -67,14 +79,12 @@ func TestVersionAllStatsAllAndServers(t *testing.T) {
 func TestUnixSocketRoundTrip(t *testing.T) {
 	srv, path := startFakeMemcachedUnix(t)
 	_ = srv
-	client, err := New("unix://" + path)
-	noError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
+	client := testClient(t, "unix://"+path)
 	ver, err := client.Version(context.Background())
 	noError(t, err)
 	equal(t, "fake-1.0", ver)
-	noError(t, client.Set(context.Background(), "k", []byte("v"), 0, 0))
-	item, err := client.Get(context.Background(), "k")
+	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
+	item, err := client.GetOne(context.Background(), []byte("k"))
 	noError(t, err)
 	equal(t, []byte("v"), item.Value)
 }

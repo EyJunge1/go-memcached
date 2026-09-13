@@ -34,13 +34,15 @@ var (
 	// ErrInvalidKey represents an invalid key error.
 	ErrInvalidKey = errors.New("invalid key: empty, longer than 250 bytes, or contains whitespace/control")
 	// ErrInvalidValue represents an invalid value error.
-	ErrInvalidValue = errors.New("invalid value too long(over than 2^32)")
+	ErrInvalidValue = errors.New("invalid value: longer than Config.MaxValueBytes")
 	// ErrInvalidNetworkProtocol represents an invalid network protocol error.
 	ErrInvalidNetworkProtocol = errors.New("invalid network protocol")
-	// ErrFlushAllNotAllowed is returned when FlushAll is called without WithAllowFlushAll.
-	ErrFlushAllNotAllowed = errors.New("flush_all not allowed: enable with WithAllowFlushAll")
-	// ErrAdminNotEnabled is returned when Admin() is called without WithAdminCommands.
-	ErrAdminNotEnabled = errors.New("admin commands not enabled: enable with WithAdminCommands")
+	// ErrFlushAllNotAllowed is returned when FlushAll is called without Config.AllowFlushAll.
+	ErrFlushAllNotAllowed = errors.New("flush_all not allowed: set Config.AllowFlushAll")
+	// ErrAdminNotEnabled is returned when Admin() is called without Config.AllowAdmin.
+	ErrAdminNotEnabled = errors.New("admin commands not enabled: set Config.AllowAdmin")
+	// ErrSetServersNotAllowed is returned when SetServers is called without Config.AllowSetServers.
+	ErrSetServersNotAllowed = errors.New("SetServers not allowed: set Config.AllowSetServers")
 	// ErrBusy is the server BUSY reply (slabs reassign / crawler).
 	ErrBusy = errors.New("busy")
 	// ErrBadClass is the server BADCLASS reply.
@@ -53,4 +55,14 @@ var (
 	ErrUnsafe = errors.New("unsafe")
 	// ErrSame is the server SAME reply (slabs reassign src == dest).
 	ErrSame = errors.New("same")
+	// ErrMixedTransport is returned when a client mixes UDP with TCP/Unix.
+	ErrMixedTransport = errors.New("mixed UDP and stream transports")
+	// ErrInsecureTLS is returned when InsecureSkipVerify is set without AllowInsecureTLS.
+	ErrInsecureTLS = errors.New("tls: InsecureSkipVerify requires Transport.AllowInsecureTLS")
+	// ErrDeadlineRequired is returned when a stream op is called without a deadline.
+	ErrDeadlineRequired = errors.New("context deadline required")
+	// ErrTransport marks dial, send, and recv failures.
+	ErrTransport = errors.New("memcached transport")
+	// ErrAdminTargetRequired is returned when a node-local admin op has no On() target.
+	ErrAdminTargetRequired = errors.New("admin command requires On(addr)")
 )

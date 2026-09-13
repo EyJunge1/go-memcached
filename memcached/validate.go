@@ -3,10 +3,22 @@ package memcached
 import "encoding/base64"
 
 func validateKeyAndValue(key, value []byte) error {
-	return validateKeyAndValueFlags(key, value, false)
+	return validateKeyAndValueFlagsLimit(key, value, false, defaultMaxValueBytes)
 }
 
 func validateKeyAndValueFlags(key, value []byte, binaryKey bool) error {
+	return validateKeyAndValueFlagsLimit(key, value, binaryKey, defaultMaxValueBytes)
+}
+
+func (c *Client) checkKeyValue(key, value []byte) error {
+	return validateKeyAndValueFlagsLimit(key, value, false, c.valueLimit())
+}
+
+func (c *Client) checkKeyValueFlags(key, value []byte, binaryKey bool) error {
+	return validateKeyAndValueFlagsLimit(key, value, binaryKey, c.valueLimit())
+}
+
+func validateKeyAndValueFlagsLimit(key, value []byte, binaryKey bool, max int) error {
 	nKey := len(key)
 	if nKey == 0 {
 		return ErrInvalidKey
@@ -26,7 +38,10 @@ func validateKeyAndValueFlags(key, value []byte, binaryKey bool) error {
 		}
 	}
 
-	if nValue := len(value); nValue > maxValueSize {
+	if max <= 0 {
+		max = defaultMaxValueBytes
+	}
+	if nValue := len(value); nValue > max {
 		return ErrInvalidValue
 	}
 

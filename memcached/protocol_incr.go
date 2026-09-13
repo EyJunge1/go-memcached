@@ -1,12 +1,16 @@
 package memcached
 
-import "strconv"
+import (
+	"bytes"
+	"fmt"
+	"strconv"
+)
 
 // incr/decr <key> <value> [noreply]\r\n
-func buildArithmeticCommand(command, key string, delta uint64, noReply bool) (*request, *response) {
+func buildArithmeticCommand(command string, key []byte, delta uint64, noReply bool) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command).
-		AddString(key).
+		AddBytes(key).
 		AddUint(delta)
 	defer b.release()
 
@@ -18,7 +22,7 @@ func buildArithmeticCommand(command, key string, delta uint64, noReply bool) (*r
 
 	req := &request{
 		cmd: []byte(command),
-		key: []byte(key),
+		key: key,
 		raw: raw,
 	}
 
@@ -35,10 +39,9 @@ func buildArithmeticCommand(command, key string, delta uint64, noReply bool) (*r
 // parseArithmeticResponse handles the response with incr/decr command.
 // <value>\r\n
 func parseArithmetic(line []byte) (uint64, error) {
-	if len(line) == 0 {
-		// noReply mode enabled
-		return 0, nil
+	s := string(bytes.TrimSpace(trimCRLF(line)))
+	if s == "" {
+		return 0, fmt.Errorf("empty arithmetic reply: %w", ErrMalformedResponse)
 	}
-
-	return strconv.ParseUint(string(trimCRLF(line)), 10, 64)
+	return strconv.ParseUint(s, 10, 64)
 }

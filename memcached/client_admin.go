@@ -4,16 +4,24 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
+	"sync"
 )
 
 // AdminClient exposes destructive and operational server commands.
-// Obtain it via Client.Admin after WithAdminCommands().
-// Commands target one picked node, not the whole cluster, except where noted.
+// Obtain it via Client.Admin after Config.AllowAdmin.
+// Node-local commands require On(addr). Shutdown cannot run without On.
 type AdminClient struct {
+	c      *Client
+	target *Server
+}
+
+// AdminBroadcast runs selected ops on every configured node.
+type AdminBroadcast struct {
 	c *Client
 }
 
-// Admin returns the admin API. Requires WithAdminCommands().
+// Admin returns the admin API. Requires Config.AllowAdmin.
 func (c *Client) Admin() (*AdminClient, error) {
 	if c == nil || c.options == nil || !c.options.allowAdmin {
 		return nil, ErrAdminNotEnabled
@@ -21,15 +29,69 @@ func (c *Client) Admin() (*AdminClient, error) {
 	return &AdminClient{c: c}, nil
 }
 
+// On binds the admin handle to one configured server.
+func (a *AdminClient) On(addr Server) *AdminClient {
+	if a == nil {
+		return nil
+	}
+	cp := *a
+	s := addr
+	cp.target = &s
+	return &cp
+}
+
+// All returns a broadcast handle for non-destructive cluster-wide admin ops.
+func (a *AdminClient) All() *AdminBroadcast {
+	if a == nil {
+		return nil
+	}
+	return &AdminBroadcast{c: a.c}
+}
+
+func (a *AdminClient) resolveTarget() (*Addr, error) {
+	if a == nil || a.c == nil {
+		return nil, ErrAdminNotEnabled
+	}
+	if a.target == nil {
+		return nil, ErrAdminTargetRequired
+	}
+	addrs, _ := a.c.snapshotCluster()
+	wantNet := serverNetwork(*a.target)
+	for _, addr := range addrs {
+		if addr != nil && addr.Address == a.target.Address && serverNetwork(addrToServer(addr)) == wantNet {
+			return addr, nil
+		}
+	}
+	return nil, fmt.Errorf("admin target %s: %w", a.target.Address, ErrInvalidAddress)
+}
+
 func (a *AdminClient) do(ctx context.Context, req *request, resp *response) error {
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return err
+	}
 	resp.afterRecv = parseAdminReply
-	if err := a.c.dispatchRequest(ctx, req, resp); err != nil {
+	if err := a.c.dispatchToAddr(ctx, addr, req, resp); err != nil {
 		return fmt.Errorf("admin: %w", err)
 	}
 	return nil
 }
 
-// Verbosity sets the server log level.
+func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *response)) error {
+	if b == nil || b.c == nil {
+		return ErrAdminNotEnabled
+	}
+	return b.c.broadcastRequest(ctx, func(ctx context.Context, addr *Addr, cn memcachedConn) error {
+		req, resp := build()
+		defer releaseReqAndResp(req, resp)
+		if err := b.c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
+			return err
+		}
+		return parseAdminReply(resp)
+	})
+}
+
+// Verbosity sets the server log level on the bound node.
 func (a *AdminClient) Verbosity(ctx context.Context, level int) error {
 	if level < 0 {
 		return fmt.Errorf("verbosity: %w", ErrInvalidArgument)
@@ -39,9 +101,20 @@ func (a *AdminClient) Verbosity(ctx context.Context, level int) error {
 	return a.do(ctx, req, resp)
 }
 
-// Shutdown asks the server to stop. graceful uses "shutdown graceful".
-// A closed connection after the command is treated as success.
+// Verbosity sets the log level on every node.
+func (b *AdminBroadcast) Verbosity(ctx context.Context, level int) error {
+	if level < 0 {
+		return fmt.Errorf("verbosity: %w", ErrInvalidArgument)
+	}
+	return b.doAll(ctx, func() (*request, *response) { return buildVerbosityCommand(level) })
+}
+
+// Shutdown asks the bound server to stop. Requires On().
 func (a *AdminClient) Shutdown(ctx context.Context, graceful bool) error {
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return err
+	}
 	req, resp := buildShutdownCommand(graceful)
 	defer releaseReqAndResp(req, resp)
 	resp.afterRecv = func(r *response) error {
@@ -50,7 +123,7 @@ func (a *AdminClient) Shutdown(ctx context.Context, graceful bool) error {
 		}
 		return parseAdminReply(r)
 	}
-	err := a.c.dispatchRequest(ctx, req, resp)
+	err = a.c.dispatchToAddr(ctx, addr, req, resp)
 	if err == nil || isShutdownClosed(err) {
 		return nil
 	}
@@ -62,6 +135,51 @@ func (a *AdminClient) CacheMemLimit(ctx context.Context, megabytes uint32) error
 	req, resp := buildCacheMemLimitCommand(megabytes)
 	defer releaseReqAndResp(req, resp)
 	return a.do(ctx, req, resp)
+}
+
+// CacheMemLimit sets the cache limit on every node.
+func (b *AdminBroadcast) CacheMemLimit(ctx context.Context, megabytes uint32) error {
+	return b.doAll(ctx, func() (*request, *response) { return buildCacheMemLimitCommand(megabytes) })
+}
+
+// Stats returns STAT pairs from the bound node, including reset/sizes.
+func (a *AdminClient) Stats(ctx context.Context, args ...string) (map[string]string, error) {
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return nil, err
+	}
+	if err := validFreeStatsArgs(args); err != nil {
+		return nil, err
+	}
+	return a.c.statsMapOnAddr(ctx, addr, args)
+}
+
+// Stats returns STAT pairs from every node.
+func (b *AdminBroadcast) Stats(ctx context.Context, args ...string) (map[string]map[string]string, error) {
+	if b == nil || b.c == nil {
+		return nil, ErrAdminNotEnabled
+	}
+	if err := validFreeStatsArgs(args); err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]string)
+	var mu sync.Mutex
+	err := b.c.broadcastRequest(ctx, func(ctx context.Context, addr *Addr, cn memcachedConn) error {
+		req, resp := buildStatsCommand(strings.Join(args, " "))
+		defer releaseReqAndResp(req, resp)
+		if err := b.c.sendOnConn(ctx, addr, cn, req, resp); err != nil {
+			return err
+		}
+		m, err := parseStatsMap(resp.rawLines)
+		if err != nil {
+			return wrapRecvError(err)
+		}
+		mu.Lock()
+		out[addr.id()] = m
+		mu.Unlock()
+		return nil
+	})
+	return out, err
 }
 
 // SlabsReassign moves memory from source to dest slab class. source -1 means any.
@@ -148,4 +266,14 @@ func (a *AdminClient) LRUCrawlerCrawl(ctx context.Context, classes string) error
 
 func strconvU32(n uint32) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func requireDeadline(ctx context.Context) error {
+	if ctx == nil {
+		return ErrDeadlineRequired
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return ErrDeadlineRequired
+	}
+	return nil
 }

@@ -8,26 +8,35 @@ import (
 	"time"
 )
 
-// FlushAll removes all items on every configured server immediately.
-// It requires WithAllowFlushAll(); otherwise it returns ErrFlushAllNotAllowed
-// and does not contact any node.
-func (c *Client) FlushAll(ctx context.Context) error {
-	return c.FlushAllAfter(ctx, 0)
+// FlushOpts controls flush_all delay and cluster stagger.
+type FlushOpts struct {
+	Delay   Exptime
+	Stagger time.Duration
 }
 
-// FlushAllAfter invalidates items after delay seconds (delay 0 is immediate).
-// It requires WithAllowFlushAll().
-func (c *Client) FlushAllAfter(ctx context.Context, delay time.Duration) error {
-	return c.flushAllBroadcast(ctx, func(int) time.Duration { return delay })
+func flushDelayFor(o FlushOpts) func(int) Exptime {
+	return func(i int) Exptime {
+		if o.Stagger <= 0 {
+			return o.Delay
+		}
+		step := Rel(time.Duration(i) * o.Stagger)
+		if o.Delay == ExptimeNever {
+			return step
+		}
+		return o.Delay + step
+	}
 }
 
-// FlushAllStaggered sends flush_all with delay i*step on cluster node i
-// so pool members do not expire together. Requires WithAllowFlushAll().
-func (c *Client) FlushAllStaggered(ctx context.Context, step time.Duration) error {
-	return c.flushAllBroadcast(ctx, func(i int) time.Duration { return time.Duration(i) * step })
+// FlushAll invalidates items on every configured server.
+// It requires Admin() and Config.AllowFlushAll.
+func (a *AdminClient) FlushAll(ctx context.Context, o FlushOpts) error {
+	if a == nil || a.c == nil {
+		return ErrAdminNotEnabled
+	}
+	return a.c.flushAllBroadcast(ctx, flushDelayFor(o))
 }
 
-func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) time.Duration) error {
+func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) Exptime) error {
 	if !c.options.allowFlushAll {
 		return ErrFlushAllNotAllowed
 	}
@@ -54,9 +63,13 @@ func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) time.
 	return nil
 }
 
-func (c *Client) flushAllOnAddr(ctx context.Context, addr *Addr, delay time.Duration) error {
+func (c *Client) flushAllOnAddr(ctx context.Context, addr *Addr, delay Exptime) error {
+	if addr != nil && isUDPNetwork(addr.Network) {
+		return fmt.Errorf("udp flush_all: %w", ErrNotSupported)
+	}
 	cn, err := c.getConn(ctx, addr)
 	if err != nil {
+		c.noteFailure(addr)
 		return err
 	}
 	var opErr error
@@ -67,15 +80,23 @@ func (c *Client) flushAllOnAddr(ctx context.Context, addr *Addr, delay time.Dura
 	c.enableUDPFraming(addr, req, resp)
 	if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
 		opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
+		c.noteFailure(addr)
 		return opErr
 	}
 	if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
 		opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
+		c.noteFailure(addr)
 		return opErr
 	}
 	if err := mapStatusLine(resp, _OKCRLFBytes); err != nil {
 		opErr = wrapRecvError(err)
+		if isKeepaliveProtocolError(opErr) {
+			c.noteSuccess(addr)
+		} else {
+			c.noteFailure(addr)
+		}
 		return opErr
 	}
+	c.noteSuccess(addr)
 	return nil
 }
