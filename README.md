@@ -3,25 +3,16 @@
 ### Features
 
 - Text- and meta-protocol for **application commands** (get/set/… and mg/ms/md/ma/me/mn).
-  Admin ops (`verbosity`, `shutdown`, slabs, LRU, `watch`, dumps) exist only behind `Config.AllowAdmin` + `Admin()`.
+Admin ops (`verbosity`, `shutdown`, slabs, LRU, `watch`, dumps) exist only behind `Config.AllowAdmin` + `Admin()`.
 - Values are raw `[]byte` plus `uint32` flags. Encode or compress in the caller.
 - Cluster default is **weighted Ketama/MD5**.
 - Connection pool per node via `Config.Pool`. Failover is off unless
-  `Config.Failover` is set (`DefaultFailover()` is FailureLimit=2,
-  RetryAfter=1s, DeadAfter=30s, Eject=true).
-- Transport: TCP (default, **plaintext**), `unix://`, `udp://`. TLS via `Config.Transport.TLS`.
-  `Transport.RequireTLS` makes `New` fail without TLS; it does not flip the default.
-  TCP_NODELAY is on by default (`Transport.DisableTCPNoDelay` is false). Unix sockets that are
-  world-writable (other-write `002`) are rejected unless `UnixSocketAnyMode`.
-
-### Out of scope
-
-Deprecated binary-era commands (Binary, SASL, TAP, VBucket, Range-Ops) and
-removed stats toggles are listed under Support Commands — they are not
-implemented. Values stay raw `[]byte`; encode or compress in the caller.
-
-SASL is out of scope; text auth is `-Y` (`Config.Auth`). `Flush` and Admin
-require explicit `Config` flags.
+`Config.Failover` is set (`DefaultFailover()` is FailureLimit=2,
+RetryAfter=1s, DeadAfter=30s, Eject=true).
+- Transport: TCP (default, **plaintext**), `unix://`, `udp://`. TLS via `Config.Transport.TLS`.  
+`Transport.RequireTLS` makes `New` fail without TLS; it does not flip the default.  
+TCP_NODELAY is on by default (`Transport.DisableTCPNoDelay` is false). Unix sockets that are  
+world-writable (other-write `002`) are rejected unless `UnixSocketAnyMode`.
 
 ### Transport
 
@@ -154,82 +145,37 @@ Current memcached **text + meta** is fully covered (typed API, no raw command
 passthrough). Deprecated binary-era commands are listed after the table and
 are **not** implemented.
 
-| Command | Status | API Usage | Description |
-|---------|--------|-----------|-------------|
-| `set` / `add` / `replace` / `cas` | ✅ | `Store` + `Item.Mode` | flags, `Exptime`, bytes; `noreply` via `Item.Quiet` |
-| `append` / `prepend` | ✅ | `Store` + `StoreAppend` / `StorePrepend` | wire still has Storage-grammar `0 0` (server ignores them) |
-| `get` / `gets` / `gat` / `gats` | ✅ | `Get` + `GetOpts` | multi-key in one request per node; miss omitted; `CAS` → `gets`/`gats`; `Touch` → `gat`/`gats` (TCP-only) |
-| `delete` / `incr` / `decr` / `touch` | ✅ | typed; `MutateOpts.Quiet` on delete/touch | `Quiet` → `noreply`; Incr/Decr always return the number; quiet arith via `Meta().Arithmetic` + `q` |
-| `mg` / `ms` / `md` / `ma` / `me` / `mn` | ✅ | `Meta().Get` / `Set` / `Delete` / `Arithmetic` / `Debug` / `Noop` | every documented request flag (`b c C f F h k l O q s t u v E N R T I M J D x P L`) and response extras (`W X Z`); statuses HD/VA/EN/NF/NS/EX/MN/ME; `q` always pairs with `mn` |
-| Recache | ✅ | `MetaGet.Vivify` / `MetaGet.Recache` / `MetaDelete.Invalidate` | `mg N` / `mg R` (Duration, no 30-day cap) / `md I T` |
-| `Pipeline` / `MetaPipeline` | ✅ | `Pipeline().Store/…Run` / `Meta().Pipeline` | text is write-then-read (no `noreply`); quiet meta stays on `Meta().Pipeline` |
-| `stats` + subcommands | ✅ | `Stats` / `StatsAll`; Admin `On().Stats` for `sizes`/`reset`; `detail` via `StatsDetail` | no args, `items`, `slabs`, `settings`, `conns`; TCP-only |
-| `version` | ✅ | `Version` / `VersionAll` | `Version` first live node; `VersionAll` every node |
-| `flush_all` | ✅ | `Admin().On().Flush` / `All().Flush` | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger`; `Quiet` → `noreply` |
-| `cache_memlimit` / `verbosity` / `shutdown` | ✅ | `Admin().On()` / `All()` | MB + `noreply`; level + `noreply`; default or `graceful` |
-| `slabs` / `lru` / `lru_crawler` | ✅ | `Admin().On()` | `reassign` (src `-1`), `automove` 0\|1\|2; `tune`/`mode`/`temp_ttl`; enable/disable/sleep/tocrawl/crawl; `metadump`/`mgdump` (`all`/`hash`) |
-| `watch` | ✅ | `Admin().On().Watch` | `fetchers` `mutations` `evictions` `connevents` `proxyreqs` `proxyevents` `proxyuser` `deletions`; stackable |
-| Token auth `-Y` | ✅ | `Config.Auth` | fake `set` on every new dial; leftover probe uses a random `__mc_auth_*` key |
-| UDP framing | ✅ | `udp://` / `udp4` / `udp6` | 8-byte header, one request datagram, reserved=0; Get/`gets`/Version/`me`/`mn` and `mg` without `N`/`R`/`T`/`E` |
-| `quit` | ✅ | `Close` | TCP writes `quit` then closes; UDP skips `quit` (spec allows close-only) |
-| `SetServers` | ✅ | requires `AllowSetServers` | replaces the node list |
-| `Admin()` | opt-in | `On(server)` / `All()` | all admin/ops above; `Shutdown` and node-local ops need `On` |
+| Command                                     | Status | API Usage                                                                                | Description                                                                                                                                                                     |
+| ------------------------------------------- | ------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `set` / `add` / `replace` / `cas`           | ✅      | `Store` + `Item.Mode`                                                                    | flags, `Exptime`, bytes; `noreply` via `Item.Quiet`                                                                                                                             |
+| `append` / `prepend`                        | ✅      | `Store` + `StoreAppend` / `StorePrepend`                                                 | wire still has Storage-grammar `0 0` (server ignores them)                                                                                                                      |
+| `get` / `gets` / `gat` / `gats`             | ✅      | `Get` + `GetOpts`                                                                        | multi-key in one request per node; miss omitted; `CAS` → `gets`/`gats`; `Touch` → `gat`/`gats` (TCP-only)                                                                       |
+| `delete` / `incr` / `decr` / `touch`        | ✅      | typed; `MutateOpts.Quiet` on delete/touch                                                | `Quiet` → `noreply`; Incr/Decr always return the number; quiet arith via `Meta().Arithmetic` + `q`                                                                              |
+| `mg` / `ms` / `md` / `ma` / `me` / `mn`     | ✅      | `Meta().Get` / `Set` / `Delete` / `Arithmetic` / `Debug` / `Noop`                        | every documented request flag (`b c C f F h k l O q s t u v E N R T I M J D x P L`) and response extras (`W X Z`); statuses HD/VA/EN/NF/NS/EX/MN/ME; `q` always pairs with `mn` |
+| Recache                                     | ✅      | `MetaGet.Vivify` / `MetaGet.Recache` / `MetaDelete.Invalidate`                           | `mg N` / `mg R` (Duration, no 30-day cap) / `md I T`                                                                                                                            |
+| `Pipeline` / `MetaPipeline`                 | ✅      | `Pipeline().Store/…Run` / `Meta().Pipeline`                                              | text is write-then-read (no `noreply`); quiet meta stays on `Meta().Pipeline`                                                                                                   |
+| `stats` + subcommands                       | ✅      | `Stats` / `StatsAll`; Admin `On().Stats` for `sizes`/`reset`; `detail` via `StatsDetail` | no args, `items`, `slabs`, `settings`, `conns`; TCP-only                                                                                                                        |
+| `version`                                   | ✅      | `Version` / `VersionAll`                                                                 | `Version` first live node; `VersionAll` every node                                                                                                                              |
+| `flush_all`                                 | ✅      | `Admin().On().Flush` / `All().Flush`                                                     | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger`; `Quiet` → `noreply`                                                                                                          |
+| `cache_memlimit` / `verbosity` / `shutdown` | ✅      | `Admin().On()` / `All()`                                                                 | MB + `noreply`; level + `noreply`; default or `graceful`                                                                                                                        |
+| `slabs` / `lru` / `lru_crawler`             | ✅      | `Admin().On()`                                                                           | `reassign` (src `-1`), `automove` 0|1|2; `tune`/`mode`/`temp_ttl`; enable/disable/sleep/tocrawl/crawl; `metadump`/`mgdump` (`all`/`hash`)                                       |
+| `watch`                                     | ✅      | `Admin().On().Watch`                                                                     | `fetchers` `mutations` `evictions` `connevents` `proxyreqs` `proxyevents` `proxyuser` `deletions`; stackable                                                                    |
+| Token auth `-Y`                             | ✅      | `Config.Auth`                                                                            | fake `set` on every new dial; leftover probe uses a random `__mc_auth_*` key                                                                                                    |
+| UDP framing                                 | ✅      | `udp://` / `udp4` / `udp6`                                                               | 8-byte header, one request datagram, reserved=0; Get/`gets`/Version/`me`/`mn` and `mg` without `N`/`R`/`T`/`E`                                                                  |
+| `quit`                                      | ✅      | `Close`                                                                                  | TCP writes `quit` then closes; UDP skips `quit` (spec allows close-only)                                                                                                        |
+| `SetServers`                                | ✅      | requires `AllowSetServers`                                                               | replaces the node list                                                                                                                                                          |
+| `Admin()`                                   | opt-in | `On(server)` / `All()`                                                                   | all admin/ops above; `Shutdown` and node-local ops need `On`                                                                                                                    |
 
 Deprecated or removed — **not implemented** (current memcached does not offer these as a client API, or the spec replacement is already in the table):
 
-| Command | Status | Why not |
-|---------|--------|---------|
-| Binary protocol | deprecated | Meta replaces it; see https://docs.memcached.org/protocols/ |
-| SASL | deprecated | hangs on binary; text auth is `-Y` (`Config.Auth`) |
-| TAP / VBucket / Range-Ops (`RGet`/`RSet`/…) | deprecated | binary / Couchbase; not in current text+meta `protocol.txt` |
-| `stats cachedump` | superseded | use `Admin().On().LRUCrawlerMetaDump` (no cache lock) |
-| `stats sizes_enable` / `sizes_disable` | removed | server dropped the runtime toggle (not thread-safe); start with `-o track_sizes`; read via `Admin().On().Stats(ctx, "sizes")` |
-| `misbehave` | debug-only | seccomp self-test in debug builds, not an app command |
-
-### Development Guide
-
-#### Prerequisites
-
-- Go 1.27 or higher
-- Python (for pre-commit hooks) or just `brew install pre-commit` on MacOS
-- Docker (for running memcached in tests)
-
-#### Setting up development environment
-
-1. Clone the repository:
-    ```bash
-    git clone https://github.com/EyJunge1/go-memcached.git
-    cd go-memcached
-    ```
-2. Install pre-commit hooks:
-    ```bash
-    pip install pre-commit
-    # or MacOS
-    # brew install pre-commit
-
-    pre-commit install
-    ```
-3. Quality checks use the Makefile (`make lint` downloads golangci-lint via `go run`; no global install required).
-
-#### Make targets
-
-```bash
-make lint      # golangci-lint v2 (gofumpt, gosec, unused, staticcheck)
-make test      # go test -race
-make coverage  # tests + coverage.html
-make vuln      # govulncheck
-make check     # lint + test + vuln
-```
-
-#### Running Tests
-
-```bash
-make test
-# or with coverage
-make coverage
-```
-
-Live tests against `localhost:11211` skip automatically if no server is listening. Default `go test` is fake-server + unit tests.
+| Command                                     | Status     | Why not                                                                                                                       |
+| ------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Binary protocol                             | deprecated | Meta replaces it; see [https://docs.memcached.org/protocols/](https://docs.memcached.org/protocols/)                          |
+| SASL                                        | deprecated | hangs on binary; text auth is `-Y` (`Config.Auth`)                                                                            |
+| TAP / VBucket / Range-Ops (`RGet`/`RSet`/…) | deprecated | binary / Couchbase; not in current text+meta `protocol.txt`                                                                   |
+| `stats cachedump`                           | superseded | use `Admin().On().LRUCrawlerMetaDump` (no cache lock)                                                                         |
+| `stats sizes_enable` / `sizes_disable`      | removed    | server dropped the runtime toggle (not thread-safe); start with `-o track_sizes`; read via `Admin().On().Stats(ctx, "sizes")` |
+| `misbehave`                                 | debug-only | seccomp self-test in debug builds, not an app command                                                                         |
 
 #### Code Style
 
