@@ -212,11 +212,11 @@ func (c *conn) readExact(n int) ([]byte, error) {
 	return buf, err
 }
 
-func (c *conn) readFramedValue(size int) ([]byte, error) {
+func (c *conn) readFramedValueInto(dst []byte) error {
 	if c.isClosed() {
-		return nil, errConnClosed
+		return errConnClosed
 	}
-	return readFramedValueFrom(c.rr, size)
+	return readFramedValueIntoFrom(c.rr, dst)
 }
 
 // readDatagram reads one UDP datagram from the raw socket into a copied buffer.

@@ -107,8 +107,18 @@ func dataBlockValue(raw []byte, size uint64) ([]byte, error) {
 	return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
 }
 
-// parseValueLine fills item from VALUE <key> <flags> <bytes> [cas].
+// parseValueLine fills item from VALUE <key> <flags> <bytes> [cas] and owns the key.
 func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err error) {
+	return parseValueLineInto(line, item, withCas, true)
+}
+
+// parseValueLineBorrowed fills item while leaving Key backed by line.
+// Callers must copy Key before their next read invalidates line.
+func parseValueLineBorrowed(line []byte, item *Item, withCas bool) (dataLen uint64, err error) {
+	return parseValueLineInto(line, item, withCas, false)
+}
+
+func parseValueLineInto(line []byte, item *Item, withCas, copyKey bool) (dataLen uint64, err error) {
 	const (
 		keyIndex     = 1
 		flagsIndex   = 2
@@ -132,7 +142,11 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 
 		switch nField {
 		case keyIndex:
-			item.Key = append(item.Key[:0], line[fieldStart:i]...)
+			if copyKey {
+				item.Key = append(item.Key[:0], line[fieldStart:i]...)
+			} else {
+				item.Key = line[fieldStart:i]
+			}
 		case flagsIndex:
 			flags, err := parseUintFromBytes(line[fieldStart:i])
 			if err != nil {

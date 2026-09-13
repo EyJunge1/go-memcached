@@ -206,8 +206,8 @@ func (p *payloadReader) readExact(n int) ([]byte, error) {
 	return buf, err
 }
 
-func (p *payloadReader) readFramedValue(size int) ([]byte, error) {
-	return readFramedValueFrom(p.r, size)
+func (p *payloadReader) readFramedValueInto(dst []byte) error {
+	return readFramedValueIntoFrom(p.r, dst)
 }
 
 // recv reads the server frame according to endIndicator.
@@ -402,37 +402,42 @@ type sliceReader interface {
 	readSlice(delim byte) ([]byte, error)
 }
 
-type framedValueReader interface {
-	readFramedValue(size int) ([]byte, error)
+type framedValueIntoReader interface {
+	readFramedValueInto(dst []byte) error
 }
 
-func readFramedValueFrom(r io.Reader, size int) ([]byte, error) {
-	if size < 0 {
-		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
-	}
-	buf := make([]byte, size)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, err
+// Combining a small key and value saves one allocation without crossing into
+// a larger allocator size class than the two separate buffers would occupy.
+const maxCombinedRetrievalBytes = 64
+
+func readFramedValueIntoFrom(r io.Reader, dst []byte) error {
+	if _, err := io.ReadFull(r, dst); err != nil {
+		return err
 	}
 	var crlf [2]byte
 	if _, err := io.ReadFull(r, crlf[:]); err != nil {
-		return nil, err
+		return err
 	}
 	if crlf[0] != '\r' || crlf[1] != '\n' {
-		return nil, fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
 	}
-	return buf, nil
+	return nil
 }
 
-func readFramedValue(rr protocolReader, size int) ([]byte, error) {
-	if fr, ok := rr.(framedValueReader); ok {
-		return fr.readFramedValue(size)
+func readFramedValueInto(rr protocolReader, dst []byte) error {
+	if fr, ok := rr.(framedValueIntoReader); ok {
+		return fr.readFramedValueInto(dst)
 	}
-	payload, err := rr.readExact(size + 2)
+	payload, err := rr.readExact(len(dst) + 2)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return dataBlockValue(payload, uint64(size)) //nolint:gosec // G115: size already bounded by maxValueBytes
+	value, err := dataBlockValue(payload, uint64(len(dst)))
+	if err != nil {
+		return err
+	}
+	copy(dst, value)
+	return nil
 }
 
 // readRetrieval reads VALUE/data pairs until END without keeping rawLines.
@@ -468,14 +473,24 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		}
 
 		var item Item
-		dataLen, err := parseValueLine(trimmed, &item, resp.withCAS)
+		dataLen, err := parseValueLineBorrowed(trimmed, &item, resp.withCAS)
 		if err != nil {
 			return err
 		}
 		if dataLen > uint64(limit) {
 			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
 		}
-		item.Value, err = readFramedValue(rr, int(dataLen)) //nolint:gosec // G115: size already bounded by maxValueBytes
+		keyLen, valueLen := len(item.Key), int(dataLen) //nolint:gosec // G115: dataLen is bounded above
+		if keyLen+valueLen <= maxCombinedRetrievalBytes {
+			owned := make([]byte, keyLen+valueLen)
+			copy(owned, item.Key)
+			item.Key = owned[:keyLen:keyLen]
+			item.Value = owned[keyLen:]
+		} else {
+			item.Key = bytes.Clone(item.Key)
+			item.Value = make([]byte, valueLen)
+		}
+		err = readFramedValueInto(rr, item.Value)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
