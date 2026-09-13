@@ -4,16 +4,15 @@ Compares this library against [yeqown/memcached](https://github.com/yeqown/memca
 
 `ns/op` is mostly RTT and the server. Use `allocs/op` and `B/op` as the client signal. Numbers are machine-specific; do not treat them as a gate.
 
-This module is not part of `go test ./...` at the repo root.
+This module is not part of `go test ./...` at the repo root. Live correctness tests live in [livetest](../livetest).
 
 ## Live instance
 
-The stack file is [compose.yaml](./compose.yaml) in this module. It is not part of the library package. From the repo root, `make live-up` calls `podman compose -f benchmark/compose.yaml`.
+The stack file is [compose.yaml](./compose.yaml) in this module. It is not part of the library package. From the repo root, `make bench-compare` calls `podman compose -f benchmark/compose.yaml`.
 
 ```bash
 podman machine start    # macOS, once
-make live-up            # from the repo root
-make bench-compare      # starts the stack if needed, then `go test -bench` here
+make bench-compare      # starts this stack, then `go test -bench` here
 make live-down
 ```
 
