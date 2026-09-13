@@ -278,7 +278,7 @@ func TestAdminWatchAfterClose(t *testing.T) {
 }
 
 func TestAdminShutdownEmptyReplyOK(t *testing.T) {
-	addr, _ := startCmdServer(t, func(fields []string) string {
+	addr, _ := startCmdServer(t, func(_ []string) string {
 		return ""
 	})
 	client := testClient(t, addr, func(cfg *Config) { cfg.AllowAdmin = true })

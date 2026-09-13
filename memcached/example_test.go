@@ -16,7 +16,7 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -38,7 +38,7 @@ func ExampleNew() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 }
 
 func ExampleConfig() {
@@ -55,7 +55,7 @@ func ExampleClient_Store() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	err = client.Store(context.Background(), memcached.Item{
 		Key:   []byte("key"),
@@ -73,7 +73,7 @@ func ExampleClient_Get() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	items, err := client.Get(context.Background(), [][]byte{[]byte("key")}, memcached.GetOpts{})
 	if err != nil {
@@ -101,7 +101,7 @@ func ExampleClient_Stats() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	got, err := client.Stats(context.Background(), "items")
 	if err != nil {
@@ -117,7 +117,7 @@ func ExampleClient_StatsAll() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	all, err := client.StatsAll(context.Background())
 	if err != nil {
@@ -136,7 +136,7 @@ func ExamplePipeline_Run() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	err = client.Pipeline().
 		Store(memcached.Item{Key: []byte("k"), Value: []byte("v")}).
@@ -155,7 +155,7 @@ func ExampleClient_Admin() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	admin, err := client.Admin()
 	if err != nil {
@@ -174,7 +174,7 @@ func ExampleAdminNode_Flush() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	admin, err := client.Admin()
 	if err != nil {
@@ -194,7 +194,7 @@ func ExampleAdminBroadcast_Flush() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	admin, err := client.Admin()
 	if err != nil {
@@ -213,7 +213,7 @@ func ExampleAdminNode_Watch() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	admin, err := client.Admin()
 	if err != nil {
@@ -258,7 +258,7 @@ func ExampleClient_Delete() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := client.Delete(context.Background(), []byte("key"), memcached.MutateOpts{}); err != nil {
 		log.Fatal(err)
@@ -272,7 +272,7 @@ func ExampleClient_Incr() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	n, err := client.Incr(context.Background(), []byte("n"), 1)
 	if err != nil {
@@ -288,7 +288,7 @@ func ExampleClient_Version() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ver, err := client.Version(context.Background())
 	if err != nil {
@@ -304,7 +304,7 @@ func ExampleClient_VersionAll() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	all, err := client.VersionAll(context.Background())
 	if err != nil {
@@ -323,7 +323,7 @@ func ExampleMetaClient_Get() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	res, err := client.Meta().Get(context.Background(), []byte("key"), memcached.MetaGet{
 		Return: memcached.MetaGetReturn{Value: true},
@@ -344,7 +344,7 @@ func ExampleMetaClient_Get_recache() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	vivify := memcached.Rel(30 * time.Second)
@@ -368,7 +368,7 @@ func ExampleMetaClient_Pipeline() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	got, err := client.Meta().Pipeline(context.Background(), []memcached.MetaOp{
 		{Key: []byte("a"), Get: &memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true}}},
@@ -388,7 +388,7 @@ func ExampleAdminNode_StatsDetail() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	admin, err := client.Admin()
 	if err != nil {
@@ -409,7 +409,7 @@ func ExampleAdminNode_LRUCrawlerMetaDump() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	admin, err := client.Admin()
 	if err != nil {

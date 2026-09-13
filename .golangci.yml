@@ -27,6 +27,10 @@ linters:
       - path: _test\.go
         linters:
           - gosec
+      - path: _test\.go
+        linters:
+          - revive
+        text: "context-as-argument"
 
 formatters:
   enable:

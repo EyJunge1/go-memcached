@@ -345,10 +345,10 @@ func TestParseArithmeticAfterRecvForecastsFaults(t *testing.T) {
 }
 
 func TestAdminAllJoinsBusyAndServerError(t *testing.T) {
-	busy, _ := startCmdServer(t, func(fields []string) string {
+	busy, _ := startCmdServer(t, func(_ []string) string {
 		return "BUSY crawler\r\n"
 	})
-	oom, _ := startCmdServer(t, func(fields []string) string {
+	oom, _ := startCmdServer(t, func(_ []string) string {
 		return "SERVER_ERROR oom\r\n"
 	})
 	cfg, err := testConfig(busy, func(c *Config) { c.AllowAdmin = true })
@@ -629,7 +629,7 @@ func TestAppStatsPrefixIsNotMalformed(t *testing.T) {
 }
 
 func TestShutdownCloseWithoutOK(t *testing.T) {
-	addr, _ := startCmdServer(t, func(fields []string) string {
+	addr, _ := startCmdServer(t, func(_ []string) string {
 		return "ERROR unexpected\r\n"
 	})
 	client := testClient(t, addr, func(c *Config) { c.AllowAdmin = true })
@@ -637,10 +637,10 @@ func TestShutdownCloseWithoutOK(t *testing.T) {
 }
 
 func TestVersionAllJoinsServerError(t *testing.T) {
-	good, _ := startCmdServer(t, func(fields []string) string {
+	good, _ := startCmdServer(t, func(_ []string) string {
 		return "VERSION good-1\r\n"
 	})
-	bad, _ := startCmdServer(t, func(fields []string) string {
+	bad, _ := startCmdServer(t, func(_ []string) string {
 		return "SERVER_ERROR oom\r\n"
 	})
 	cfg, err := testConfig(good)

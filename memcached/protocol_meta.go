@@ -9,10 +9,10 @@ const maxOpaqueTokenBytes = 32
 // validMetaHints rejects whitespace or controls in proxy tokens P and L.
 func validMetaHints(p, l string) error {
 	if err := validMetaHint(p); err != nil {
-		return fmt.Errorf("P: %w", err)
+		return fmt.Errorf("hint p: %w", err)
 	}
 	if err := validMetaHint(l); err != nil {
-		return fmt.Errorf("L: %w", err)
+		return fmt.Errorf("hint l: %w", err)
 	}
 	return nil
 }

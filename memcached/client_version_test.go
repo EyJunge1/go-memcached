@@ -51,8 +51,7 @@ func TestSetServersRequiresPrivilege(t *testing.T) {
 func TestVersionAllStatsAllAndServers(t *testing.T) {
 	a := startFakeMemcached(t)
 	b := startFakeMemcached(t)
-	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
-	})
+	client := testClient(t, a.Addr()+","+b.Addr())
 
 	ctx := context.Background()
 	servers := client.Servers()
