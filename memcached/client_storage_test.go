@@ -17,7 +17,7 @@ func TestFakeServerRoundTrip(t *testing.T) {
 	equal(t, []byte("bar"), item.Value)
 	equal(t, uint32(7), item.Flags)
 
-	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte("foo"))
+	items, err := client.Get(ctx, [][]byte{[]byte("foo")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	equal(t, []byte("bar"), items[0].Value)

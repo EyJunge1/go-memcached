@@ -6,32 +6,23 @@ import (
 )
 
 // Incr increments the key and returns the new value.
-// Quiet sends noreply and returns (0, nil).
-func (c *Client) Incr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
-	return c.arithmetic(ctx, "incr", key, delta, opts.Quiet)
+func (c *Client) Incr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
+	return c.arithmetic(ctx, "incr", key, delta)
 }
 
 // Decr decrements the key and returns the new value.
-// Quiet sends noreply and returns (0, nil).
-func (c *Client) Decr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
-	return c.arithmetic(ctx, "decr", key, delta, opts.Quiet)
+func (c *Client) Decr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
+	return c.arithmetic(ctx, "decr", key, delta)
 }
 
-func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64, quiet bool) (uint64, error) {
+func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64) (uint64, error) {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return 0, err
 	}
 
-	req, resp := buildArithmeticCommand(cmd, key, delta, quiet)
+	req, resp := buildArithmeticCommand(cmd, key, delta, false)
 	defer releaseReqAndResp(req, resp)
-
-	if quiet {
-		if err := c.dispatchQuiet(ctx, req, resp); err != nil {
-			return 0, err
-		}
-		return 0, nil
-	}
 
 	var value uint64
 	resp.afterRecv = parseArithmeticAfterRecv(&value)

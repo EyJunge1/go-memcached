@@ -10,7 +10,18 @@ import (
 	"time"
 )
 
+// TimeoutNone disables a Transport timeout (no extra deadline beyond ctx).
+// A zero DialTimeout / ReadTimeout / WriteTimeout still means the package default.
+const TimeoutNone time.Duration = -1
+
 // Config is the only constructor input for New.
+// Optional fields follow one rule for the whole API:
+//
+//	A — opt-in blocks (Failover, Auth): zero or nil means off.
+//	B — default-on: inverted bool (DisableTCPNoDelay), never *bool.
+//	C — 0 is a valid wire value: pointer (GetOpts.Touch, FlushOpts.Delay, Meta *Exptime / *uint64).
+//	D — 0 is not useful: omit on zero (MetaGet.Recache, Cluster.ResolverRefresh).
+//	E — scalar defaults apply field-wise (DialTimeout 0 → 3s; TimeoutNone = unlimited).
 type Config struct {
 	Servers         []Server
 	Transport       Transport
@@ -18,10 +29,10 @@ type Config struct {
 	Cluster         Cluster
 	Failover        Failover // zero = off; use DefaultFailover() for the previous multi-node default
 	Auth            *Auth
-	AllowFlushAll   bool
-	AllowAdmin      bool
-	AllowSetServers bool
-	MaxValueBytes   int // 0 → 1 MiB; applies to write validate and VALUE/VA reads
+	AllowFlushAll   bool // required for Admin On/All Flush; zero denies flush_all
+	AllowAdmin      bool // required for Client.Admin
+	AllowSetServers bool // required for SetServers and Cluster.ResolverRefresh
+	MaxValueBytes   int  // 0 → 1 MiB; applies to write validate and VALUE/VA reads
 }
 
 // Server is one cluster node.
@@ -32,19 +43,19 @@ type Server struct {
 }
 
 // Transport holds dial, TLS, and I/O timeouts.
-// The zero value applies package defaults (3s/5s/5s, RetryAttempts=1).
+// Defaults apply field-wise: DialTimeout 0 → 3s, ReadTimeout/WriteTimeout 0 → 5s,
+// RetryAttempts 0 → 1. TimeoutNone on a timeout field means no extra deadline.
 // Dial is the raw socket; TLS, if set, always wraps it.
 type Transport struct {
-	TLS              *tls.Config
-	Dial             DialContextFunc
-	DialTimeout      time.Duration
-	ReadTimeout      time.Duration
-	WriteTimeout     time.Duration
-	KeepAlive        time.Duration
-	RetryAttempts    int
-	AllowInsecureTLS bool
-	// TCPNoDelay defaults to true when nil.
-	TCPNoDelay *bool
+	TLS               *tls.Config
+	Dial              DialContextFunc
+	DialTimeout       time.Duration // 0 → 3s; TimeoutNone = no extra timeout
+	ReadTimeout       time.Duration // 0 → 5s; TimeoutNone = no extra timeout
+	WriteTimeout      time.Duration // 0 → 5s; TimeoutNone = no extra timeout
+	KeepAlive         time.Duration // 0 → net.Dialer default
+	RetryAttempts     int           // 0 → 1
+	AllowInsecureTLS  bool
+	DisableTCPNoDelay bool // zero = TCP_NODELAY on
 	// RequireTLS makes New fail unless TLS is configured. Default remains plaintext.
 	RequireTLS bool
 	// UnixSocketAnyMode skips the default reject of other-write (002).
@@ -54,9 +65,9 @@ type Transport struct {
 }
 
 // Pool is the per-node connection pool.
-// The zero value applies MaxOpen=100, MaxIdle=10. MaxLifetime/MaxIdleTime 0
-// stay unlimited. A non-zero Pool with MaxOpen==0 is invalid; MaxIdle==0
-// keeps no idle connections.
+// Defaults apply field-wise: MaxOpen 0 → 100, MaxIdle 0 → 10. MaxIdle < 0 keeps
+// no idle connections. MaxLifetime/MaxIdleTime 0 stay unlimited. MinIdle 0
+// means no warmup.
 type Pool struct {
 	MinIdle     int
 	MaxIdle     int
@@ -68,7 +79,9 @@ type Pool struct {
 // Cluster selects namespace and optional resolver refresh.
 // The picker is always weighted Ketama/MD5.
 type Cluster struct {
-	Namespace       string
+	Namespace string
+	// ResolverRefresh, when > 0, re-resolves ResolveSpec (or formatted Servers)
+	// on that interval. Requires AllowSetServers.
 	ResolverRefresh time.Duration
 	ResolveSpec     string // re-resolved on refresh; empty → formatted Servers
 
@@ -179,16 +192,6 @@ func isLoopbackServer(s Server) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func isZeroTransport(t Transport) bool {
-	return t.TLS == nil && t.Dial == nil && t.DialTimeout == 0 && t.ReadTimeout == 0 &&
-		t.WriteTimeout == 0 && t.KeepAlive == 0 && t.RetryAttempts == 0 && !t.AllowInsecureTLS &&
-		t.TCPNoDelay == nil && !t.RequireTLS && !t.UnixSocketAnyMode && t.UnixSocketMaxMode == 0
-}
-
-func tcpNoDelayEnabled(p *bool) bool {
-	return p == nil || *p
-}
-
 func isStreamNetwork(network string) bool {
 	switch network {
 	case "", "tcp", "tcp4", "tcp6", "unix":
@@ -214,11 +217,6 @@ func validateTransportServers(servers []Server, tlsCfg *tls.Config) error {
 		return fmt.Errorf("tls is not supported on UDP: %w", ErrNotSupported)
 	}
 	return nil
-}
-
-func isZeroPool(p Pool) bool {
-	return p.MinIdle == 0 && p.MaxIdle == 0 && p.MaxOpen == 0 &&
-		p.MaxLifetime == 0 && p.MaxIdleTime == 0
 }
 
 func validateAuthAgainstServers(servers []Server, allowPlain, hasTLS bool) error {
@@ -247,9 +245,6 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.Pool.MaxOpen < 0 {
 		return fmt.Errorf("Pool.MaxOpen must be >= 0: %w", ErrInvalidArgument)
-	}
-	if cfg.Pool.MaxIdle < 0 {
-		return fmt.Errorf("Pool.MaxIdle must be >= 0: %w", ErrInvalidArgument)
 	}
 	if err := validateTransportServers(cfg.Servers, cfg.Transport.TLS); err != nil {
 		return err

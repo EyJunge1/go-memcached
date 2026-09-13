@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -29,6 +30,8 @@ type Client struct {
 
 	resolverMu  sync.Mutex
 	resolverErr error
+
+	closed bool
 }
 
 // New creates a memcached client from Config.
@@ -105,6 +108,9 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return ErrClosed
+	}
 
 	next := make(map[string]*connPool, len(addrs))
 	for key, pool := range c.connPools {
@@ -137,6 +143,9 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	return nil
 }
 
+// Close closes idle connections and stops resolver refresh.
+// On TCP/Unix it writes quit before closing; UDP skips quit (spec allows close-only).
+// After Close, methods return an error. Close is safe to defer.
 func (c *Client) Close() error {
 	c.refreshOnce.Do(func() {
 		if c.refreshStop != nil {
@@ -146,6 +155,10 @@ func (c *Client) Close() error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
 
 	var errs []error
 	for _, pool := range c.connPools {
@@ -172,11 +185,56 @@ func (c *Client) Servers() []Server {
 	return addrsToServers(addrs)
 }
 
-// LastResolverError returns the last error from periodic resolver refresh.
-func (c *Client) LastResolverError() error {
+// ResolverErr returns the last error from periodic resolver refresh.
+func (c *Client) ResolverErr() error {
 	c.resolverMu.Lock()
 	defer c.resolverMu.Unlock()
 	return c.resolverErr
+}
+
+func serverKey(s Server) string {
+	return serverNetwork(s) + "\x00" + s.Address
+}
+
+func (c *Client) serverIndex() map[string]int {
+	addrs, _ := c.snapshotCluster()
+	out := make(map[string]int, len(addrs))
+	for i, a := range addrs {
+		if a != nil {
+			out[serverKey(addrToServer(a))] = i
+		}
+	}
+	return out
+}
+
+// pickFirstLiveAddr returns the first Servers() entry that is not in
+// DeadServers(). Identity is Network (empty = tcp) + Address. If every
+// node is dead, it returns Servers()[0]. An empty cluster is ErrInvalidAddress.
+func (c *Client) pickFirstLiveAddr() (*addr, error) {
+	addrs, _ := c.snapshotCluster()
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
+	}
+	dead := make(map[string]struct{}, 4)
+	for _, s := range c.DeadServers() {
+		dead[serverKey(s)] = struct{}{}
+	}
+	var first *addr
+	for _, a := range addrs {
+		if a == nil {
+			continue
+		}
+		if first == nil {
+			first = a
+		}
+		if _, ok := dead[serverKey(addrToServer(a))]; !ok {
+			return a, nil
+		}
+	}
+	if first == nil {
+		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
+	}
+	return first, nil
 }
 
 func (c *Client) setResolverErr(err error) {
@@ -187,7 +245,7 @@ func (c *Client) setResolverErr(err error) {
 
 // PoolStat is a snapshot of one node's connection pool.
 type PoolStat struct {
-	Address string
+	Server  Server
 	Total   int
 	Idle    int
 	MaxOpen int
@@ -210,7 +268,7 @@ func (c *Client) PoolStats() []PoolStat {
 		}
 		s := pool.stats()
 		out = append(out, PoolStat{
-			Address: addr.Address,
+			Server:  addrToServer(addr),
 			Total:   s.TotalConns,
 			Idle:    s.IdleConns,
 			MaxOpen: s.MaxOpen,
@@ -227,4 +285,17 @@ func (c *Client) nsBytes(key []byte) []byte {
 	out := make([]byte, 0, len(c.options.namespace)+len(key))
 	out = append(out, c.options.namespace...)
 	return append(out, key...)
+}
+
+func (c *Client) stripNS(key []byte) []byte {
+	if c == nil || c.options == nil || c.options.namespace == "" {
+		return key
+	}
+	prefix := []byte(c.options.namespace)
+	if !bytes.HasPrefix(key, prefix) {
+		return key
+	}
+	out := make([]byte, len(key)-len(prefix))
+	copy(out, key[len(prefix):])
+	return out
 }

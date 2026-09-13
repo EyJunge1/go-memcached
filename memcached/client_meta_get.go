@@ -13,8 +13,9 @@ func stripTrailingMN(raw []byte) []byte {
 	return bytes.TrimSuffix(raw, []byte("mn\r\n"))
 }
 
-// MetaGet fetches a key with meta flags.
-func (c *Client) MetaGet(ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
+// Get issues mg with the given flags.
+func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
+	c := m.c
 	if err := f.validate(); err != nil {
 		return MetaResult{}, err
 	}
@@ -36,11 +37,13 @@ func (c *Client) MetaGet(ctx context.Context, key []byte, f MetaGet) (MetaResult
 	resp.afterRecv = func(r *response) error {
 		return parseMetaItem(r.rawLines, item, mgFlags.q, true)
 	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
+	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
+	if err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}
 	applyCheckCAS(item, mgFlags)
-	return metaResultFrom(item, item.Status), nil
+	res.Item.CASMatched = item.CASMatched
+	return res, nil
 }
 
 func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
@@ -247,8 +250,9 @@ func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
 	return nil
 }
 
-// MetaPipeline issues mixed meta ops with auto-O, a trailing mn, and parallel fan-out.
-func (c *Client) MetaPipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, error) {
+// Pipeline issues mixed meta ops with auto-O, a trailing mn, and parallel fan-out.
+func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, error) {
+	c := m.c
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -346,14 +350,11 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	}
 	for _, p := range group {
 		if p.noop {
-			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key, Status: MetaStatusMN}}
+			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key}}
 		}
 	}
 	for _, item := range parsed {
-		idx, ok := byOpaque[item.OpaqueToken]
-		if !ok && item.Opaque != 0 {
-			idx, ok = byOpaque[strconv.FormatUint(item.Opaque, 10)]
-		}
+		idx, ok := byOpaque[item.Opaque]
 		if !ok {
 			continue
 		}
@@ -366,7 +367,7 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 				break
 			}
 		}
-		out[idx] = metaResultFrom(item, item.Status)
+		out[idx] = metaResultFrom(item, item.status)
 	}
 	for _, p := range group {
 		if out[p.idx].Status != MetaStatusUnknown {
@@ -378,11 +379,11 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 		}
 		switch {
 		case p.noop:
-			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key, Status: MetaStatusMN}}
+			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key}}
 		case string(p.cmd) == "mg":
-			out[p.idx] = MetaResult{Status: MetaStatusEN, Item: MetaItem{Key: p.key, Status: MetaStatusEN}}
+			out[p.idx] = MetaResult{Status: MetaStatusEN, Item: MetaItem{Key: p.key}}
 		default:
-			out[p.idx] = MetaResult{Status: MetaStatusHD, Item: MetaItem{Key: p.key, Status: MetaStatusHD}}
+			out[p.idx] = MetaResult{Status: MetaStatusHD, Item: MetaItem{Key: p.key}}
 		}
 	}
 	return dispatchErr

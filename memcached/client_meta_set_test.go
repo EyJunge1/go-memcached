@@ -10,14 +10,15 @@ func TestMetaQuietStillReturnsExists(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	_, err := client.MetaSet(ctx, []byte("k"), []byte("v"), MetaSet{})
+	_, err := client.Meta().Set(ctx, []byte("k"), []byte("v"), MetaSet{})
 	noError(t, err)
 
 	cas := uint64(999)
-	_, err = client.MetaSet(ctx, []byte("k"), []byte("v2"), MetaSet{Quiet: true, CompareCAS: &cas})
-	isErrorIs(t, err, ErrExists)
+	res, err := client.Meta().Set(ctx, []byte("k"), []byte("v2"), MetaSet{Quiet: true, CompareCAS: &cas})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrExists)
 
-	item, err := client.MetaGet(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	item, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), item.Item.Value)
 }
@@ -27,16 +28,17 @@ func TestMetaSetModeAdd(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	_, err := client.MetaSet(ctx, []byte("k"), []byte("v"), MetaSet{Mode: MetaSetModeAdd})
+	_, err := client.Meta().Set(ctx, []byte("k"), []byte("v"), MetaSet{Mode: MetaSetModeAdd})
 	noError(t, err)
-	_, err = client.MetaSet(ctx, []byte("k"), []byte("v2"), MetaSet{Mode: MetaSetModeAdd})
-	isErrorIs(t, err, ErrNotStored)
+	res, err := client.Meta().Set(ctx, []byte("k"), []byte("v2"), MetaSet{Mode: MetaSetModeAdd})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotStored)
 }
 
 func TestMetaSetRejectsInjectedMode(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 
-	_, err := client.MetaSet(context.Background(), []byte("k"), []byte("v"), MetaSet{Mode: "set\r\nquit"})
+	_, err := client.Meta().Set(context.Background(), []byte("k"), []byte("v"), MetaSet{Mode: "set\r\nquit"})
 	isErrorIs(t, err, ErrInvalidArgument)
 }

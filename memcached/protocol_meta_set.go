@@ -13,7 +13,7 @@ type metaSetFlags struct {
 	q      bool        // q: use noreply semantics for return codes
 	s      bool        // s: return the size of the stored item on success (ie; new size on append)
 	T      int64       // T(token): Time-To-Live for item, see "Expiration" above.
-	M      metaSetMode // M(token): mode switch to change behavior to: add, replace, append, prepend, set(default)
+	M      MetaSetMode // M(token): mode switch to change behavior to: add, replace, append, prepend, set(default)
 	N      int64       // N(token): if in append mode, auto vivify on miss with supplied TTL
 
 	Cset      bool
@@ -26,22 +26,23 @@ type metaSetFlags struct {
 	L         string
 }
 
-type metaSetMode string
+// MetaSetMode is the ms M token (add/replace/append/prepend/set).
+type MetaSetMode string
 
 const (
 	// MetaSetModeAdd means add the item only if it does not already exist.
-	MetaSetModeAdd metaSetMode = "E"
+	MetaSetModeAdd MetaSetMode = "E"
 	// MetaSetModeReplace means replace the item only if it already exists.
-	MetaSetModeReplace metaSetMode = "R"
+	MetaSetModeReplace MetaSetMode = "R"
 	// MetaSetModeAppend means append the data to the existing item.
-	MetaSetModeAppend metaSetMode = "A"
+	MetaSetModeAppend MetaSetMode = "A"
 	// MetaSetModePrepend means prepend the data to the existing item.
-	MetaSetModePrepend metaSetMode = "P"
+	MetaSetModePrepend MetaSetMode = "P"
 	// MetaSetModeSet means set the item regardless of whether it already exists.
-	MetaSetModeSet metaSetMode = "S"
+	MetaSetModeSet MetaSetMode = "S"
 )
 
-func validMetaSetMode(m metaSetMode) bool {
+func validMetaSetMode(m MetaSetMode) bool {
 	switch m {
 	case "", MetaSetModeAdd, MetaSetModeReplace, MetaSetModeAppend, MetaSetModePrepend, MetaSetModeSet:
 		return true

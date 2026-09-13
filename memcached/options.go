@@ -78,7 +78,7 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 		namespace:         cfg.Cluster.Namespace,
 		resolverRefresh:   cfg.Cluster.ResolverRefresh,
 		maxValueBytes:     cfg.MaxValueBytes,
-		tcpNoDelay:        tcpNoDelayEnabled(cfg.Transport.TCPNoDelay),
+		tcpNoDelay:        !cfg.Transport.DisableTCPNoDelay,
 		unixSocketAnyMode: cfg.Transport.UnixSocketAnyMode,
 		unixSocketMaxMode: cfg.Transport.UnixSocketMaxMode,
 	}
@@ -91,17 +91,19 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 	if o.resolver == nil {
 		o.resolver = defaultResolver{}
 	}
-	if isZeroTransport(cfg.Transport) {
-		o.dialTimeout = 3 * time.Second
-		o.readTimeout = 5 * time.Second
-		o.writeTimeout = 5 * time.Second
+	o.dialTimeout = timeoutOrDefault(cfg.Transport.DialTimeout, 3*time.Second)
+	o.readTimeout = timeoutOrDefault(cfg.Transport.ReadTimeout, 5*time.Second)
+	o.writeTimeout = timeoutOrDefault(cfg.Transport.WriteTimeout, 5*time.Second)
+	if o.retryAttempts == 0 {
 		o.retryAttempts = 1
 	}
-	if isZeroPool(cfg.Pool) {
+	if o.maxOpen == 0 {
 		o.maxOpen = 100
+	}
+	if cfg.Pool.MaxIdle < 0 {
+		o.maxIdle = 0
+	} else if o.maxIdle == 0 {
 		o.maxIdle = 10
-	} else if o.maxOpen <= 0 {
-		return nil, fmt.Errorf("Pool.MaxOpen must be > 0: %w", ErrInvalidArgument)
 	}
 	if o.minIdle < 0 {
 		o.minIdle = 0
@@ -120,6 +122,16 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 		return nil, err
 	}
 	return o, nil
+}
+
+func timeoutOrDefault(v, def time.Duration) time.Duration {
+	if v == 0 {
+		return def
+	}
+	if v == TimeoutNone {
+		return 0
+	}
+	return v
 }
 
 func tlsConfigForDial(cfg *tls.Config, network, address string) *tls.Config {

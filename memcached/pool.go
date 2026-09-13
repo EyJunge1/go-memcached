@@ -187,7 +187,7 @@ func (p *connPool) put(cn memcachedConn) error {
 	}
 
 	p.mu.Lock()
-	maxIdleClose := p.maxIdle > 0 && len(p.conns) >= p.maxIdle
+	maxIdleClose := p.maxIdle <= 0 || len(p.conns) >= p.maxIdle
 	if p.closed || (p.maxOpen > 0 && int(p.numOpen.Load()) > p.maxOpen) || maxIdleClose {
 		_ = cn.Close()
 		p.numOpen.Add(-1)

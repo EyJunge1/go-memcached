@@ -11,14 +11,14 @@ func TestIncrDecr(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("10")}))
-	got, err := client.Incr(ctx, []byte("n"), 5, MutateOpts{})
+	got, err := client.Incr(ctx, []byte("n"), 5)
 	noError(t, err)
 	equal(t, uint64(15), got)
 
-	got, err = client.Decr(ctx, []byte("n"), 3, MutateOpts{})
+	got, err = client.Decr(ctx, []byte("n"), 3)
 	noError(t, err)
 	equal(t, uint64(12), got)
 
-	_, err = client.Incr(ctx, []byte("missing"), 1, MutateOpts{})
+	_, err = client.Incr(ctx, []byte("missing"), 1)
 	isErrorIs(t, err, ErrNotFound)
 }

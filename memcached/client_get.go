@@ -14,17 +14,27 @@ type GetOpts struct {
 
 // Get fetches keys. Missing keys are omitted. An empty result is not ErrNotFound.
 // Keys are grouped by cluster node and fetched in parallel.
-// Item.Key is the wire key, including Config.Cluster.Namespace when set.
-func (c *Client) Get(ctx context.Context, opts GetOpts, keys ...[]byte) ([]*Item, error) {
+// Item.Key is the caller key; Config.Cluster.Namespace is stripped after the read.
+func (c *Client) Get(ctx context.Context, keys [][]byte, opts GetOpts) ([]Item, error) {
 	if len(keys) == 0 {
-		return []*Item{}, nil
+		return []Item{}, nil
 	}
 	command, withCAS := getCommand(opts)
 	var exp Exptime
 	if opts.Touch != nil {
 		exp = *opts.Touch
 	}
-	return c.getFromNodes(ctx, command, exp, keys, withCAS)
+	ptrs, err := c.getFromNodes(ctx, command, exp, keys, withCAS)
+	out := make([]Item, 0, len(ptrs))
+	for _, p := range ptrs {
+		if p == nil {
+			continue
+		}
+		it := *p
+		it.Key = c.stripNS(it.Key)
+		out = append(out, it)
+	}
+	return out, err
 }
 
 func getCommand(opts GetOpts) (command string, withCAS bool) {

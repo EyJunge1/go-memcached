@@ -89,11 +89,9 @@ func metaStatusFromCD(cd []byte) MetaStatus {
 
 // MetaResult is one meta command outcome.
 type MetaResult struct {
-	Status    MetaStatus
-	Item      MetaItem
-	WireKey   []byte
-	KeyBase64 bool
-	err       error
+	Status MetaStatus
+	Item   MetaItem
+	err    error
 }
 
 func metaResultFrom(item *MetaItem, status MetaStatus) MetaResult {
@@ -101,13 +99,13 @@ func metaResultFrom(item *MetaItem, status MetaStatus) MetaResult {
 		return MetaResult{Status: status}
 	}
 	if status == MetaStatusUnknown {
-		status = item.Status
+		status = item.status
 	}
+	cp := *item
+	cp.status = 0
 	return MetaResult{
-		Status:    status,
-		Item:      *item,
-		WireKey:   item.WireKey,
-		KeyBase64: item.KeyBase64,
+		Status: status,
+		Item:   cp,
 	}
 }
 
@@ -123,15 +121,17 @@ type MetaGetReturn struct {
 }
 
 // MetaGet is the mg flags struct.
+// Pointers (CompareCAS, Vivify, Touch) follow Config rule C: nil omits the flag.
+// Recache follows rule D: zero omits R.
 type MetaGet struct {
-	BinaryKey bool
-	Return    MetaGetReturn
-	CheckCAS  *uint64
-	Opaque    string
-	Quiet     bool
-	NoLRUBump bool
-	NewCAS    *uint64
-	Vivify    *Exptime
+	BinaryKey  bool
+	Return     MetaGetReturn
+	CompareCAS *uint64
+	Opaque     string
+	Quiet      bool
+	NoLRUBump  bool
+	NewCAS     *uint64
+	Vivify     *Exptime
 	// Recache is the remaining-TTL window for R (seconds on the wire).
 	// Zero omits the flag. This is not an item Exptime and has no 30-day cap.
 	Recache time.Duration
@@ -148,21 +148,21 @@ type MetaNoop struct {
 
 // MetaSet is the ms flags struct.
 type MetaSet struct {
-	BinaryKey   bool
-	ReturnCAS   bool
-	CompareCAS  *uint64
-	NewCAS      *uint64
-	ClientFlags uint32
-	Invalidate  bool
-	ReturnKey   bool
-	Opaque      string
-	Quiet       bool
-	ReturnSize  bool
-	TTL         *Exptime
-	Mode        metaSetMode
-	AutoVivify  *Exptime
-	P           string
-	L           string
+	BinaryKey  bool
+	ReturnCAS  bool
+	CompareCAS *uint64
+	NewCAS     *uint64
+	Flags      uint32
+	Invalidate bool
+	ReturnKey  bool
+	Opaque     string
+	Quiet      bool
+	ReturnSize bool
+	TTL        *Exptime
+	Mode       MetaSetMode
+	AutoVivify *Exptime
+	P          string
+	L          string
 }
 
 // MetaDelete is the md flags struct.
@@ -195,7 +195,7 @@ type MetaArithmetic struct {
 	AutoCreate  *Exptime
 	Initial     *uint64
 	TTL         *Exptime
-	Mode        metaArithmeticMode
+	Mode        MetaArithmeticMode
 	Opaque      string
 	Quiet       bool
 	ReturnTTL   bool
@@ -206,8 +206,9 @@ type MetaArithmetic struct {
 	L           string
 }
 
-// MetaOp is one entry in MetaPipeline.
+// MetaOp is one entry in Meta().Pipeline.
 // Exactly one of Get, Set, Del, Arith, Noop must be non-nil.
+// Debug (me) is not pipelineable.
 type MetaOp struct {
 	Key   []byte
 	Body  []byte
@@ -247,8 +248,8 @@ func (f MetaGet) toFlags() *metaGetFlags {
 		v: f.Return.Value,
 	}
 	applyOpaque(f.Opaque, &out.O, &out.Oset, &out.Otoken, &out.OtokenSet)
-	if f.CheckCAS != nil {
-		out.C = *f.CheckCAS
+	if f.CompareCAS != nil {
+		out.C = *f.CompareCAS
 		out.Cset = true
 	}
 	if f.NewCAS != nil {
@@ -276,7 +277,7 @@ func (f MetaSet) toFlags() *metaSetFlags {
 	out := &metaSetFlags{
 		b: f.BinaryKey,
 		c: f.ReturnCAS,
-		F: f.ClientFlags,
+		F: f.Flags,
 		I: f.Invalidate,
 		k: f.ReturnKey,
 		q: f.Quiet,

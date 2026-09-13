@@ -5,13 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
-// AdminClient exposes destructive and operational server commands.
-// Obtain it via Client.Admin after Config.AllowAdmin.
-// Node-local commands require On(server). Shutdown cannot run without On.
-type AdminClient struct {
+// Admin is the factory for node and broadcast admin handles.
+// Obtain it via Client.Admin after Config.AllowAdmin. Ops live on
+// AdminNode (On) and AdminBroadcast (All), not on Admin.
+type Admin struct {
+	c *Client
+}
+
+// AdminNode runs admin commands on one configured server.
+type AdminNode struct {
 	c      *Client
 	target *Server
 }
@@ -26,34 +32,61 @@ type AdminOpts struct {
 	Quiet bool
 }
 
-// Admin returns the admin API. Requires Config.AllowAdmin.
-func (c *Client) Admin() (*AdminClient, error) {
+// StatsDetailMode is the argument to AdminNode.StatsDetail.
+type StatsDetailMode uint8
+
+const (
+	StatsDetailOn StatsDetailMode = iota
+	StatsDetailOff
+	StatsDetailDump
+)
+
+func (m StatsDetailMode) wire() (string, error) {
+	switch m {
+	case StatsDetailOn:
+		return "on", nil
+	case StatsDetailOff:
+		return "off", nil
+	case StatsDetailDump:
+		return "dump", nil
+	default:
+		return "", fmt.Errorf("stats detail: %w", ErrInvalidArgument)
+	}
+}
+
+// Admin returns the admin factory. Requires Config.AllowAdmin.
+func (c *Client) Admin() (*Admin, error) {
 	if c == nil || c.options == nil || !c.options.allowAdmin {
 		return nil, ErrAdminNotEnabled
 	}
-	return &AdminClient{c: c}, nil
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return nil, ErrClosed
+	}
+	return &Admin{c: c}, nil
 }
 
-// On binds the admin handle to one configured server.
-func (a *AdminClient) On(server Server) *AdminClient {
+// On binds admin commands to one configured server.
+func (a *Admin) On(server Server) *AdminNode {
 	if a == nil {
 		return nil
 	}
-	cp := *a
 	s := server
-	cp.target = &s
-	return &cp
+	return &AdminNode{c: a.c, target: &s}
 }
 
-// All returns a broadcast handle for non-destructive cluster-wide admin ops.
-func (a *AdminClient) All() *AdminBroadcast {
+// All returns a broadcast handle for cluster-wide admin ops
+// (including Flush when Config.AllowFlushAll is set).
+func (a *Admin) All() *AdminBroadcast {
 	if a == nil {
 		return nil
 	}
 	return &AdminBroadcast{c: a.c}
 }
 
-func (a *AdminClient) resolveTarget() (*addr, error) {
+func (a *AdminNode) resolveTarget() (*addr, error) {
 	if a == nil || a.c == nil {
 		return nil, ErrAdminNotEnabled
 	}
@@ -70,7 +103,7 @@ func (a *AdminClient) resolveTarget() (*addr, error) {
 	return nil, fmt.Errorf("admin target %s: %w", a.target.Address, ErrInvalidAddress)
 }
 
-func (a *AdminClient) do(ctx context.Context, req *request, resp *response) error {
+func (a *AdminNode) do(ctx context.Context, req *request, resp *response) error {
 	addr, err := a.resolveTarget()
 	if err != nil {
 		return err
@@ -82,7 +115,7 @@ func (a *AdminClient) do(ctx context.Context, req *request, resp *response) erro
 	return nil
 }
 
-func (a *AdminClient) doQuiet(ctx context.Context, req *request, resp *response) error {
+func (a *AdminNode) doQuiet(ctx context.Context, req *request, resp *response) error {
 	addr, err := a.resolveTarget()
 	if err != nil {
 		return err
@@ -136,7 +169,7 @@ func (b *AdminBroadcast) doAllQuiet(ctx context.Context, build func() (*request,
 }
 
 // Verbosity sets the server log level on the bound node.
-func (a *AdminClient) Verbosity(ctx context.Context, level int, o AdminOpts) error {
+func (a *AdminNode) Verbosity(ctx context.Context, level int, o AdminOpts) error {
 	if level < 0 {
 		return fmt.Errorf("verbosity: %w", ErrInvalidArgument)
 	}
@@ -160,7 +193,7 @@ func (b *AdminBroadcast) Verbosity(ctx context.Context, level int, o AdminOpts) 
 }
 
 // Shutdown asks the bound server to stop. Requires On().
-func (a *AdminClient) Shutdown(ctx context.Context, graceful bool) error {
+func (a *AdminNode) Shutdown(ctx context.Context, graceful bool) error {
 	addr, err := a.resolveTarget()
 	if err != nil {
 		return err
@@ -181,7 +214,7 @@ func (a *AdminClient) Shutdown(ctx context.Context, graceful bool) error {
 }
 
 // CacheMemLimit sets the runtime cache limit in megabytes.
-func (a *AdminClient) CacheMemLimit(ctx context.Context, megabytes uint32, o AdminOpts) error {
+func (a *AdminNode) CacheMemLimit(ctx context.Context, megabytes uint32, o AdminOpts) error {
 	req, resp := buildCacheMemLimitCommand(megabytes, o.Quiet)
 	defer releaseReqAndResp(req, resp)
 	if o.Quiet {
@@ -199,21 +232,20 @@ func (b *AdminBroadcast) CacheMemLimit(ctx context.Context, megabytes uint32, o 
 }
 
 // StatsDetail runs stats detail on|off|dump on the bound node.
-// on/off return an empty map after OK. dump returns PREFIX name → counters.
-func (a *AdminClient) StatsDetail(ctx context.Context, mode string) (map[string]string, error) {
-	switch mode {
-	case "on", "off", "dump":
-	default:
-		return nil, fmt.Errorf("stats detail %q: %w", mode, ErrInvalidArgument)
+// On/Off return an empty map after OK. Dump returns PREFIX name → counters.
+func (a *AdminNode) StatsDetail(ctx context.Context, mode StatsDetailMode) (map[string]string, error) {
+	wire, err := mode.wire()
+	if err != nil {
+		return nil, err
 	}
 	addr, err := a.resolveTarget()
 	if err != nil {
 		return nil, err
 	}
-	req, resp := buildStatsDetailCommand(mode)
+	req, resp := buildStatsDetailCommand(wire)
 	defer releaseReqAndResp(req, resp)
 	var out map[string]string
-	if mode == "dump" {
+	if mode == StatsDetailDump {
 		resp.afterRecv = func(r *response) error {
 			var perr error
 			out, perr = parseStatsDetailDump(r.rawLines)
@@ -232,27 +264,40 @@ func (a *AdminClient) StatsDetail(ctx context.Context, mode string) (map[string]
 	return out, nil
 }
 
-// Stats returns STAT pairs from the bound node, including reset/sizes.
-func (a *AdminClient) Stats(ctx context.Context, args ...string) (map[string]string, error) {
+// Stats runs stats reset or stats sizes on the bound node.
+// Other subcommands belong on Client.Stats / Client.StatsAll.
+func (a *AdminNode) Stats(ctx context.Context, args ...string) (map[string]string, error) {
 	addr, err := a.resolveTarget()
 	if err != nil {
 		return nil, err
 	}
-	if err := validFreeStatsArgs(args); err != nil {
+	if err := validAdminStatsArgs(args); err != nil {
 		return nil, err
 	}
 	return a.c.statsMapOnAddr(ctx, addr, args)
 }
 
+func validAdminStatsArgs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("admin stats: only reset and sizes: %w", ErrInvalidArgument)
+	}
+	for _, a := range args {
+		if !strings.EqualFold(a, "reset") && !strings.EqualFold(a, "sizes") {
+			return fmt.Errorf("admin stats %q: use Client.Stats: %w", a, ErrInvalidArgument)
+		}
+	}
+	return validFreeStatsArgs(args)
+}
+
 // SlabsReassign moves memory from source to dest slab class. source -1 means any.
-func (a *AdminClient) SlabsReassign(ctx context.Context, source, dest int) error {
+func (a *AdminNode) SlabsReassign(ctx context.Context, source, dest int) error {
 	req, resp := buildSlabsReassignCommand(source, dest)
 	defer releaseReqAndResp(req, resp)
 	return a.do(ctx, req, resp)
 }
 
 // SlabsAutomove sets automove mode: 0 standby, 1 normal, 2 aggressive.
-func (a *AdminClient) SlabsAutomove(ctx context.Context, mode int) error {
+func (a *AdminNode) SlabsAutomove(ctx context.Context, mode int) error {
 	if mode < 0 || mode > 2 {
 		return fmt.Errorf("slabs automove: %w", ErrInvalidArgument)
 	}
@@ -262,7 +307,7 @@ func (a *AdminClient) SlabsAutomove(ctx context.Context, mode int) error {
 }
 
 // LRUTune updates segmented LRU percentages and age factors.
-func (a *AdminClient) LRUTune(ctx context.Context, hotPct, warmPct int, hotFactor, warmFactor float64) error {
+func (a *AdminNode) LRUTune(ctx context.Context, hotPct, warmPct int, hotFactor, warmFactor float64) error {
 	if hotPct < 0 || warmPct < 0 || hotFactor < 0 || warmFactor < 0 {
 		return fmt.Errorf("lru tune: %w", ErrInvalidArgument)
 	}
@@ -272,7 +317,7 @@ func (a *AdminClient) LRUTune(ctx context.Context, hotPct, warmPct int, hotFacto
 }
 
 // LRUMode sets flat or segmented LRU.
-func (a *AdminClient) LRUMode(ctx context.Context, mode string) error {
+func (a *AdminNode) LRUMode(ctx context.Context, mode string) error {
 	if mode != "flat" && mode != "segmented" {
 		return fmt.Errorf("lru mode: %w", ErrInvalidArgument)
 	}
@@ -282,14 +327,14 @@ func (a *AdminClient) LRUMode(ctx context.Context, mode string) error {
 }
 
 // LRUTempTTL sets the TEMP_LRU threshold. Negative disables TEMP_LRU.
-func (a *AdminClient) LRUTempTTL(ctx context.Context, ttl int) error {
+func (a *AdminNode) LRUTempTTL(ctx context.Context, ttl int) error {
 	req, resp := buildLRUTempTTLCommand(ttl)
 	defer releaseReqAndResp(req, resp)
 	return a.do(ctx, req, resp)
 }
 
 // LRUCrawlerEnable enables or disables the LRU crawler.
-func (a *AdminClient) LRUCrawlerEnable(ctx context.Context, on bool) error {
+func (a *AdminNode) LRUCrawlerEnable(ctx context.Context, on bool) error {
 	arg := "disable"
 	if on {
 		arg = "enable"
@@ -300,7 +345,7 @@ func (a *AdminClient) LRUCrawlerEnable(ctx context.Context, on bool) error {
 }
 
 // LRUCrawlerSleep sets crawler sleep in microseconds (0–1_000_000).
-func (a *AdminClient) LRUCrawlerSleep(ctx context.Context, usec uint32) error {
+func (a *AdminNode) LRUCrawlerSleep(ctx context.Context, usec uint32) error {
 	if usec > 1_000_000 {
 		return fmt.Errorf("lru_crawler sleep: %w", ErrInvalidArgument)
 	}
@@ -310,14 +355,14 @@ func (a *AdminClient) LRUCrawlerSleep(ctx context.Context, usec uint32) error {
 }
 
 // LRUCrawlerToCrawl sets max items per class per crawler run.
-func (a *AdminClient) LRUCrawlerToCrawl(ctx context.Context, n uint32) error {
+func (a *AdminNode) LRUCrawlerToCrawl(ctx context.Context, n uint32) error {
 	req, resp := buildLRUCrawlerCommand("tocrawl", strconvU32(n))
 	defer releaseReqAndResp(req, resp)
 	return a.do(ctx, req, resp)
 }
 
 // LRUCrawlerCrawl starts a crawl of the given classes ("all" or "1,3,10").
-func (a *AdminClient) LRUCrawlerCrawl(ctx context.Context, classes string) error {
+func (a *AdminNode) LRUCrawlerCrawl(ctx context.Context, classes string) error {
 	if err := validCrawlerSelector(classes); err != nil {
 		return err
 	}

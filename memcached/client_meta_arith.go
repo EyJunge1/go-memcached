@@ -5,8 +5,9 @@ import (
 	"fmt"
 )
 
-// MetaArithmetic increments or decrements a key with meta flags.
-func (c *Client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, f MetaArithmetic) (MetaResult, error) {
+// Arithmetic issues ma with the given flags.
+func (m *MetaClient) Arithmetic(ctx context.Context, key []byte, delta uint64, f MetaArithmetic) (MetaResult, error) {
+	c := m.c
 	if err := f.validate(); err != nil {
 		return MetaResult{}, err
 	}
@@ -31,8 +32,9 @@ func (c *Client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, f
 	resp.afterRecv = func(r *response) error {
 		return parseMetaItem(r.rawLines, item, maFlags.q, false)
 	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
+	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
+	if err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}
-	return metaResultFrom(item, item.Status), nil
+	return res, nil
 }

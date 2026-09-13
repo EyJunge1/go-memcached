@@ -119,10 +119,10 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 
 	if noReply && len(proto) == 0 {
 		if quietMissAsNotFound {
-			item.Status = MetaStatusEN
+			item.status = MetaStatusEN
 			return ErrNotFound
 		}
-		item.Status = MetaStatusHD
+		item.status = MetaStatusHD
 		item.gotHD = true
 		return nil
 	}
@@ -144,7 +144,7 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 	)
 	cd := parts[CDIndex]
 
-	item.Status = metaStatusFromCD(cd)
+	item.status = metaStatusFromCD(cd)
 	switch string(cd) {
 	case "NF":
 		_ = parseFlags(parts, 1, item)
@@ -262,15 +262,12 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 				if lastAccessed > math.MaxInt64 {
 					return fmt.Errorf("l flag exceeds int64: %w", ErrMalformedResponse)
 				}
-				item.LastAccessedTime = int64(lastAccessed)
+				item.LastAccess = int64(lastAccessed)
 			}
 		case 's':
 			item.Size, err = parseUint(flag, value)
 		case 'O':
-			item.OpaqueToken = string(value)
-			if v, perr := strconv.ParseUint(string(value), 10, 64); perr == nil {
-				item.Opaque = v
-			}
+			item.Opaque = string(value)
 		case 'h':
 			var hitBefore uint64
 			hitBefore, err = parseUint(flag, value)
@@ -323,7 +320,7 @@ func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
 		if len(parts) == 0 {
 			return nil, fmt.Errorf("empty meta line: %w", ErrMalformedResponse)
 		}
-		item := &MetaItem{Status: metaStatusFromCD(parts[0])}
+		item := &MetaItem{status: metaStatusFromCD(parts[0])}
 		if bytes.Equal(parts[0], []byte("VA")) {
 			if i+1 >= len(lines) {
 				return nil, fmt.Errorf("missing value: %w", ErrMalformedResponse)

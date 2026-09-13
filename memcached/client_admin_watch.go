@@ -71,7 +71,7 @@ func readAdminStreamLine(cn memcachedConn) ([]byte, error) {
 	}
 }
 
-func (a *AdminClient) sendAdminLine(ctx context.Context, cn memcachedConn, req *request, resp *response) error {
+func (a *AdminNode) sendAdminLine(ctx context.Context, cn memcachedConn, req *request, resp *response) error {
 	a.c.enableUDPFraming(nil, req, resp)
 	if err := req.send(ctx, cn, a.c.options.writeTimeout); err != nil {
 		return wrapTransport(fmt.Errorf("send failed: %w", err))
@@ -85,7 +85,7 @@ func (a *AdminClient) sendAdminLine(ctx context.Context, cn memcachedConn, req *
 	return nil
 }
 
-func (a *AdminClient) acquireStream(ctx context.Context) (memcachedConn, error) {
+func (a *AdminNode) acquireStream(ctx context.Context) (memcachedConn, error) {
 	if err := requireDeadline(ctx); err != nil {
 		return nil, err
 	}
@@ -100,8 +100,9 @@ func (a *AdminClient) acquireStream(ctx context.Context) (memcachedConn, error) 
 	return cn, nil
 }
 
-// Watch starts a watcher stream on the bound node. ctx must have a deadline.
-func (a *AdminClient) Watch(ctx context.Context, topics ...WatchTopic) (<-chan WatchEvent, error) {
+// Watch starts a watcher stream on the bound node.
+// ctx must have a deadline; cancel or deadline close the dedicated connection.
+func (a *AdminNode) Watch(ctx context.Context, topics ...WatchTopic) (<-chan WatchEvent, error) {
 	if len(topics) == 0 {
 		return nil, fmt.Errorf("watch: %w", ErrInvalidArgument)
 	}
@@ -128,7 +129,7 @@ func (a *AdminClient) Watch(ctx context.Context, topics ...WatchTopic) (<-chan W
 	return out, nil
 }
 
-func (a *AdminClient) readWatch(ctx context.Context, cn memcachedConn, out chan WatchEvent) {
+func (a *AdminNode) readWatch(ctx context.Context, cn memcachedConn, out chan WatchEvent) {
 	defer close(out)
 	defer releaseDedicated(cn)
 	stop := context.AfterFunc(ctx, func() { _ = cn.Close() })
@@ -216,7 +217,8 @@ func parseURIPairs(line string) map[string]string {
 }
 
 // LRUCrawlerMetaDump streams URI-encoded item metadata until END or EN.
-func (a *AdminClient) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
+// ctx must have a deadline; cancel or deadline close the dedicated connection.
+func (a *AdminNode) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
 	}
@@ -234,8 +236,9 @@ func (a *AdminClient) LRUCrawlerMetaDump(ctx context.Context, selector string) (
 	return ch, nil
 }
 
-// LRUCrawlerMgDump streams "mg …" lines until END or EN for a later MetaGet.
-func (a *AdminClient) LRUCrawlerMgDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
+// LRUCrawlerMgDump streams "mg …" lines until END or EN for a later Meta().Get.
+// ctx must have a deadline; cancel or deadline close the dedicated connection.
+func (a *AdminNode) LRUCrawlerMgDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
 	}
@@ -253,7 +256,7 @@ func (a *AdminClient) LRUCrawlerMgDump(ctx context.Context, selector string) (<-
 	return ch, nil
 }
 
-func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string, parse func(string) DumpEntry, emit func(DumpEntry), done func()) error {
+func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, parse func(string) DumpEntry, emit func(DumpEntry), done func()) error {
 	cn, err := a.acquireStream(ctx)
 	if err != nil {
 		return err

@@ -9,18 +9,18 @@ import (
 )
 
 // FlushOpts controls flush_all delay, cluster stagger, and noreply.
-// Delay 0 omits the token (immediate). ExptimeImmediate sends wire -1.
-// Stagger applies only when Delay is 0: node i uses Rel(i*Stagger).
+// Delay nil omits the token (immediate). ExptimeImmediate sends wire -1.
+// Stagger applies only when Delay is nil: node i uses Rel(i*Stagger).
 type FlushOpts struct {
-	Delay   Exptime
+	Delay   *Exptime
 	Stagger time.Duration
 	Quiet   bool
 }
 
 func flushDelayFor(o FlushOpts) func(int) Exptime {
 	return func(i int) Exptime {
-		if o.Delay != 0 {
-			return o.Delay
+		if o.Delay != nil {
+			return *o.Delay
 		}
 		return Rel(time.Duration(i) * o.Stagger)
 	}
@@ -30,23 +30,20 @@ func flushOptsValid(o FlushOpts) error {
 	if o.Stagger < 0 {
 		return fmt.Errorf("flush_all: %w", ErrInvalidArgument)
 	}
-	if o.Delay != 0 && o.Stagger != 0 {
+	if o.Delay != nil && o.Stagger != 0 {
 		return fmt.Errorf("flush_all Delay excludes Stagger: %w", ErrInvalidArgument)
 	}
 	return nil
 }
 
-// FlushAll invalidates items on the On() node. Requires Config.AllowFlushAll.
-// Broadcast is All().FlushAll.
-func (a *AdminClient) FlushAll(ctx context.Context, o FlushOpts) error {
+// Flush sends flush_all on the On() node. Requires Config.AllowFlushAll.
+// Broadcast is All().Flush.
+func (a *AdminNode) Flush(ctx context.Context, o FlushOpts) error {
 	if a == nil || a.c == nil {
 		return ErrAdminNotEnabled
 	}
 	if err := flushOptsValid(o); err != nil {
 		return err
-	}
-	if a.target == nil {
-		return ErrAdminTargetRequired
 	}
 	addr, err := a.resolveTarget()
 	if err != nil {
@@ -58,8 +55,8 @@ func (a *AdminClient) FlushAll(ctx context.Context, o FlushOpts) error {
 	return a.c.flushAllOnAddr(ctx, addr, flushDelayFor(o)(0), o.Quiet)
 }
 
-// FlushAll invalidates items on every configured server.
-func (b *AdminBroadcast) FlushAll(ctx context.Context, o FlushOpts) error {
+// Flush sends flush_all on every configured server.
+func (b *AdminBroadcast) Flush(ctx context.Context, o FlushOpts) error {
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
 	}

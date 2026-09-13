@@ -65,7 +65,7 @@ func Test_concurrent(t *testing.T) {
 		return MetaSet{
 			NewCAS:      &cas,
 			TTL:         &exp,
-			ClientFlags: clientFlags,
+			Flags: clientFlags,
 			ReturnKey:   true,
 			ReturnSize:  true,
 			ReturnCAS:   true,
@@ -86,7 +86,7 @@ func Test_concurrent(t *testing.T) {
 
 		// update only
 		for counter <= 20 {
-			item, err := client.MetaSet(ctx, []byte(key), []byte(value), msOptions(cas, 0x1234))
+			item, err := client.Meta().Set(ctx, []byte(key), []byte(value), msOptions(cas, 0x1234))
 			noError(t, err)
 			if err != nil {
 				return
@@ -104,7 +104,7 @@ func Test_concurrent(t *testing.T) {
 		counter := 0
 
 		for counter <= 200 {
-			items, err := client.Get(ctx, GetOpts{}, []byte(key))
+			items, err := client.Get(ctx, [][]byte{[]byte(key)}, GetOpts{})
 			noError(t, err)
 			if len(items) == 0 {
 				goto next
@@ -159,8 +159,7 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte(key1), Value: value, Flags: flag}))
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte(key2), Value: value, Flags: flag}))
 
-	assertItem := func(item *Item) {
-		notNil(t, item)
+	assertItem := func(item Item) {
 		equal(t, value, item.Value)
 		equal(t, flag, item.Flags)
 	}
@@ -168,7 +167,7 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 	item := mustGet(t, client, ctx, []byte(key1))
 	assertItem(item)
 
-	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte(key1), []byte(key2))
+	items, err := client.Get(ctx, [][]byte{[]byte(key1), []byte(key2)}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -177,12 +176,12 @@ func Test_classicReadCommandsRoundTrip(t *testing.T) {
 	}
 
 	exp := Rel(time.Second)
-	items, err = client.Get(ctx, GetOpts{Touch: &exp}, []byte(key1))
+	items, err = client.Get(ctx, [][]byte{[]byte(key1)}, GetOpts{Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 1)
 	assertItem(items[0])
 
-	items, err = client.Get(ctx, GetOpts{CAS: true, Touch: &exp}, []byte(key1), []byte(key2))
+	items, err = client.Get(ctx, [][]byte{[]byte(key1), []byte(key2)}, GetOpts{CAS: true, Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -199,11 +198,11 @@ func Test_metaReadRoundTrip(t *testing.T) {
 	value := []byte("hello hello hello hello hello hello")
 	flag := uint32(0x2345)
 
-	stored, err := client.MetaSet(ctx, key, value, MetaSet{ClientFlags: flag})
+	stored, err := client.Meta().Set(ctx, key, value, MetaSet{Flags: flag})
 	noError(t, err)
 	equal(t, flag, stored.Item.Flags)
 
-	item, err := client.MetaGet(ctx, key, MetaGet{Return: MetaGetReturn{Value: true, Flags: true}})
+	item, err := client.Meta().Get(ctx, key, MetaGet{Return: MetaGetReturn{Value: true, Flags: true}})
 	noError(t, err)
 	equal(t, value, item.Item.Value)
 	equal(t, flag, item.Item.Flags)

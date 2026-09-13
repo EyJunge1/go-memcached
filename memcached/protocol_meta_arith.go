@@ -8,7 +8,7 @@ type metaArithmeticFlags struct {
 	J      uint64             // J(token): initial value to use if auto created after miss (default 0)
 	D      uint64             // D(token): delta to apply (decimal unsigned 64-bit number, default 1)
 	T      int64              // T(token): update TTL on success
-	M      metaArithmeticMode // M(token): mode switch to change between incr and decr modes.
+	M      MetaArithmeticMode // M(token): mode switch to change between incr and decr modes.
 	O      uint64             // O(token): opaque value, consumes a token and copies back with response
 	Otoken string
 	q      bool // q: use noreply semantics for return codes
@@ -28,14 +28,15 @@ type metaArithmeticFlags struct {
 	L         string
 }
 
-type metaArithmeticMode string
+// MetaArithmeticMode is the ma M token (incr/decr).
+type MetaArithmeticMode string
 
 const (
-	MetaArithmeticModeIncr metaArithmeticMode = "I"
-	MetaArithmeticModeDecr metaArithmeticMode = "D"
+	MetaArithmeticModeIncr MetaArithmeticMode = "I"
+	MetaArithmeticModeDecr MetaArithmeticMode = "D"
 )
 
-func validMetaArithmeticMode(m metaArithmeticMode) bool {
+func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 	switch m {
 	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr:
 		return true

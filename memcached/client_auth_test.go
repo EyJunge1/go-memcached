@@ -42,7 +42,7 @@ func TestOpaqueTokenRejectedAndAuth(t *testing.T) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
 
-	_, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
+	_, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
@@ -73,7 +73,7 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 		}
 	}
 	srv.mu.Unlock()
-	items, err := plain.Get(context.Background(), GetOpts{}, []byte("__mc_auth"))
+	items, err := plain.Get(context.Background(), [][]byte{[]byte("__mc_auth")}, GetOpts{})
 	noError(t, err)
 	hasLen(t, items, 0)
 }

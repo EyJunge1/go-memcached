@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -78,7 +79,7 @@ func TestRetrySkipsNotFound(t *testing.T) {
 		}
 	})
 
-	_, err := client.Incr(context.Background(), []byte("missing"), 1, MutateOpts{})
+	_, err := client.Incr(context.Background(), []byte("missing"), 1)
 	isErrorIs(t, err, ErrNotFound)
 	equal(t, int32(1), dials.Load())
 }
@@ -249,7 +250,7 @@ func TestNamespacePrefixesWireKey(t *testing.T) {
 
 	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, []byte("v"), item.Value)
-	equal(t, []byte("ns:k"), item.Key)
+	equal(t, []byte("k"), item.Key)
 }
 
 func TestMinIdleWarmsPool(t *testing.T) {
@@ -326,10 +327,10 @@ func TestResolverRefreshKeepsStandAndRecordsError(t *testing.T) {
 		cfg.Cluster.ResolveSpec = srv.Addr()
 	})
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for client.LastResolverError() == nil && time.Now().Before(deadline) {
+	for client.ResolverErr() == nil && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	isError(t, client.LastResolverError())
+	isError(t, client.ResolverErr())
 	servers := client.Servers()
 	hasLen(t, servers, 1)
 	equal(t, srv.Addr(), servers[0].Address)
@@ -380,13 +381,45 @@ func TestResolverRefreshKeepsResolveSpec(t *testing.T) {
 	}
 }
 
-func TestNewRejectsPoolMaxOpenZero(t *testing.T) {
+func TestNewPoolMaxOpenZeroUsesDefault(t *testing.T) {
 	cfg, err := testConfig("127.0.0.1:11211")
 	noError(t, err)
 	cfg.Pool.MinIdle = 1
 	cfg.Pool.MaxOpen = 0
-	_, err = New(cfg)
-	isErrorIs(t, err, ErrInvalidArgument)
+	client, err := New(cfg)
+	noError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	equal(t, 100, client.options.maxOpen)
+	equal(t, 10, client.options.maxIdle)
+}
+
+func TestNewPoolPartialAndTimeoutNone(t *testing.T) {
+	cfg, err := testConfig("127.0.0.1:11211")
+	noError(t, err)
+	cfg.Transport.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+	cfg.Transport.ReadTimeout = TimeoutNone
+	cfg.Pool.MaxIdle = 2
+	client, err := New(cfg)
+	noError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	equal(t, 3*time.Second, client.options.dialTimeout)
+	equal(t, time.Duration(0), client.options.readTimeout)
+	equal(t, 5*time.Second, client.options.writeTimeout)
+	equal(t, 1, client.options.retryAttempts)
+	equal(t, 100, client.options.maxOpen)
+	equal(t, 2, client.options.maxIdle)
+	equal(t, true, client.options.tcpNoDelay)
+}
+
+func TestNewPoolNegativeMaxIdleMeansNone(t *testing.T) {
+	cfg, err := testConfig("127.0.0.1:11211")
+	noError(t, err)
+	cfg.Pool.MaxIdle = -1
+	client, err := New(cfg)
+	noError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	equal(t, 0, client.options.maxIdle)
+	equal(t, 100, client.options.maxOpen)
 }
 
 func Test_quarantineDuration(t *testing.T) {

@@ -244,7 +244,7 @@ func Test_read2AcceptsLFOnlyMN(t *testing.T) {
 	noError(t, resp.read2(newPayloadReader(payload), true))
 	item := &MetaItem{}
 	noError(t, parseMetaItem(resp.rawLines, item, true, false))
-	equal(t, MetaStatusHD, item.Status)
+	equal(t, MetaStatusHD, item.status)
 }
 
 func Test_read2ValueLooksLikeEND(t *testing.T) {

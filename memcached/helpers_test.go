@@ -21,20 +21,24 @@ func testConfig(addr string, tweak ...func(*Config)) (Config, error) {
 	return cfg, nil
 }
 
-func mustAdmin(t *testing.T, c *Client) *AdminClient {
+func mustAdmin(t *testing.T, c *Client) *Admin {
 	t.Helper()
 	admin, err := c.Admin()
 	noError(t, err)
 	return admin
 }
 
-func mustAdminOn(t *testing.T, c *Client) *AdminClient {
+func mustAdminOn(t *testing.T, c *Client) *AdminNode {
 	t.Helper()
 	sv := c.Servers()
 	if len(sv) == 0 {
 		t.Fatal("no servers")
 	}
 	return mustAdmin(t, c).On(sv[0])
+}
+
+func delayPtr(e Exptime) *Exptime {
+	return &e
 }
 
 func testClient(t *testing.T, addr string, tweak ...func(*Config)) *Client {
@@ -59,9 +63,9 @@ func mustStore(t *testing.T, c *Client, ctx context.Context, key, value []byte) 
 	noError(t, c.Store(ctx, Item{Mode: StoreSet, Key: key, Value: value}))
 }
 
-func mustGet(t *testing.T, c *Client, ctx context.Context, key []byte) *Item {
+func mustGet(t *testing.T, c *Client, ctx context.Context, key []byte) Item {
 	t.Helper()
-	items, err := c.Get(ctx, GetOpts{}, key)
+	items, err := c.Get(ctx, [][]byte{key}, GetOpts{})
 	noError(t, err)
 	if len(items) == 0 {
 		t.Fatalf("get miss for %q", key)

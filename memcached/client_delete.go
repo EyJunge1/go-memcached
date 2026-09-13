@@ -5,7 +5,8 @@ import (
 	"fmt"
 )
 
-// MutateOpts selects optional noreply for delete, touch, incr, and decr.
+// MutateOpts selects optional noreply for Delete and Touch.
+// Text Incr/Decr have no Quiet; use Meta().Arithmetic with q.
 type MutateOpts struct {
 	Quiet bool
 }

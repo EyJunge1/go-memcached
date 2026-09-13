@@ -45,17 +45,17 @@ func TestIncrNonNumericDecrUnderflowWrap(t *testing.T) {
 	ctx := context.Background()
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("word"), Value: []byte("abc")}))
-	_, err := client.Incr(ctx, []byte("word"), 1, MutateOpts{})
+	_, err := client.Incr(ctx, []byte("word"), 1)
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "non-numeric")
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("2")}))
-	got, err := client.Decr(ctx, []byte("n"), 5, MutateOpts{})
+	got, err := client.Decr(ctx, []byte("n"), 5)
 	noError(t, err)
 	equal(t, uint64(0), got)
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("w"), Value: []byte("18446744073709551615")}))
-	got, err = client.Incr(ctx, []byte("w"), 1, MutateOpts{})
+	got, err = client.Incr(ctx, []byte("w"), 1)
 	noError(t, err)
 	equal(t, uint64(0), got)
 }
@@ -138,7 +138,7 @@ func TestCancelDuringValueBodyDiscardsConn(t *testing.T) {
 		cfg.Transport.ReadTimeout = time.Second
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
-	_, err = client.Get(ctx, GetOpts{}, []byte("k"))
+	_, err = client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
 	cancel()
 	isError(t, err)
 	_, err = client.Version(context.Background())
@@ -177,16 +177,16 @@ func TestStatsDetailOnAllowedOnAppClient(t *testing.T) {
 	admin := mustAdminOn(t, client)
 	_, err = admin.Stats(context.Background(), "detail", "dump")
 	isErrorIs(t, err, ErrInvalidArgument)
-	got, err := admin.StatsDetail(context.Background(), "on")
+	got, err := admin.StatsDetail(context.Background(), StatsDetailOn)
 	noError(t, err)
 	equal(t, 0, len(got))
-	got, err = admin.StatsDetail(context.Background(), "off")
+	got, err = admin.StatsDetail(context.Background(), StatsDetailOff)
 	noError(t, err)
 	equal(t, 0, len(got))
-	got, err = admin.StatsDetail(context.Background(), "dump")
+	got, err = admin.StatsDetail(context.Background(), StatsDetailDump)
 	noError(t, err)
 	equal(t, "1 2 3", got["foo"])
-	_, err = admin.StatsDetail(context.Background(), "nope")
+	_, err = admin.StatsDetail(context.Background(), StatsDetailMode(99))
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -200,7 +200,7 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a"), Value: []byte("1")}))
-	got, err := client.MetaPipeline(ctx, []MetaOp{
+	got, err := client.Meta().Pipeline(ctx, []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Noop: &MetaNoop{P: "hint", L: "/path"}},
 	})
@@ -221,7 +221,7 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 func TestMetaSetHonorsMaxValueBytes(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.MaxValueBytes = 4 })
-	_, err := client.MetaSet(context.Background(), []byte("k"), []byte("too-long"), MetaSet{})
+	_, err := client.Meta().Set(context.Background(), []byte("k"), []byte("too-long"), MetaSet{})
 	isErrorIs(t, err, ErrInvalidValue)
 }
 
@@ -269,7 +269,7 @@ func TestIncrAcceptsSpacePaddedReplyKeepsConn(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	got, err := client.Incr(context.Background(), []byte("n"), 1, MutateOpts{})
+	got, err := client.Incr(context.Background(), []byte("n"), 1)
 	noError(t, err)
 	equal(t, uint64(12), got)
 	ver, err := client.Version(context.Background())
@@ -337,7 +337,7 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 	err = client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v"), Quiet: true})
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad command line")
-	items, err := client.Get(ctx, GetOpts{}, []byte("missing"))
+	items, err := client.Get(ctx, [][]byte{[]byte("missing")}, GetOpts{})
 	noError(t, err)
 	hasLen(t, items, 0)
 	ver, err := client.Version(ctx)
@@ -351,7 +351,7 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 func TestMetaPipelineRejectsDuplicateOpaque(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	_, err := client.MetaPipeline(context.Background(), []MetaOp{
+	_, err := client.Meta().Pipeline(context.Background(), []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Opaque: "same"}},
 		{Key: []byte("b"), Get: &MetaGet{Opaque: "same"}},
 	})

@@ -20,7 +20,7 @@ func TestGetAcrossNodes(t *testing.T) {
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-one"), Value: []byte("1")}))
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("b-two"), Value: []byte("2")}))
 
-	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte("a-one"), []byte("b-two"))
+	items, err := client.Get(ctx, [][]byte{[]byte("a-one"), []byte("b-two")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 2)
 
@@ -30,13 +30,13 @@ func TestGetAcrossNodes(t *testing.T) {
 	notZero(t, got["a-one"].CAS)
 
 	exp := Rel(time.Second)
-	items, err = client.Get(ctx, GetOpts{CAS: true, Touch: &exp}, []byte("a-one"), []byte("b-two"))
+	items, err = client.Get(ctx, [][]byte{[]byte("a-one"), []byte("b-two")}, GetOpts{CAS: true, Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 2)
 }
 
-func itemsByKey(items []*Item) map[string]*Item {
-	out := make(map[string]*Item, len(items))
+func itemsByKey(items []Item) map[string]Item {
+	out := make(map[string]Item, len(items))
 	for _, item := range items {
 		out[string(item.Key)] = item
 	}
@@ -86,7 +86,7 @@ func TestClusterGetFollowsSetNode(t *testing.T) {
 	equal(t, []byte("2"), item.Value)
 
 	exp := Rel(time.Second)
-	items, err := client.Get(ctx, GetOpts{Touch: &exp}, []byte("b-two"))
+	items, err := client.Get(ctx, [][]byte{[]byte("b-two")}, GetOpts{Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 1)
 	equal(t, []byte("2"), items[0].Value)
@@ -117,7 +117,7 @@ func TestGetMalformedValueDiscardsConnection(t *testing.T) {
 		}
 	})
 
-	_, err = client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrMalformedResponse)
 	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	equal(t, int32(2), dials.Load())
@@ -143,7 +143,7 @@ func TestGetPartialNodeFailure(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-good"), Value: []byte("v")}))
-	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte("a-good"), []byte("b-dead"))
+	items, err := client.Get(ctx, [][]byte{[]byte("a-good"), []byte("b-dead")}, GetOpts{CAS: true})
 	isError(t, err)
 	got := itemsByKey(items)
 	notNil(t, got["a-good"])
@@ -165,17 +165,17 @@ func TestGetValueContainsEmbeddedCRLF(t *testing.T) {
 	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, want, item.Value)
 
-	items, err := client.Get(ctx, GetOpts{CAS: true}, []byte("k"))
+	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	equal(t, want, items[0].Value)
 
-	got, err := client.Get(ctx, GetOpts{CAS: true}, []byte("k"))
+	got, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, got, 1)
 	equal(t, want, got[0].Value)
 
-	meta, err := client.MetaGet(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	meta, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, want, meta.Item.Value)
 
@@ -188,10 +188,10 @@ func TestGetMissOmitsMissingKeys(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	items, err := client.Get(ctx, GetOpts{}, []byte("missing-a"), []byte("missing-b"))
+	items, err := client.Get(ctx, [][]byte{[]byte("missing-a"), []byte("missing-b")}, GetOpts{})
 	noError(t, err)
 	hasLen(t, items, 0)
-	items, err = client.Get(ctx, GetOpts{}, []byte("missing-a"))
+	items, err = client.Get(ctx, [][]byte{[]byte("missing-a")}, GetOpts{})
 	noError(t, err)
 	hasLen(t, items, 0)
 }

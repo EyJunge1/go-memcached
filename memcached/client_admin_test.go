@@ -47,22 +47,12 @@ func TestAdminSyncCommands(t *testing.T) {
 	noError(t, admin.Shutdown(ctx, false))
 }
 
-func TestAdminRequiresOnForNodeOps(t *testing.T) {
+func TestAdminWatchRequiresDeadline(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
-	admin := mustAdmin(t, client)
-	ctx := context.Background()
-	isErrorIs(t, admin.Shutdown(ctx, false), ErrAdminTargetRequired)
-	isErrorIs(t, admin.SlabsAutomove(ctx, 1), ErrAdminTargetRequired)
-	isErrorIs(t, admin.LRUMode(ctx, "flat"), ErrAdminTargetRequired)
-	_, err := admin.Watch(ctx, WatchFetchers)
+	admin := mustAdminOn(t, client)
+	_, err := admin.Watch(context.Background(), WatchFetchers)
 	isErrorIs(t, err, ErrDeadlineRequired)
-	_, err = admin.Watch(context.Background(), WatchFetchers)
-	isErrorIs(t, err, ErrDeadlineRequired)
-	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err = admin.Watch(ctx2, WatchFetchers)
-	isErrorIs(t, err, ErrAdminTargetRequired)
 }
 
 func TestAdminAllBroadcast(t *testing.T) {

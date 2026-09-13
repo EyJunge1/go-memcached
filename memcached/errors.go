@@ -35,7 +35,7 @@ var (
 	ErrInvalidValue = errors.New("invalid value: longer than Config.MaxValueBytes")
 	// ErrInvalidNetworkProtocol represents an invalid network protocol error.
 	ErrInvalidNetworkProtocol = errors.New("invalid network protocol")
-	// ErrFlushAllNotAllowed is returned when FlushAll is called without Config.AllowFlushAll.
+	// ErrFlushAllNotAllowed is returned when Flush is called without Config.AllowFlushAll.
 	ErrFlushAllNotAllowed = errors.New("flush_all not allowed: set Config.AllowFlushAll")
 	// ErrAdminNotEnabled is returned when Admin() is called without Config.AllowAdmin.
 	ErrAdminNotEnabled = errors.New("admin commands not enabled: set Config.AllowAdmin")
@@ -75,4 +75,6 @@ var (
 	ErrTransport = errors.New("memcached transport")
 	// ErrAdminTargetRequired is returned when a node-local admin op has no On() target.
 	ErrAdminTargetRequired = errors.New("admin command requires On(server)")
+	// ErrClosed is returned after Client.Close.
+	ErrClosed = errors.New("client is closed")
 )

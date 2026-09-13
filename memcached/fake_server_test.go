@@ -230,6 +230,21 @@ func (firstAddrPickBuilder) Build([]*addr) picker {
 	return firstAddrPicker{}
 }
 
+type lastAddrPicker struct{}
+
+func (lastAddrPicker) Pick(addrs []*addr, _ []byte) (*addr, error) {
+	if len(addrs) == 0 {
+		return nil, ErrInvalidAddress
+	}
+	return addrs[len(addrs)-1], nil
+}
+
+type lastAddrPickBuilder struct{}
+
+func (lastAddrPickBuilder) Build([]*addr) picker {
+	return lastAddrPicker{}
+}
+
 type prefixPickBuilder struct{}
 
 func (prefixPickBuilder) Build(addrs []*addr) picker {

@@ -56,15 +56,15 @@ func TestMutateQuietSendsNoreply(t *testing.T) {
 	waitLastCmdContains(t, srv, "delete n noreply")
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("10")}))
-	n, err := client.Incr(ctx, []byte("n"), 3, MutateOpts{Quiet: true})
+	n, err := client.Incr(ctx, []byte("n"), 3)
 	noError(t, err)
-	equal(t, uint64(0), n)
+	equal(t, uint64(13), n)
 	item := mustGet(t, client, ctx, []byte("n"))
 	equal(t, []byte("13"), item.Value)
 
-	n, err = client.Decr(ctx, []byte("n"), 1, MutateOpts{Quiet: true})
+	n, err = client.Decr(ctx, []byte("n"), 1)
 	noError(t, err)
-	equal(t, uint64(0), n)
+	equal(t, uint64(12), n)
 
 	noError(t, client.Touch(ctx, []byte("n"), Rel(time.Second), MutateOpts{Quiet: true}))
 	waitLastCmdContains(t, srv, "touch n 1 noreply")
@@ -89,38 +89,39 @@ func TestMetaSingleCommandStatusCodes(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 
-	res, err := client.MetaGet(ctx, []byte("missing"), MetaGet{})
-	isErrorIs(t, err, ErrNotFound)
+	res, err := client.Meta().Get(ctx, []byte("missing"), MetaGet{})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
 
-	_, err = client.MetaSet(ctx, []byte("k"), []byte("v"), MetaSet{})
+	_, err = client.Meta().Set(ctx, []byte("k"), []byte("v"), MetaSet{})
 	noError(t, err)
-	_, err = client.MetaSet(ctx, []byte("k"), []byte("v2"), MetaSet{Mode: MetaSetModeAdd})
-	isErrorIs(t, err, ErrNotStored)
-	// Status is set on the returned result even when err != nil
-	res, err = client.MetaSet(ctx, []byte("k"), []byte("v2"), MetaSet{Mode: MetaSetModeAdd})
-	isErrorIs(t, err, ErrNotStored)
+	res, err = client.Meta().Set(ctx, []byte("k"), []byte("v2"), MetaSet{Mode: MetaSetModeAdd})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotStored)
 	equal(t, MetaStatusNS, res.Status)
 
-	hit, err := client.MetaGet(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true}})
+	hit, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true}})
 	noError(t, err)
 	cas := hit.Item.CAS
 	wrong := cas + 1
-	res, err = client.MetaSet(ctx, []byte("k"), []byte("v3"), MetaSet{CompareCAS: &wrong})
-	isErrorIs(t, err, ErrExists)
+	res, err = client.Meta().Set(ctx, []byte("k"), []byte("v3"), MetaSet{CompareCAS: &wrong})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrExists)
 	equal(t, MetaStatusEX, res.Status)
 
-	res, err = client.MetaDelete(ctx, []byte("nope"), MetaDelete{})
-	isErrorIs(t, err, ErrNotFound)
+	res, err = client.Meta().Delete(ctx, []byte("nope"), MetaDelete{})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusNF, res.Status)
 }
 
 func TestMetaHintsRejectWhitespace(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	_, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{P: "bad token"})
+	_, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{P: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
-	_, err = client.MetaNoop(context.Background(), MetaNoop{L: "x y"})
+	_, err = client.Meta().Noop(context.Background(), MetaNoop{L: "x y"})
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -130,17 +131,17 @@ func TestFlushAllRejectsNegative(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	isErrorIs(t, mustAdmin(t, client).All().FlushAll(context.Background(), FlushOpts{Stagger: -time.Second}), ErrInvalidArgument)
+	isErrorIs(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{Stagger: -time.Second}), ErrInvalidArgument)
 }
 
 func TestMetaNoopStatusAndProxyHints(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	res, err := client.MetaNoop(context.Background(), MetaNoop{})
+	res, err := client.Meta().Noop(context.Background(), MetaNoop{})
 	noError(t, err)
 	equal(t, MetaStatusMN, res.Status)
 
-	res, err = client.MetaNoop(context.Background(), MetaNoop{P: "hint", L: "/path"})
+	res, err = client.Meta().Noop(context.Background(), MetaNoop{P: "hint", L: "/path"})
 	noError(t, err)
 	equal(t, MetaStatusMN, res.Status)
 	srv.mu.Lock()
@@ -155,19 +156,19 @@ func TestMetaDebugStatus(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 
-	item, err := client.MetaDebug(ctx, []byte("missing"), MetaDebug{})
-	isErrorIs(t, err, ErrNotFound)
-	notNil(t, item)
+	item, err := client.Meta().Debug(ctx, []byte("missing"), MetaDebug{})
+	noError(t, err)
+	isErrorIs(t, item.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, item.Status)
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
-	item, err = client.MetaDebug(ctx, []byte("k"), MetaDebug{})
+	item, err = client.Meta().Debug(ctx, []byte("k"), MetaDebug{})
 	noError(t, err)
 	equal(t, MetaStatusME, item.Status)
 
 	bin := []byte("bin-key")
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: bin, Value: []byte("v")}))
-	item, err = client.MetaDebug(ctx, bin, MetaDebug{BinaryKey: true})
+	item, err = client.Meta().Debug(ctx, bin, MetaDebug{BinaryKey: true})
 	noError(t, err)
 	equal(t, bin, item.Key)
 	isTrue(t, item.KeyBase64)
@@ -178,18 +179,18 @@ func TestMetaGetRecacheWindow(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	_, err := client.MetaGet(ctx, []byte("k"), MetaGet{Recache: -time.Second})
+	_, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Recache: -time.Second})
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
-	_, err = client.MetaGet(ctx, []byte("k"), MetaGet{Recache: 31 * 24 * time.Hour, Return: MetaGetReturn{Value: true}})
+	_, err = client.Meta().Get(ctx, []byte("k"), MetaGet{Recache: 31 * 24 * time.Hour, Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	srv.mu.Lock()
 	cmd := srv.lastCmd
 	srv.mu.Unlock()
 	contains(t, cmd, "R2678400")
 
-	_, err = client.MetaGet(ctx, []byte("k"), MetaGet{Recache: 5 * time.Second, Return: MetaGetReturn{Value: true}})
+	_, err = client.Meta().Get(ctx, []byte("k"), MetaGet{Recache: 5 * time.Second, Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	srv.mu.Lock()
 	cmd = srv.lastCmd
@@ -204,7 +205,7 @@ func TestFlushOptsQuietAndStagger(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	noError(t, mustAdmin(t, client).All().FlushAll(context.Background(), FlushOpts{
+	noError(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{
 		Stagger: time.Second,
 	}))
 	delays := map[string]struct{}{}
@@ -221,14 +222,14 @@ func TestFlushOptsQuietAndStagger(t *testing.T) {
 		t.Fatalf("node 1 delay 1, got %v", delays)
 	}
 
-	noError(t, mustAdmin(t, client).All().FlushAll(context.Background(), FlushOpts{Quiet: true}))
+	noError(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{Quiet: true}))
 	if !waitEitherLastCmdContains(t, a, b, "noreply") {
 		t.Fatalf("quiet flush_all missing noreply")
 	}
 }
 
 func TestFlushDelayForAddsInTimeDomain(t *testing.T) {
-	fn := flushDelayFor(FlushOpts{Delay: Rel(10 * time.Second)})
+	fn := flushDelayFor(FlushOpts{Delay: delayPtr(Rel(10 * time.Second))})
 	equal(t, Exptime(10), fn(0))
 	equal(t, Exptime(10), fn(1))
 	fn = flushDelayFor(FlushOpts{Stagger: time.Second})
@@ -258,7 +259,7 @@ func TestAuthRejectsWrongPassword(t *testing.T) {
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "authentication failure")
 
-	_, err = client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrClientError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	err = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
@@ -310,7 +311,7 @@ func TestMetaArithmeticQuietReturnValueIsRejected(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("10")}))
-	_, err := client.MetaArithmetic(ctx, []byte("n"), 1, MetaArithmetic{Quiet: true, ReturnValue: true})
+	_, err := client.Meta().Arithmetic(ctx, []byte("n"), 1, MetaArithmetic{Quiet: true, ReturnValue: true})
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -329,7 +330,7 @@ func TestCommandErrorFromGet(t *testing.T) {
 		_, _ = cn.Write([]byte("ERROR bad args\r\n"))
 	}()
 	client := testClient(t, ln.Addr().String())
-	_, err = client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrCommandError)
 	isFalse(t, errors.Is(err, ErrTransport))
 }
@@ -342,12 +343,12 @@ func TestEmptyServersIsInvalidAddress(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowSetServers = true })
 	noError(t, client.SetServers(nil))
 	ctx := context.Background()
-	_, err = client.Get(ctx, GetOpts{}, []byte("k"))
+	_, err = client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrInvalidAddress)
 	contains(t, err.Error(), "no servers configured")
 	err = client.Pipeline().Store(Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}).Run(ctx)
 	isErrorIs(t, err, ErrInvalidAddress)
-	_, err = client.MetaPipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
+	_, err = client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
 	isErrorIs(t, err, ErrInvalidAddress)
 }
 
@@ -370,27 +371,29 @@ func TestMetaDeleteMissAndQuietNS(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	_, err := client.MetaDelete(ctx, []byte("missing"), MetaDelete{})
-	isErrorIs(t, err, ErrNotFound)
-	_, err = client.MetaDelete(ctx, []byte("missing"), MetaDelete{Quiet: true})
-	isErrorIs(t, err, ErrNotFound)
-
-	_, err = client.MetaSet(ctx, []byte("k"), []byte("v"), MetaSet{})
+	res, err := client.Meta().Delete(ctx, []byte("missing"), MetaDelete{})
 	noError(t, err)
-	_, err = client.MetaSet(ctx, []byte("k"), []byte("v2"), MetaSet{Quiet: true, Mode: MetaSetModeAdd})
-	isErrorIs(t, err, ErrNotStored)
+	isErrorIs(t, res.Err(), ErrNotFound)
+	res, err = client.Meta().Delete(ctx, []byte("missing"), MetaDelete{Quiet: true})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotFound)
 
-	_, err = client.MetaArithmetic(ctx, []byte("nope"), 1, MetaArithmetic{})
-	isErrorIs(t, err, ErrNotFound)
+	_, err = client.Meta().Set(ctx, []byte("k"), []byte("v"), MetaSet{})
+	noError(t, err)
+	res, err = client.Meta().Set(ctx, []byte("k"), []byte("v2"), MetaSet{Quiet: true, Mode: MetaSetModeAdd})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotStored)
+
+	res, err = client.Meta().Arithmetic(ctx, []byte("nope"), 1, MetaArithmetic{})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotFound)
 }
 
 func TestMetaGetMissKeepsENFlags(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	res, err := client.MetaGet(context.Background(), []byte("missing"), MetaGet{Return: MetaGetReturn{Key: true}})
-	isErrorIs(t, err, ErrNotFound)
+	res, err := client.Meta().Get(context.Background(), []byte("missing"), MetaGet{Return: MetaGetReturn{Key: true}})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
 }

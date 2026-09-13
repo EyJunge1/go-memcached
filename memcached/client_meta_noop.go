@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// MetaNoop sends a meta no-op and returns MN.
-func (c *Client) MetaNoop(ctx context.Context, f MetaNoop) (MetaResult, error) {
+// Noop issues mn.
+func (m *MetaClient) Noop(ctx context.Context, f MetaNoop) (MetaResult, error) {
 	if err := f.validate(); err != nil {
 		return MetaResult{}, err
 	}
@@ -18,11 +18,15 @@ func (c *Client) MetaNoop(ctx context.Context, f MetaNoop) (MetaResult, error) {
 		if err := expectLine(_MetaMNCRLFBytes)(r); err != nil {
 			return err
 		}
-		item.Status = MetaStatusMN
+		item.status = MetaStatusMN
 		return nil
 	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
+	res, err := finishMeta(item, m.c.dispatchRequest(ctx, req, resp))
+	if err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}
-	return metaResultFrom(item, MetaStatusMN), nil
+	if res.Status == MetaStatusUnknown {
+		res.Status = MetaStatusMN
+	}
+	return res, nil
 }

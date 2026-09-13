@@ -74,7 +74,7 @@ func TestCommandErrorHeldOnGet(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrCommandError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "bad args")
@@ -183,7 +183,7 @@ func TestDumpMidStreamCommandError(t *testing.T) {
 func TestMetaPipelineQuietSetIsHD(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	got, err := client.MetaPipeline(context.Background(), []MetaOp{
+	got, err := client.Meta().Pipeline(context.Background(), []MetaOp{
 		{Key: []byte("k"), Body: []byte("v"), Set: &MetaSet{}},
 	})
 	noError(t, err)
@@ -204,7 +204,7 @@ func TestGetAcceptsLFOnlyEND(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
 	ver, err := client.Version(context.Background())
 	noError(t, err)
@@ -226,8 +226,9 @@ func TestMetaQuietBarrierAcceptsLFOnlyMN(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	res, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{Quiet: true})
-	isErrorIs(t, err, ErrNotFound)
+	res, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Quiet: true})
+	noError(t, err)
+	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
 	ver, err := client.Version(context.Background())
 	noError(t, err)
@@ -236,7 +237,7 @@ func TestMetaQuietBarrierAcceptsLFOnlyMN(t *testing.T) {
 }
 
 func TestIncrWithQuietClientError(t *testing.T) {
-	addr, dials := startCmdServer(t, func(fields []string) string {
+	addr, _ := startCmdServer(t, func(fields []string) string {
 		switch fields[0] {
 		case "incr":
 			return "CLIENT_ERROR bad delta\r\n"
@@ -247,15 +248,12 @@ func TestIncrWithQuietClientError(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Incr(context.Background(), []byte("n"), 1, MutateOpts{Quiet: true})
+	_, err := client.Incr(context.Background(), []byte("n"), 1)
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad delta")
 	ver, err := client.Version(context.Background())
 	noError(t, err)
 	equal(t, "after-incr", ver)
-	if dials.Load() < 2 {
-		t.Fatalf("quiet incr CLIENT_ERROR must discard conn; dials=%d", dials.Load())
-	}
 }
 
 func TestMetaPipelineChargeKeepsSiblingHD(t *testing.T) {
@@ -270,7 +268,7 @@ func TestMetaPipelineChargeKeepsSiblingHD(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	got, err := client.MetaPipeline(context.Background(), []MetaOp{
+	got, err := client.Meta().Pipeline(context.Background(), []MetaOp{
 		{Key: []byte("k"), Del: &MetaDelete{}},
 	})
 	isErrorIs(t, err, ErrClientError)
@@ -364,7 +362,7 @@ func TestMetaPipelineChargeOnlyDoesNotInventHD(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	got, err := client.MetaPipeline(context.Background(), []MetaOp{
+	got, err := client.Meta().Pipeline(context.Background(), []MetaOp{
 		{Key: []byte("k"), Del: &MetaDelete{}},
 	})
 	isErrorIs(t, err, ErrClientError)
@@ -386,7 +384,7 @@ func TestGetNonexistentCommandHeld(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrNonexistentCommand)
 	isFalse(t, shouldDiscardConn(err))
 	ver, err := client.Version(context.Background())
@@ -407,7 +405,7 @@ func TestGetClientErrorHeld(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad flags")
 	isFalse(t, shouldDiscardConn(err))
@@ -431,7 +429,7 @@ func TestGetAndStoreServerErrorDiscards(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrServerError)
 	isTrue(t, shouldDiscardConn(err))
 	err = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
@@ -477,10 +475,10 @@ func TestMetaRejectsWikiSTAndSpecDE(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.MetaDelete(context.Background(), []byte("k"), MetaDelete{})
+	_, err := client.Meta().Delete(context.Background(), []byte("k"), MetaDelete{})
 	isErrorIs(t, err, ErrMalformedResponse)
 	isTrue(t, shouldDiscardConn(err))
-	_, err = client.MetaSet(context.Background(), []byte("k"), []byte("v"), MetaSet{})
+	_, err = client.Meta().Set(context.Background(), []byte("k"), []byte("v"), MetaSet{})
 	isErrorIs(t, err, ErrMalformedResponse)
 	isTrue(t, shouldDiscardConn(err))
 }
@@ -491,38 +489,38 @@ func TestAdminPublicWireSentinels(t *testing.T) {
 		name   string
 		reply  string
 		want   error
-		run    func(*AdminClient) error
+		run    func(*AdminNode) error
 		pooled bool
 	}
 	tests := []tc{
-		{"badclass", "BADCLASS invalid src or dst class id\r\n", ErrBadClass, func(a *AdminClient) error {
+		{"badclass", "BADCLASS invalid src or dst class id\r\n", ErrBadClass, func(a *AdminNode) error {
 			return a.SlabsReassign(ctx, 1, 2)
 		}, true},
-		{"nospare", "NOSPARE source class has no spare pages\r\n", ErrNoSpare, func(a *AdminClient) error {
+		{"nospare", "NOSPARE source class has no spare pages\r\n", ErrNoSpare, func(a *AdminNode) error {
 			return a.SlabsReassign(ctx, 1, 2)
 		}, true},
-		{"notfull", "NOTFULL dest class must be full to steal from\r\n", ErrNotFull, func(a *AdminClient) error {
+		{"notfull", "NOTFULL dest class must be full to steal from\r\n", ErrNotFull, func(a *AdminNode) error {
 			return a.SlabsReassign(ctx, 1, 2)
 		}, true},
-		{"unsafe", "UNSAFE source class cannot move pages\r\n", ErrUnsafe, func(a *AdminClient) error {
+		{"unsafe", "UNSAFE source class cannot move pages\r\n", ErrUnsafe, func(a *AdminNode) error {
 			return a.SlabsReassign(ctx, 1, 2)
 		}, true},
-		{"memlimit-small", "MEMLIMIT_TOO_SMALL cannot set maxbytes to less than 8m\r\n", ErrMemlimitTooSmall, func(a *AdminClient) error {
+		{"memlimit-small", "MEMLIMIT_TOO_SMALL cannot set maxbytes to less than 8m\r\n", ErrMemlimitTooSmall, func(a *AdminNode) error {
 			return a.CacheMemLimit(ctx, 4, AdminOpts{})
 		}, true},
-		{"memlimit-adjust", "MEMLIMIT_ADJUST_FAILED out of bounds\r\n", ErrMemlimitAdjustFailed, func(a *AdminClient) error {
+		{"memlimit-adjust", "MEMLIMIT_ADJUST_FAILED out of bounds\r\n", ErrMemlimitAdjustFailed, func(a *AdminNode) error {
 			return a.CacheMemLimit(ctx, 64, AdminOpts{})
 		}, true},
-		{"notstarted", "NOTSTARTED no items to crawl\r\n", ErrNotStarted, func(a *AdminClient) error {
+		{"notstarted", "NOTSTARTED no items to crawl\r\n", ErrNotStarted, func(a *AdminNode) error {
 			return a.LRUCrawlerCrawl(ctx, "all")
 		}, true},
-		{"watcher-too-many", "WATCHER_TOO_MANY log watcher limit reached\r\n", ErrWatcherTooMany, func(a *AdminClient) error {
+		{"watcher-too-many", "WATCHER_TOO_MANY log watcher limit reached\r\n", ErrWatcherTooMany, func(a *AdminNode) error {
 			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			_, err := a.Watch(wctx, WatchFetchers)
 			return err
 		}, false},
-		{"watcher-failed", "WATCHER_FAILED failed to add log watcher\r\n", ErrWatcherFailed, func(a *AdminClient) error {
+		{"watcher-failed", "WATCHER_FAILED failed to add log watcher\r\n", ErrWatcherFailed, func(a *AdminNode) error {
 			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			_, err := a.Watch(wctx, WatchFetchers)
@@ -569,7 +567,7 @@ func TestAppStatsPrefixIsNotMalformed(t *testing.T) {
 	noError(t, err)
 	hasLen(t, all, 1)
 	for _, got := range all {
-		equal(t, 0, len(got))
+		equal(t, 0, len(got.Stats))
 	}
 	ver, err := client.Version(context.Background())
 	noError(t, err)
@@ -604,7 +602,7 @@ func TestVersionAllJoinsServerError(t *testing.T) {
 	isErrorIs(t, err, ErrServerError)
 	equal(t, 1, len(got))
 	for _, v := range got {
-		equal(t, "good-1", v)
+		equal(t, "good-1", v.Version)
 	}
 }
 

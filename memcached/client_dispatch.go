@@ -12,6 +12,10 @@ func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error)
 	key := node.id()
 
 	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return nil, ErrClosed
+	}
 	pool, ok := c.connPools[key]
 	c.mu.RUnlock()
 	if ok {
@@ -19,6 +23,10 @@ func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error)
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, ErrClosed
+	}
 	pool, ok = c.connPools[key]
 	if !ok {
 		wrapNewConn := func(ctx2 context.Context) (cn memcachedConn, err error) {
@@ -108,7 +116,8 @@ func isClassifiedNonTransport(err error) bool {
 		errors.Is(err, ErrMixedTransport) ||
 		errors.Is(err, ErrInsecureTLS) ||
 		errors.Is(err, ErrDeadlineRequired) ||
-		errors.Is(err, ErrAdminTargetRequired)
+		errors.Is(err, ErrAdminTargetRequired) ||
+		errors.Is(err, ErrClosed)
 }
 
 func isTransportError(err error) bool {
@@ -262,6 +271,48 @@ func (c *Client) dispatchRequest(ctx context.Context, req *request, resp *respon
 	return c.dispatchToAddr(ctx, addr, req, resp)
 }
 
+// dispatchFirstLive sends on the first live node and re-evaluates that pick
+// on each retry (not Ketama).
+func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *response) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	attempts := c.options.retryAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	var last error
+	for i := 0; i < attempts; i++ {
+		node, err := c.pickFirstLiveAddr()
+		if err != nil {
+			return err
+		}
+		if node != nil && isUDPNetwork(node.Network) {
+			attempts = 1
+		}
+		if i > 0 {
+			resp.rawLines = resp.rawLines[:0]
+		}
+		sent, err := c.dispatchOnce(ctx, node, req, resp)
+		if err == nil {
+			c.noteSuccess(node)
+			return nil
+		}
+		last = err
+		if !isRetryable(err) {
+			return err
+		}
+		c.noteFailure(node)
+		if sent && !idempotentReadCommand(req.cmd) {
+			return err
+		}
+	}
+	return last
+}
+
 func (c *Client) dispatchToAddr(ctx context.Context, node *addr, req *request, resp *response) error {
 	attempts := c.options.retryAttempts
 	if attempts < 1 {
@@ -347,6 +398,12 @@ func (c *Client) valueLimit() int {
 }
 
 func (c *Client) dialDedicated(ctx context.Context, node *addr) (memcachedConn, error) {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return nil, ErrClosed
+	}
 	if node == nil {
 		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}

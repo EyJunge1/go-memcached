@@ -5,32 +5,30 @@ import (
 	"fmt"
 )
 
-// MetaDebug returns debug metadata for a key.
-func (c *Client) MetaDebug(ctx context.Context, key []byte, f MetaDebug) (*MetaItemDebug, error) {
+// Debug issues me and returns a value (protocol miss is dbg.Err, not the function error).
+func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug) (MetaItemDebug, error) {
+	c := m.c
 	if err := f.validate(); err != nil {
-		return nil, err
+		return MetaItemDebug{}, err
 	}
 	mdFlags := f.toFlags()
 	key = c.nsBytes(key)
 	if err := c.checkKeyValueFlags(key, nil, mdFlags.b); err != nil {
-		return nil, err
+		return MetaItemDebug{}, err
 	}
 
 	req, resp := buildMetaDebugCommand(key, mdFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItemDebug{
-		Key: key,
-	}
+	item := &MetaItemDebug{Key: key}
 	resp.afterRecv = func(r *response) error {
 		return parseMetaItemDebug(r.rawLines, item, mdFlags.b)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		if item.Status != MetaStatusUnknown {
-			return item, fmt.Errorf("request failed: %w", err)
+		if item.Status.Err() != nil {
+			return *item, nil
 		}
-		return nil, fmt.Errorf("request failed: %w", err)
+		return MetaItemDebug{}, fmt.Errorf("request failed: %w", err)
 	}
-
-	return item, nil
+	return *item, nil
 }

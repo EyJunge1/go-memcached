@@ -5,8 +5,9 @@ import (
 	"fmt"
 )
 
-// MetaSet stores a key with meta flags.
-func (c *Client) MetaSet(ctx context.Context, key, value []byte, f MetaSet) (MetaResult, error) {
+// Set issues ms with the given flags.
+func (m *MetaClient) Set(ctx context.Context, key, value []byte, f MetaSet) (MetaResult, error) {
+	c := m.c
 	if err := f.validate(); err != nil {
 		return MetaResult{}, err
 	}
@@ -36,8 +37,9 @@ func (c *Client) MetaSet(ctx context.Context, key, value []byte, f MetaSet) (Met
 	resp.afterRecv = func(r *response) error {
 		return parseMetaItem(r.rawLines, item, msFlags.q, false)
 	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
+	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
+	if err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}
-	return metaResultFrom(item, item.Status), nil
+	return res, nil
 }

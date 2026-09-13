@@ -5,8 +5,9 @@ import (
 	"fmt"
 )
 
-// MetaDelete deletes a key with meta flags.
-func (c *Client) MetaDelete(ctx context.Context, key []byte, f MetaDelete) (MetaResult, error) {
+// Delete issues md with the given flags.
+func (m *MetaClient) Delete(ctx context.Context, key []byte, f MetaDelete) (MetaResult, error) {
+	c := m.c
 	if err := f.validate(); err != nil {
 		return MetaResult{}, err
 	}
@@ -28,8 +29,9 @@ func (c *Client) MetaDelete(ctx context.Context, key []byte, f MetaDelete) (Meta
 	resp.afterRecv = func(r *response) error {
 		return parseMetaItem(r.rawLines, item, mdFlags.q, false)
 	}
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
+	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
+	if err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}
-	return metaResultFrom(item, item.Status), nil
+	return res, nil
 }

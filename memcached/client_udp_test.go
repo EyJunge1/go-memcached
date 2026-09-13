@@ -24,11 +24,13 @@ func TestUDPRejectsMutation(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	err := client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = client.MetaGet(context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
+	_, err = client.Meta().Get(context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.StatsAll(context.Background())
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = client.MetaPipeline(context.Background(), []MetaOp{
+	_, err = client.Stats(context.Background())
+	isErrorIs(t, err, ErrNotSupported)
+	_, err = client.Meta().Pipeline(context.Background(), []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Key: []byte("b"), Body: []byte("v"), Set: &MetaSet{}},
 	})
@@ -41,7 +43,7 @@ func TestUDPMetaGetAndVersionAllAllowed(t *testing.T) {
 	srv.items["k"] = []byte("v")
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	got, err := client.MetaGet(context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	got, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), got.Item.Value)
 	_, errVer := client.VersionAll(context.Background())
@@ -54,7 +56,7 @@ func TestUDPMetaDebugAllowed(t *testing.T) {
 	srv.items["k"] = []byte("v")
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	item, err := client.MetaDebug(context.Background(), []byte("k"), MetaDebug{})
+	item, err := client.Meta().Debug(context.Background(), []byte("k"), MetaDebug{})
 	noError(t, err)
 	equal(t, MetaStatusME, item.Status)
 	equal(t, []byte("k"), item.Key)
@@ -85,7 +87,7 @@ func TestUDPReservedIsMalformed(t *testing.T) {
 	srv.reserved = true
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	_, err := client.Get(context.Background(), GetOpts{}, []byte("k"))
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 
@@ -95,7 +97,7 @@ func TestUDPRejectsFlushAll(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	err := mustAdmin(t, client).All().FlushAll(context.Background(), FlushOpts{})
+	err := mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{})
 	isErrorIs(t, err, ErrNotSupported)
 }
 

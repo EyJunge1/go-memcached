@@ -28,10 +28,9 @@ func Test_parseFlags(t *testing.T) {
 				CAS:              26,
 				Flags:            0,
 				TTL:              0,
-				LastAccessedTime: 0,
+				LastAccess: 0,
 				Size:             3,
-				Opaque:           456,
-				OpaqueToken:      "456",
+				Opaque:      "456",
 				HitBefore:        false,
 				WireKey:          []byte("Zm9v"),
 				KeyBase64:        true,
@@ -50,10 +49,9 @@ func Test_parseFlags(t *testing.T) {
 				CAS:              29,
 				Flags:            123,
 				TTL:              200,
-				LastAccessedTime: 0,
+				LastAccess: 0,
 				Size:             3,
-				Opaque:           789,
-				OpaqueToken:      "789",
+				Opaque:      "789",
 				HitBefore:        true,
 				WireKey:          []byte("Zm9v"),
 				KeyBase64:        true,
@@ -70,7 +68,7 @@ func Test_parseFlags(t *testing.T) {
 				Won:         true,
 				Stale:       true,
 				RecacheBusy: true,
-				OpaqueToken: "opaque",
+				Opaque: "opaque",
 			},
 		},
 	}
@@ -150,14 +148,13 @@ func Test_parseMetaItem(t *testing.T) {
 				CAS:              26,
 				Flags:            0,
 				TTL:              0,
-				LastAccessedTime: 0,
+				LastAccess: 0,
 				Size:             3,
-				Opaque:           456,
-				OpaqueToken:      "456",
+				Opaque:      "456",
 				HitBefore:        false,
 				WireKey:          []byte("Zm9v"),
 				KeyBase64:        true,
-				Status:           MetaStatusHD,
+				status:           MetaStatusHD,
 				gotHD:            true,
 			},
 		},
@@ -180,14 +177,13 @@ func Test_parseMetaItem(t *testing.T) {
 				CAS:              29,
 				Flags:            123,
 				TTL:              200,
-				LastAccessedTime: 0,
+				LastAccess: 0,
 				Size:             3,
-				Opaque:           789,
-				OpaqueToken:      "789",
+				Opaque:      "789",
 				HitBefore:        true,
 				WireKey:          []byte("Zm9v"),
 				KeyBase64:        true,
-				Status:           MetaStatusVA,
+				status:           MetaStatusVA,
 			},
 		},
 		{
@@ -317,13 +313,13 @@ func Test_buildMetaGetCommand_emitsT0(t *testing.T) {
 func Test_parseMetaItem_quietOnlyMN(t *testing.T) {
 	item := &MetaItem{}
 	noError(t, parseMetaItem([][]byte{_MetaMNCRLFBytes}, item, true, false))
-	equal(t, MetaStatusHD, item.Status)
+	equal(t, MetaStatusHD, item.status)
 }
 
 func Test_parseMetaItem_quietWantValueMiss(t *testing.T) {
 	item := &MetaItem{}
 	isErrorIs(t, parseMetaItem([][]byte{_MetaMNCRLFBytes}, item, true, true), ErrNotFound)
-	equal(t, MetaStatusEN, item.Status)
+	equal(t, MetaStatusEN, item.status)
 }
 
 func Test_buildMetaGetCommand_checkCASAndOpaqueToken(t *testing.T) {
@@ -354,14 +350,14 @@ func Test_parseMetaPipeline_chargeKeepsSibling(t *testing.T) {
 	})
 	isErrorIs(t, err, ErrClientError)
 	hasLen(t, items, 1)
-	equal(t, MetaStatusHD, items[0].Status)
-	equal(t, "0", items[0].OpaqueToken)
+	equal(t, MetaStatusHD, items[0].status)
+	equal(t, "0", items[0].Opaque)
 }
 
 func Test_parseMetaItem_quietOnlyMN_LF(t *testing.T) {
 	item := &MetaItem{}
 	noError(t, parseMetaItem([][]byte{[]byte("MN\n")}, item, true, false))
-	equal(t, MetaStatusHD, item.Status)
+	equal(t, MetaStatusHD, item.status)
 }
 
 func Test_parseMetaItem_valueSizeMismatch(t *testing.T) {

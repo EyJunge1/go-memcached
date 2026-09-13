@@ -2,6 +2,7 @@ package memcached
 
 // Item is a get result and the input for Store / Pipeline.Store.
 // Get fills Key, Value, Flags, and CAS; Mode and Quiet stay zero.
+// Key is the caller key; Get strips Config.Cluster.Namespace.
 type Item struct {
 	Mode  StoreMode
 	Key   []byte
@@ -27,16 +28,14 @@ type MetaItem struct {
 	// TTL is the time-to-live of the item. -1 means never expire.
 	// Request it with MetaGet.Return.TTL.
 	TTL int64
-	// LastAccessedTime is the time since item was last accessed in seconds.
+	// LastAccess is the time since item was last accessed in seconds.
 	// Request it with MetaGet.Return.LastAccess.
-	LastAccessedTime int64
+	LastAccess int64
 	// Size is the size of the stored item on success.
 	// Request it with MetaGet.Return.Size or MetaSet.ReturnSize.
 	Size uint64
-	// Opaque is the opaque value when the token is decimal.
-	Opaque uint64
-	// OpaqueToken is the raw opaque token (up to 32 bytes).
-	OpaqueToken string
+	// Opaque is the raw opaque token (up to 32 bytes).
+	Opaque string
 	// HitBefore is whether the item has been hit before.
 	// Request it with MetaGet.Return.Hit.
 	HitBefore bool
@@ -46,14 +45,14 @@ type MetaItem struct {
 	Stale bool
 	// RecacheBusy is set when the server returned winning-already-sent flag Z.
 	RecacheBusy bool
-	// CASMatched is true when MetaGet.CheckCAS was used with a value
+	// CASMatched is true when MetaGet.CompareCAS was used with a value
 	// request and the server returned HD (CAS still matches).
 	CASMatched bool
 	// WireKey is the k token as received (possibly Base64).
 	WireKey []byte
 	// KeyBase64 is set when the server echoed response flag b.
 	KeyBase64 bool
-	Status    MetaStatus
+	status    MetaStatus
 	gotHD     bool
 }
 
@@ -66,17 +65,21 @@ type MetaItem struct {
 //	cls   = slab class id
 //	size  = total size in bytes
 type MetaItemDebug struct {
-	Status         MetaStatus
-	Key            []byte // decoded when the request used b
-	WireKey        []byte // ME key token as received (possibly Base64)
-	KeyBase64      bool   // set when the request used BinaryKey
-	TTL            int64  // exp, expiration time in seconds, -1 means never expire
-	LastAccessTime int64  // la, time in seconds since last access
-	CAS            uint64 // cas
-	HitBefore      bool   // fetch
-	SlabClassID    uint64 // cls
-	Size           uint64 // size
+	Status      MetaStatus
+	Key         []byte // decoded when the request used b
+	WireKey     []byte // ME key token as received (possibly Base64)
+	KeyBase64   bool   // set when the request used BinaryKey
+	TTL         int64  // exp, expiration time in seconds, -1 means never expire
+	LastAccess  int64  // la, time in seconds since last access
+	CAS         uint64 // cas
+	HitBefore   bool   // fetch
+	SlabClassID uint64 // cls
+	Size        uint64 // size
 	// Fields holds unknown me key=value tokens. The six known keys stay
 	// on the typed fields above and are not copied here.
 	Fields map[string]string
+}
+
+func (d MetaItemDebug) Err() error {
+	return d.Status.Err()
 }

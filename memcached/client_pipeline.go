@@ -8,7 +8,7 @@ import (
 )
 
 // Pipeline batches text commands: write every frame, then read every reply.
-// Quiet mutations stay on MetaPipeline. Text noreply is not used.
+// Quiet mutations stay on Meta().Pipeline. Text noreply is not used.
 type Pipeline struct {
 	c    *Client
 	ops  []pipeOp
@@ -21,7 +21,7 @@ type pipeOp struct {
 	key  []byte
 }
 
-// Pipeline starts a write-then-read text batch.
+// Pipeline starts a write-then-read text batch. Meta commands use Meta().Pipeline.
 func (c *Client) Pipeline() *Pipeline {
 	return &Pipeline{c: c}
 }

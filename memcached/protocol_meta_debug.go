@@ -96,7 +96,7 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 		case "exp":
 			item.TTL, _ = strconv.ParseInt(val, 10, 64)
 		case "la":
-			item.LastAccessTime, _ = strconv.ParseInt(val, 10, 64)
+			item.LastAccess, _ = strconv.ParseInt(val, 10, 64)
 		case "cas":
 			item.CAS, _ = strconv.ParseUint(val, 10, 64)
 		case "fetch":
