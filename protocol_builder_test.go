@@ -257,3 +257,22 @@ func Test_read1HDIsOneProtocolRecord(t *testing.T) {
 	hasLen(t, resp.rawLines, 1)
 	equal(t, []byte("HD c1\r\n"), resp.rawLines[0])
 }
+
+func Test_forecastCommonFaultLine(t *testing.T) {
+	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_FOUND\r\n")), ErrNotFound)
+	isErrorIs(t, forecastCommonFaultLine([]byte("EXISTS\r\n")), ErrExists)
+	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_STORED\r\n")), ErrNotStored)
+	isErrorIs(t, forecastCommonFaultLine([]byte("EN\r\n")), ErrNotFound)
+	isErrorIs(t, forecastCommonFaultLine([]byte("EN kfoo\r\n")), ErrNotFound)
+	isErrorIs(t, forecastCommonFaultLine([]byte("ERROR\r\n")), ErrNonexistentCommand)
+	equal(t, error(nil), forecastCommonFaultLine([]byte("END\r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("ENTRY\r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("VALUE k 0 3\r\n")))
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR bad flags\r\n")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR\r\n")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR\n")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_STORED\n")), ErrNotStored)
+	isErrorIs(t, forecastCommonFaultLine([]byte("SERVER_ERROR oom")), ErrServerError)
+	equal(t, error(nil), forecastCommonFaultLine([]byte("CLIENT_ERRORFOO\r\n")))
+}

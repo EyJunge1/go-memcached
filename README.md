@@ -1,7 +1,5 @@
 # gomemcached
 
-Go client for [Memcached](https://memcached.org/), based on [yeqown/memcached](https://github.com/yeqown/memcached).
-
 ### Features
 
 - Text- and meta-protocol for **application commands** (get/set/… and mg/ms/md/ma/me/mn).
