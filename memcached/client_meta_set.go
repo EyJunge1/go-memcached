@@ -3,7 +3,6 @@ package memcached
 import (
 	"context"
 	"fmt"
-	"math"
 )
 
 // MetaSet stores a key with meta flags.
@@ -24,9 +23,6 @@ func (c *Client) MetaSet(ctx context.Context, key, value []byte, f MetaSet) (Met
 			return MetaResult{}, err
 		}
 	}
-	if msFlags.T > math.MaxInt64 {
-		return MetaResult{}, fmt.Errorf("TTL exceeds int64: %w", ErrInvalidArgument)
-	}
 	clientFlags := msFlags.F
 
 	req, resp := buildMetaSetCommand(key, value, msFlags)
@@ -34,7 +30,7 @@ func (c *Client) MetaSet(ctx context.Context, key, value []byte, f MetaSet) (Met
 
 	item := &MetaItem{
 		Key:   key,
-		TTL:   int64(msFlags.T),
+		TTL:   msFlags.T,
 		Flags: clientFlags,
 	}
 	resp.afterRecv = func(r *response) error {
