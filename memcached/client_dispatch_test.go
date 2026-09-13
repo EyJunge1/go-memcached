@@ -209,9 +209,9 @@ func TestNewUsesKetamaAndFailoverOff(t *testing.T) {
 	c, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	_, ok := c.options.pickBuilder.(ketamaPickBuilder)
+	_, ok := c.rt.pickBuilder.(ketamaPickBuilder)
 	isTrue(t, ok)
-	equal(t, Failover{}, c.options.failover)
+	equal(t, Failover{}, c.rt.failover)
 }
 
 func TestNewAppliesDefaultFailover(t *testing.T) {
@@ -221,7 +221,7 @@ func TestNewAppliesDefaultFailover(t *testing.T) {
 	c, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	equal(t, DefaultFailover(), c.options.failover)
+	equal(t, DefaultFailover(), c.rt.failover)
 }
 
 func TestNewExplicitEmptyFailoverDisables(t *testing.T) {
@@ -231,8 +231,8 @@ func TestNewExplicitEmptyFailoverDisables(t *testing.T) {
 	c, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	equal(t, 0, c.options.failover.FailureLimit)
-	isFalse(t, c.options.failover.Eject)
+	equal(t, 0, c.rt.failover.FailureLimit)
+	isFalse(t, c.rt.failover.Eject)
 }
 
 func TestNamespacePrefixesWireKey(t *testing.T) {
@@ -389,8 +389,8 @@ func TestNewPoolMaxOpenZeroUsesDefault(t *testing.T) {
 	client, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	equal(t, 100, client.options.maxOpen)
-	equal(t, 10, client.options.maxIdle)
+	equal(t, 100, client.rt.maxOpen)
+	equal(t, 10, client.rt.maxIdle)
 }
 
 func TestNewPoolPartialAndTimeoutNone(t *testing.T) {
@@ -402,13 +402,13 @@ func TestNewPoolPartialAndTimeoutNone(t *testing.T) {
 	client, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	equal(t, 3*time.Second, client.options.dialTimeout)
-	equal(t, time.Duration(0), client.options.readTimeout)
-	equal(t, 5*time.Second, client.options.writeTimeout)
-	equal(t, 1, client.options.retryAttempts)
-	equal(t, 100, client.options.maxOpen)
-	equal(t, 2, client.options.maxIdle)
-	equal(t, true, client.options.tcpNoDelay)
+	equal(t, 3*time.Second, client.rt.dialTimeout)
+	equal(t, time.Duration(0), client.rt.readTimeout)
+	equal(t, 5*time.Second, client.rt.writeTimeout)
+	equal(t, 1, client.rt.retryAttempts)
+	equal(t, 100, client.rt.maxOpen)
+	equal(t, 2, client.rt.maxIdle)
+	equal(t, true, client.rt.tcpNoDelay)
 }
 
 func TestNewPoolNegativeMaxIdleMeansNone(t *testing.T) {
@@ -418,8 +418,8 @@ func TestNewPoolNegativeMaxIdleMeansNone(t *testing.T) {
 	client, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	equal(t, 0, client.options.maxIdle)
-	equal(t, 100, client.options.maxOpen)
+	equal(t, 0, client.rt.maxIdle)
+	equal(t, 100, client.rt.maxOpen)
 }
 
 func Test_quarantineDuration(t *testing.T) {

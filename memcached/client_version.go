@@ -37,7 +37,7 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 func (c *Client) VersionAll(ctx context.Context) ([]NodeVersion, error) {
 	var out []NodeVersion
 	var mu sync.Mutex
-	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn memcachedConn) error {
+	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
 		req, resp := buildVersionCommand()
 		defer releaseReqAndResp(req, resp)
 		if err := c.sendOnConn(ctx, node, cn, req, resp); err != nil {

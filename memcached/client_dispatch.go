@@ -8,7 +8,7 @@ import (
 )
 
 // getConn returns a true connection from the pool.
-func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error) {
+func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 	key := node.id()
 
 	c.mu.RLock()
@@ -29,7 +29,7 @@ func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error)
 	}
 	pool, ok = c.connPools[key]
 	if !ok {
-		wrapNewConn := func(ctx2 context.Context) (cn memcachedConn, err error) {
+		wrapNewConn := func(ctx2 context.Context) (cn wireConn, err error) {
 			switch node.Network {
 			case
 				"tcp", "tcp4", "tcp6",
@@ -39,20 +39,20 @@ func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error)
 				return nil, ErrInvalidNetworkProtocol
 			}
 
-			cn, err = newConnContext(ctx2, node, c.options)
+			cn, err = newConnContext(ctx2, node, c.rt)
 			if err != nil {
 				return nil, fmt.Errorf("newConnContext failed: %w", err)
 			}
-			if (c.options.authUser != "" || c.options.authPass != "") && !isUDPNetwork(node.Network) {
-				if err = validAuthSecret(c.options.authUser); err != nil {
+			if (c.rt.authUser != "" || c.rt.authPass != "") && !isUDPNetwork(node.Network) {
+				if err = validAuthSecret(c.rt.authUser); err != nil {
 					_ = cn.Close()
 					return nil, err
 				}
-				if err = validAuthSecret(c.options.authPass); err != nil {
+				if err = validAuthSecret(c.rt.authPass); err != nil {
 					_ = cn.Close()
 					return nil, err
 				}
-				if err = authHandshake(ctx2, cn, c.options.authUser, c.options.authPass, c.options.writeTimeout, c.options.readTimeout); err != nil {
+				if err = authHandshake(ctx2, cn, c.rt.authUser, c.rt.authPass, c.rt.writeTimeout, c.rt.readTimeout); err != nil {
 					_ = cn.Close()
 					return nil, err
 				}
@@ -65,16 +65,16 @@ func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error)
 			pool = newConnPool(1, 1, 0, 0, wrapNewConn)
 		} else {
 			pool = newConnPool(
-				c.options.maxIdle, c.options.maxOpen,
-				c.options.maxLifetime, c.options.maxIdleTime,
+				c.rt.maxIdle, c.rt.maxOpen,
+				c.rt.maxLifetime, c.rt.maxIdleTime,
 				wrapNewConn,
 			)
-			pool.minIdle = c.options.minIdle
+			pool.minIdle = c.rt.minIdle
 		}
 		c.connPools[key] = pool
 		c.mu.Unlock()
 		if !isUDPNetwork(node.Network) {
-			pool.warmup(ctx, c.options.minIdle)
+			pool.warmup(ctx, c.rt.minIdle)
 		}
 		return pool.get(ctx)
 	}
@@ -83,7 +83,7 @@ func (c *Client) getConn(ctx context.Context, node *addr) (memcachedConn, error)
 	return pool.get(ctx)
 }
 
-type callFunc func(ctx context.Context, node *addr, conn memcachedConn) error
+type callFunc func(ctx context.Context, node *addr, conn wireConn) error
 
 func wrapTransport(err error) error {
 	if err == nil {
@@ -160,7 +160,7 @@ func shouldDiscardConn(err error) bool {
 		errors.Is(err, ErrServerError)
 }
 
-func finishConn(cn memcachedConn, err error) {
+func finishConn(cn wireConn, err error) {
 	if cn == nil {
 		return
 	}
@@ -175,7 +175,7 @@ func finishConn(cn memcachedConn, err error) {
 	_ = cn.release()
 }
 
-func (c *Client) sendOnConn(ctx context.Context, node *addr, cn memcachedConn, req *request, resp *response) error {
+func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *request, resp *response) error {
 	c.enableUDPFraming(node, req, resp)
 	if req.udpEnabled {
 		if err := udpRequestAllowed(req); err != nil {
@@ -184,14 +184,14 @@ func (c *Client) sendOnConn(ctx context.Context, node *addr, cn memcachedConn, r
 	}
 	if resp != nil {
 		resp.maxValueBytes = c.valueLimit()
-		resp.readTimeout = c.options.readTimeout
+		resp.readTimeout = c.rt.readTimeout
 		resp.readCtx = ctx
 		resp.readConn = cn
 	}
-	if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
+	if err := req.send(ctx, cn, c.rt.writeTimeout); err != nil {
 		return wrapTransport(fmt.Errorf("send failed: %w", err))
 	}
-	if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
+	if err := resp.recv(ctx, cn, c.rt.readTimeout); err != nil {
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 	}
 	return nil
@@ -280,7 +280,7 @@ func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *resp
 	default:
 	}
 
-	attempts := c.options.retryAttempts
+	attempts := c.rt.retryAttempts
 	if attempts < 1 {
 		attempts = 1
 	}
@@ -314,7 +314,7 @@ func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *resp
 }
 
 func (c *Client) dispatchToAddr(ctx context.Context, node *addr, req *request, resp *response) error {
-	attempts := c.options.retryAttempts
+	attempts := c.rt.retryAttempts
 	if attempts < 1 {
 		attempts = 1
 	}
@@ -323,7 +323,7 @@ func (c *Client) dispatchToAddr(ctx context.Context, node *addr, req *request, r
 	}
 	var last error
 	for i := 0; i < attempts; i++ {
-		if i > 0 && c.options.failover.Eject && c.isDead(node) {
+		if i > 0 && c.rt.failover.Eject && c.isDead(node) {
 			addrs, picker := c.snapshotCluster()
 			addrs = c.liveAddrs(addrs)
 			next, pickErr := picker.Pick(addrs, req.key)
@@ -370,17 +370,17 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 	}
 	if resp != nil {
 		resp.maxValueBytes = c.valueLimit()
-		resp.readTimeout = c.options.readTimeout
+		resp.readTimeout = c.rt.readTimeout
 		resp.readCtx = ctx
 		resp.readConn = cn
 	}
 
-	if err = req.send(ctx, cn, c.options.writeTimeout); err != nil {
+	if err = req.send(ctx, cn, c.rt.writeTimeout); err != nil {
 		err = wrapTransport(fmt.Errorf("send failed: %w", err))
 		return false, err
 	}
 	sent = true
-	if err = resp.recv(ctx, cn, c.options.readTimeout); err != nil {
+	if err = resp.recv(ctx, cn, c.rt.readTimeout); err != nil {
 		err = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 		return sent, err
 	}
@@ -391,13 +391,13 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 }
 
 func (c *Client) valueLimit() int {
-	if c == nil || c.options == nil || c.options.maxValueBytes <= 0 {
+	if c == nil || c.rt == nil || c.rt.maxValueBytes <= 0 {
 		return defaultMaxValueBytes
 	}
-	return c.options.maxValueBytes
+	return c.rt.maxValueBytes
 }
 
-func (c *Client) dialDedicated(ctx context.Context, node *addr) (memcachedConn, error) {
+func (c *Client) dialDedicated(ctx context.Context, node *addr) (wireConn, error) {
 	c.mu.RLock()
 	closed := c.closed
 	c.mu.RUnlock()
@@ -410,12 +410,12 @@ func (c *Client) dialDedicated(ctx context.Context, node *addr) (memcachedConn, 
 	if isUDPNetwork(node.Network) {
 		return nil, fmt.Errorf("admin streams: %w", ErrNotSupported)
 	}
-	cn, err := newConnContext(ctx, node, c.options)
+	cn, err := newConnContext(ctx, node, c.rt)
 	if err != nil {
 		return nil, fmt.Errorf("newConnContext failed: %w", err)
 	}
-	if c.options.authUser != "" || c.options.authPass != "" {
-		if err = authHandshake(ctx, cn, c.options.authUser, c.options.authPass, c.options.writeTimeout, c.options.readTimeout); err != nil {
+	if c.rt.authUser != "" || c.rt.authPass != "" {
+		if err = authHandshake(ctx, cn, c.rt.authUser, c.rt.authPass, c.rt.writeTimeout, c.rt.readTimeout); err != nil {
 			_ = cn.Close()
 			return nil, err
 		}

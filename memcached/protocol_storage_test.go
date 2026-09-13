@@ -31,9 +31,9 @@ func Test_Rel(t *testing.T) {
 	equal(t, Exptime(2592000), Rel(30*24*time.Hour))
 
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	prev := nowFunc
-	nowFunc = func() time.Time { return fixed }
-	t.Cleanup(func() { nowFunc = prev })
+	prev := clock
+	clock = func() time.Time { return fixed }
+	t.Cleanup(func() { clock = prev })
 	want := Exptime(fixed.Add(31 * 24 * time.Hour).Unix())
 	equal(t, want, Rel(31*24*time.Hour))
 }

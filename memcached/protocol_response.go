@@ -72,7 +72,7 @@ type response struct {
 	maxValueBytes int
 	readTimeout   time.Duration
 	readCtx       context.Context
-	readConn      memcachedConn
+	readConn      wireConn
 }
 
 func buildNoReplyResponse() *response {
@@ -177,8 +177,8 @@ func (p *payloadReader) readExact(n int) ([]byte, error) {
 	return buf, err
 }
 
-func (resp *response) recv(ctx context.Context, rr memcachedConn, readTimeout time.Duration) error {
-	if has := selectProximateDeadline(ctx, rr, readTimeout, nowFunc, true); has {
+func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Duration) error {
+	if has := selectProximateDeadline(ctx, rr, readTimeout, clock, true); has {
 		defer func() { _ = rr.setReadDeadline(zeroTime) }()
 	}
 	stop := watchContextCancel(ctx, rr)
@@ -209,7 +209,7 @@ func (resp *response) recv(ctx context.Context, rr memcachedConn, readTimeout ti
 }
 
 func selectProximateDeadline(
-	ctx context.Context, rr memcachedConn, timeout time.Duration, nowFunc nowFuncType, isRead bool,
+	ctx context.Context, rr wireConn, timeout time.Duration, clock clockFunc, isRead bool,
 ) (ok bool) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -223,7 +223,7 @@ func selectProximateDeadline(
 		has      bool
 	)
 	if timeout > 0 {
-		deadline = nowFunc().Add(timeout)
+		deadline = clock().Add(timeout)
 		has = true
 	}
 
@@ -301,7 +301,7 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 	resp.rawLines = append(resp.rawLines, header)
 	resp.rawLines = append(resp.rawLines, payload)
 	if resp.readConn != nil {
-		_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, nowFunc, true)
+		_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, clock, true)
 	}
 	return 2, nil
 }

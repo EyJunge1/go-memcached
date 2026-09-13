@@ -63,8 +63,8 @@ func (req *request) release() {
 	requestPool.Put(req)
 }
 
-func (req *request) send(ctx context.Context, rr memcachedConn, writeTimeout time.Duration) (err error) {
-	if has := selectProximateDeadline(ctx, rr, writeTimeout, nowFunc, false); has {
+func (req *request) send(ctx context.Context, rr wireConn, writeTimeout time.Duration) (err error) {
+	if has := selectProximateDeadline(ctx, rr, writeTimeout, clock, false); has {
 		defer func() { _ = rr.setWriteDeadline(zeroTime) }()
 	}
 	stop := watchContextCancel(ctx, rr)
@@ -79,7 +79,7 @@ func (req *request) send(ctx context.Context, rr memcachedConn, writeTimeout tim
 	return rr.Flush()
 }
 
-func (req *request) write(rr memcachedConn) (err error) {
+func (req *request) write(rr wireConn) (err error) {
 	if _, err = rr.Write(req.raw); err != nil {
 		return err
 	}
@@ -94,12 +94,12 @@ func (req *request) write(rr memcachedConn) (err error) {
 	return err
 }
 
-func watchContextCancel(ctx context.Context, rr memcachedConn) (stop func()) {
+func watchContextCancel(ctx context.Context, rr wireConn) (stop func()) {
 	if ctx == nil {
 		return func() {}
 	}
 	cancelWatch := context.AfterFunc(ctx, func() {
-		now := nowFunc()
+		now := clock()
 		_ = rr.setReadDeadline(now)
 		_ = rr.setWriteDeadline(now)
 	})

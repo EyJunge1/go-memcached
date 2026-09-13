@@ -180,7 +180,7 @@ func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error 
 
 	stop := watchContextCancel(ctx, cn)
 	defer stop()
-	if selectProximateDeadline(ctx, cn, p.c.options.writeTimeout, nowFunc, false) {
+	if selectProximateDeadline(ctx, cn, p.c.rt.writeTimeout, clock, false) {
 		defer func() { _ = cn.setWriteDeadline(zeroTime) }()
 	}
 	for _, op := range ops {
@@ -201,11 +201,11 @@ func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error 
 	for _, op := range ops {
 		if op.resp != nil {
 			op.resp.maxValueBytes = p.c.valueLimit()
-			op.resp.readTimeout = p.c.options.readTimeout
+			op.resp.readTimeout = p.c.rt.readTimeout
 			op.resp.readCtx = ctx
 			op.resp.readConn = cn
 		}
-		if err = op.resp.recv(ctx, cn, p.c.options.readTimeout); err != nil {
+		if err = op.resp.recv(ctx, cn, p.c.rt.readTimeout); err != nil {
 			opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 			if shouldDiscardPipelineConn(opErr) {
 				p.c.noteFailure(node)

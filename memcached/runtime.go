@@ -14,7 +14,8 @@ import (
 // always wraps that socket with tls.Client and handshakes.
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
-type clientOptions struct {
+// runtime is the resolved Config after New: defaults applied, TLS dialer wrapped.
+type runtime struct {
 	pickBuilder builder
 	resolver    resolver
 
@@ -52,8 +53,8 @@ type clientOptions struct {
 	unixSocketMaxMode os.FileMode
 }
 
-func optionsFromConfig(cfg Config) (*clientOptions, error) {
-	o := &clientOptions{
+func runtimeFromConfig(cfg Config) (*runtime, error) {
+	rt := &runtime{
 		pickBuilder: cfg.Cluster.pickBuilder,
 		resolver:    cfg.Cluster.resolver,
 
@@ -82,46 +83,46 @@ func optionsFromConfig(cfg Config) (*clientOptions, error) {
 		unixSocketAnyMode: cfg.Transport.UnixSocketAnyMode,
 		unixSocketMaxMode: cfg.Transport.UnixSocketMaxMode,
 	}
-	if o.maxValueBytes <= 0 {
-		o.maxValueBytes = defaultMaxValueBytes
+	if rt.maxValueBytes <= 0 {
+		rt.maxValueBytes = defaultMaxValueBytes
 	}
-	if o.pickBuilder == nil {
-		o.pickBuilder = defaultPickBuilder()
+	if rt.pickBuilder == nil {
+		rt.pickBuilder = defaultPickBuilder()
 	}
-	if o.resolver == nil {
-		o.resolver = defaultResolver{}
+	if rt.resolver == nil {
+		rt.resolver = defaultResolver{}
 	}
-	o.dialTimeout = timeoutOrDefault(cfg.Transport.DialTimeout, 3*time.Second)
-	o.readTimeout = timeoutOrDefault(cfg.Transport.ReadTimeout, 5*time.Second)
-	o.writeTimeout = timeoutOrDefault(cfg.Transport.WriteTimeout, 5*time.Second)
-	if o.retryAttempts == 0 {
-		o.retryAttempts = 1
+	rt.dialTimeout = timeoutOrDefault(cfg.Transport.DialTimeout, 3*time.Second)
+	rt.readTimeout = timeoutOrDefault(cfg.Transport.ReadTimeout, 5*time.Second)
+	rt.writeTimeout = timeoutOrDefault(cfg.Transport.WriteTimeout, 5*time.Second)
+	if rt.retryAttempts == 0 {
+		rt.retryAttempts = 1
 	}
-	if o.maxOpen == 0 {
-		o.maxOpen = 100
+	if rt.maxOpen == 0 {
+		rt.maxOpen = 100
 	}
 	if cfg.Pool.MaxIdle < 0 {
-		o.maxIdle = 0
-	} else if o.maxIdle == 0 {
-		o.maxIdle = 10
+		rt.maxIdle = 0
+	} else if rt.maxIdle == 0 {
+		rt.maxIdle = 10
 	}
-	if o.minIdle < 0 {
-		o.minIdle = 0
+	if rt.minIdle < 0 {
+		rt.minIdle = 0
 	}
 	if cfg.Transport.TLS != nil {
-		o.tlsSet = true
-		o.tlsConfig = cfg.Transport.TLS
+		rt.tlsSet = true
+		rt.tlsConfig = cfg.Transport.TLS
 	}
 	if cfg.Auth != nil {
-		o.authUser = cfg.Auth.User
-		o.authPass = cfg.Auth.Pass
-		o.authAllowPlain = cfg.Auth.AllowPlaintext
+		rt.authUser = cfg.Auth.User
+		rt.authPass = cfg.Auth.Pass
+		rt.authAllowPlain = cfg.Auth.AllowPlaintext
 	}
-	o.failover = cfg.Failover
-	if err := applyTLSDialer(o); err != nil {
+	rt.failover = cfg.Failover
+	if err := applyTLSDialer(rt); err != nil {
 		return nil, err
 	}
-	return o, nil
+	return rt, nil
 }
 
 func timeoutOrDefault(v, def time.Duration) time.Duration {
@@ -169,17 +170,17 @@ func defaultRawDial(keepAlive time.Duration) DialContextFunc {
 	}
 }
 
-func applyTLSDialer(o *clientOptions) error {
-	if !o.tlsSet {
+func applyTLSDialer(rt *runtime) error {
+	if !rt.tlsSet {
 		return nil
 	}
-	if o.tlsConfig == nil {
+	if rt.tlsConfig == nil {
 		return fmt.Errorf("TLS: nil config: %w", ErrInvalidArgument)
 	}
-	inner := o.dialContext
+	inner := rt.dialContext
 	if inner == nil {
-		inner = defaultRawDial(o.keepAlive)
+		inner = defaultRawDial(rt.keepAlive)
 	}
-	o.dialContext = wrapTLSDial(inner, o.tlsConfig)
+	rt.dialContext = wrapTLSDial(inner, rt.tlsConfig)
 	return nil
 }

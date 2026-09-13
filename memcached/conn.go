@@ -13,9 +13,9 @@ import (
 	"time"
 )
 
-type nowFuncType func() time.Time
+type clockFunc func() time.Time
 
-var nowFunc nowFuncType = time.Now
+var clock clockFunc = time.Now
 
 const connWriteBufferSize = 16 << 10
 
@@ -57,27 +57,18 @@ func checkUnixSocketMode(path string, anyMode bool, maxMode os.FileMode) error {
 	return nil
 }
 
-// memcachedConn wraps a net.Conn and provides a way to read and write data
-// from the connection.
-// It also provides support for a connection pool mechanism, including expired check,
-// idle check and refresh the last time the connection is put back to the pool.
-type memcachedConn interface {
+// wireConn is one pooled socket: line/framed reads, deadlines, and pool return.
+type wireConn interface {
 	io.ReadWriteCloser
 
-	// readLine reads a line from the connection using the given delimiter.
 	readLine(delim byte) ([]byte, error)
-	// readExact reads exactly n bytes from the connection.
 	readExact(n int) ([]byte, error)
-	// readDatagram reads one UDP datagram, preserving packet boundaries.
 	readDatagram() ([]byte, error)
-	// expired returns true if the connection is expired.
-	// it always returns the duration of time since the connection is created.
+	// expired reports whether createdAt is before since. The duration is age.
 	expired(since time.Time) (time.Duration, bool)
-	// idle returns bool whether memcachedConn stays idle since the given time(since).
-	// if false, the duration of time since the connection is idle will be returned.
+	// idle reports whether returnedAt is before since. The duration is time left.
 	idle(since time.Time) (time.Duration, bool)
 
-	// release returns the connection to the pool.
 	release() error
 	setConnPool(p *connPool)
 	getConnPool() *connPool
@@ -87,14 +78,9 @@ type memcachedConn interface {
 	Flush() error
 }
 
-var _ memcachedConn = (*conn)(nil) // tcp socket
-// _ memcachedConn = (*unixConn)(nil) // unix domain socket
+var _ wireConn = (*conn)(nil)
 
-// conn is a network implementation of memcachedConn.
-//
-// it wraps a net.Conn and provides a way to read and write
-// data from the connection. supports the following three network types:
-// tcp / udp / unix domain socket. the Default network type is tcp.
+// conn is a buffered TCP, Unix, or UDP socket used as a wireConn.
 type conn struct {
 	createdAt  time.Time
 	addr       net.Addr
@@ -110,9 +96,9 @@ type conn struct {
 	wr *bufio.Writer
 }
 
-func newConnContext(ctx context.Context, node *addr, o *clientOptions) (*conn, error) {
+func newConnContext(ctx context.Context, node *addr, o *runtime) (*conn, error) {
 	if o == nil {
-		o = &clientOptions{tcpNoDelay: true}
+		o = &runtime{tcpNoDelay: true}
 	}
 	if node != nil && strings.HasPrefix(node.Network, "unix") {
 		if err := checkUnixSocketMode(node.Address, o.unixSocketAnyMode, o.unixSocketMaxMode); err != nil {
@@ -130,8 +116,8 @@ func newConnContext(ctx context.Context, node *addr, o *clientOptions) (*conn, e
 		network = node.Network
 	}
 	cn := &conn{
-		createdAt:  nowFunc(),
-		returnedAt: nowFunc(),
+		createdAt:  clock(),
+		returnedAt: clock(),
 		raw:        rawConn,
 		addr:       rawConn.RemoteAddr(),
 		network:    network,
@@ -218,7 +204,6 @@ func (c *conn) readDatagram() ([]byte, error) {
 	return out, nil
 }
 
-// Read reads data from the connection
 func (c *conn) Read(p []byte) (n int, err error) {
 	if c.isClosed() {
 		return 0, errors.New("connection is closed")
@@ -227,7 +212,6 @@ func (c *conn) Read(p []byte) (n int, err error) {
 	return c.rr.Read(p)
 }
 
-// Write writes data to the connection
 func (c *conn) Write(p []byte) (n int, err error) {
 	if c.isClosed() {
 		return 0, errors.New("connection is closed")
@@ -243,7 +227,6 @@ func (c *conn) Flush() error {
 	return c.wr.Flush()
 }
 
-// Close closes the connection
 func (c *conn) Close() error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
@@ -262,7 +245,7 @@ func (c *conn) Close() error {
 }
 
 func (c *conn) expired(since time.Time) (time.Duration, bool) {
-	now := nowFunc()
+	now := clock()
 	past := now.Sub(c.createdAt)
 	if since.IsZero() {
 		return past, false
@@ -287,7 +270,6 @@ func (c *conn) idle(since time.Time) (time.Duration, bool) {
 func (c *conn) release() error {
 	_ = c.setReadDeadline(zeroTime)
 	_ = c.setWriteDeadline(zeroTime)
-	c.returnedAt = nowFunc()
-	// put the connection back to the pool
+	c.returnedAt = clock()
 	return c.pool.put(c)
 }

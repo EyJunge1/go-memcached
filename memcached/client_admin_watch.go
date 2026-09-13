@@ -41,14 +41,14 @@ type DumpEntry struct {
 	Err    error
 }
 
-func releaseDedicated(cn memcachedConn) {
+func releaseDedicated(cn wireConn) {
 	if cn == nil {
 		return
 	}
 	_ = cn.Close()
 }
 
-func readAdminStreamLine(cn memcachedConn) ([]byte, error) {
+func readAdminStreamLine(cn wireConn) ([]byte, error) {
 	var buf []byte
 	tmp := make([]byte, 1)
 	for {
@@ -71,12 +71,12 @@ func readAdminStreamLine(cn memcachedConn) ([]byte, error) {
 	}
 }
 
-func (a *AdminNode) sendAdminLine(ctx context.Context, cn memcachedConn, req *request, resp *response) error {
+func (a *AdminNode) sendAdminLine(ctx context.Context, cn wireConn, req *request, resp *response) error {
 	a.c.enableUDPFraming(nil, req, resp)
-	if err := req.send(ctx, cn, a.c.options.writeTimeout); err != nil {
+	if err := req.send(ctx, cn, a.c.rt.writeTimeout); err != nil {
 		return wrapTransport(fmt.Errorf("send failed: %w", err))
 	}
-	if err := resp.recv(ctx, cn, a.c.options.readTimeout); err != nil {
+	if err := resp.recv(ctx, cn, a.c.rt.readTimeout); err != nil {
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 	}
 	if err := parseAdminReply(resp); err != nil {
@@ -85,7 +85,7 @@ func (a *AdminNode) sendAdminLine(ctx context.Context, cn memcachedConn, req *re
 	return nil
 }
 
-func (a *AdminNode) acquireStream(ctx context.Context) (memcachedConn, error) {
+func (a *AdminNode) acquireStream(ctx context.Context) (wireConn, error) {
 	if err := requireDeadline(ctx); err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (a *AdminNode) Watch(ctx context.Context, topics ...WatchTopic) (<-chan Wat
 	return out, nil
 }
 
-func (a *AdminNode) readWatch(ctx context.Context, cn memcachedConn, out chan WatchEvent) {
+func (a *AdminNode) readWatch(ctx context.Context, cn wireConn, out chan WatchEvent) {
 	defer close(out)
 	defer releaseDedicated(cn)
 	stop := context.AfterFunc(ctx, func() { _ = cn.Close() })
@@ -264,7 +264,7 @@ func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, 
 
 	req, resp := buildLRUCrawlerCommand(kind, selector)
 	a.c.enableUDPFraming(nil, req, resp)
-	if err = req.send(ctx, cn, a.c.options.writeTimeout); err != nil {
+	if err = req.send(ctx, cn, a.c.rt.writeTimeout); err != nil {
 		releaseReqAndResp(req, resp)
 		releaseDedicated(cn)
 		return wrapTransport(fmt.Errorf("send failed: %w", err))
@@ -274,8 +274,8 @@ func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, 
 	stopFirst := context.AfterFunc(ctx, func() { _ = cn.Close() })
 	if dl, ok := ctx.Deadline(); ok {
 		_ = cn.setReadDeadline(dl)
-	} else if a.c.options.readTimeout > 0 {
-		_ = cn.setReadDeadline(time.Now().Add(a.c.options.readTimeout))
+	} else if a.c.rt.readTimeout > 0 {
+		_ = cn.setReadDeadline(time.Now().Add(a.c.rt.readTimeout))
 	} else {
 		_ = cn.setReadDeadline(time.Time{})
 	}

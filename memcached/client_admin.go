@@ -56,7 +56,7 @@ func (m StatsDetailMode) wire() (string, error) {
 
 // Admin returns the admin factory. Requires Config.AllowAdmin.
 func (c *Client) Admin() (*Admin, error) {
-	if c == nil || c.options == nil || !c.options.allowAdmin {
+	if c == nil || c.rt == nil || !c.rt.allowAdmin {
 		return nil, ErrAdminNotEnabled
 	}
 	c.mu.RLock()
@@ -130,7 +130,7 @@ func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *res
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
 	}
-	return b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn memcachedConn) error {
+	return b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
 		req, resp := build()
 		defer releaseReqAndResp(req, resp)
 		if err := b.c.sendOnConn(ctx, node, cn, req, resp); err != nil {

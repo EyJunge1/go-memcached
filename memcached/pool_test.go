@@ -54,13 +54,13 @@ func Test_connPool_new(t *testing.T) {
 			equal(t, tt.maxOpen, pool.maxOpen)
 			equal(t, tt.maxIdleTime, pool.maxIdleTime)
 			equal(t, 0, pool.stats().IdleConns)
-			equal(t, 0, int(pool.numOpen.Load()))
+			equal(t, 0, int(pool.open.Load()))
 			isFalse(t, pool.closed)
 			notNil(t, pool.closedCh)
 			isNil(t, pool.cleanerCh)
-			equal(t, int64(0), pool.maxIdleClosed)
-			equal(t, int64(0), pool.maxIdleTimeClosed)
-			equal(t, int64(0), pool.maxLifetimeClosed)
+			equal(t, int64(0), pool.closedIdleCap)
+			equal(t, int64(0), pool.closedIdleAge)
+			equal(t, int64(0), pool.closedLifetime)
 		})
 	}
 }
@@ -87,7 +87,7 @@ func Test_connPool_get_put(t *testing.T) {
 
 		wg.Wait()
 
-		equal(t, 5, int(pool.numOpen.Load()))
+		equal(t, 5, int(pool.open.Load()))
 		equal(t, 5, pool.stats().IdleConns)
 		noError(t, pool.close())
 	})
@@ -97,7 +97,7 @@ func Test_connPool_get_put(t *testing.T) {
 // takes longer than the context timeout to return a connection.
 func Test_connPool_get_timeout_case1(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		createConn := func(ctx context.Context) (memcachedConn, error) {
+		createConn := func(ctx context.Context) (wireConn, error) {
 			delay := time.NewTimer(200 * time.Millisecond)
 			select {
 			case <-ctx.Done():
@@ -178,7 +178,7 @@ func Test_connPool_get_oversize(t *testing.T) {
 
 		wg.Wait()
 
-		equal(t, 5, int(pool.numOpen.Load()))
+		equal(t, 5, int(pool.open.Load()))
 		equal(t, 5, pool.stats().IdleConns)
 
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -201,7 +201,7 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		defer cancel()
 
 		// get 10 connections and put them back, now there are 10 idle connections
-		// and 10 numOpen connections.
+		// and 10 open connections.
 		for range 10 {
 			go func() {
 				cn, err := pool.get(ctx)
@@ -220,14 +220,14 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		equal(t, 0, stat.IdleConns)
 		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
-		equal(t, int64(0), stat.maxIdleClosed)
-		equal(t, int64(0), stat.maxLifetimeClosed)
-		equal(t, int64(0), stat.maxIdleTimeClosed)
+		equal(t, int64(0), stat.closedIdleCap)
+		equal(t, int64(0), stat.closedLifetime)
+		equal(t, int64(0), stat.closedIdleAge)
 
-		// wait for the cleaner to clean up the idle connection, decrease the numOpen
+		// wait for the cleaner to clean up the idle connection, decrease the open count
 		// connections to 5.
 		time.Sleep(3 * time.Second)
-		equal(t, 0, int(pool.numOpen.Load()))
+		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
 		isFalse(t, pool.closed)
 
@@ -237,9 +237,9 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		equal(t, 0, stat.IdleConns) // since all connections are cleaned up(idle=1s)
 		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
-		equal(t, int64(5), stat.maxIdleClosed)
-		equal(t, int64(0), stat.maxLifetimeClosed)
-		equal(t, int64(5), stat.maxIdleTimeClosed)
+		equal(t, int64(5), stat.closedIdleCap)
+		equal(t, int64(0), stat.closedLifetime)
+		equal(t, int64(5), stat.closedIdleAge)
 		noError(t, pool.close())
 	})
 }
@@ -255,7 +255,7 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		defer cancel()
 
 		// get 10 connections and put them back, now there are 10 idle connections
-		// and 10 numOpen connections.
+		// and 10 open connections.
 		for range 10 {
 			go func() {
 				cn, err := pool.get(ctx)
@@ -274,14 +274,14 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		equal(t, 0, stat.IdleConns)
 		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
-		equal(t, int64(0), stat.maxIdleClosed)
-		equal(t, int64(0), stat.maxLifetimeClosed)
-		equal(t, int64(0), stat.maxIdleTimeClosed)
+		equal(t, int64(0), stat.closedIdleCap)
+		equal(t, int64(0), stat.closedLifetime)
+		equal(t, int64(0), stat.closedIdleAge)
 
-		// wait for the cleaner to clean up the idle connection, decrease the numOpen
+		// wait for the cleaner to clean up the idle connection, decrease the open count
 		// connections to 5.
 		time.Sleep(3 * time.Second)
-		equal(t, 0, int(pool.numOpen.Load()))
+		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
 		isFalse(t, pool.closed)
 
@@ -291,9 +291,9 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		equal(t, 0, stat.IdleConns) // since all connections are cleaned up(life=2s)
 		equal(t, 10, stat.MaxOpen)
 		equal(t, 5, stat.MaxIdle)
-		equal(t, int64(5), stat.maxIdleClosed)
-		equal(t, int64(5), stat.maxLifetimeClosed)
-		equal(t, int64(0), stat.maxIdleTimeClosed)
+		equal(t, int64(5), stat.closedIdleCap)
+		equal(t, int64(5), stat.closedLifetime)
+		equal(t, int64(0), stat.closedIdleAge)
 		noError(t, pool.close())
 	})
 }
@@ -301,9 +301,9 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 func Test_connectionCleanerRunLocked_both_limits(t *testing.T) {
 	pool := newConnPool(10, 10, time.Hour, time.Hour, createConn)
 	fixedNow := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	origNow := nowFunc
-	nowFunc = func() time.Time { return fixedNow }
-	t.Cleanup(func() { nowFunc = origNow })
+	origNow := clock
+	clock = func() time.Time { return fixedNow }
+	t.Cleanup(func() { clock = origNow })
 
 	idleExpired := newMockConn()
 	idleExpired.createdAt = fixedNow.Add(-30 * time.Minute)
@@ -320,7 +320,7 @@ func Test_connectionCleanerRunLocked_both_limits(t *testing.T) {
 	pool.conns <- idleExpired
 	pool.conns <- lifeExpired
 	pool.conns <- fresh
-	pool.numOpen.Store(3)
+	pool.open.Store(3)
 	connsBefore := pool.conns
 
 	pool.maxIdleTime = time.Hour
@@ -331,8 +331,8 @@ func Test_connectionCleanerRunLocked_both_limits(t *testing.T) {
 		t.Fatal("cleaner must keep the idle channel")
 	}
 	hasLen(t, closing, 2)
-	equal(t, int64(1), pool.maxIdleTimeClosed)
-	equal(t, int64(1), pool.maxLifetimeClosed)
+	equal(t, int64(1), pool.closedIdleAge)
+	equal(t, int64(1), pool.closedLifetime)
 	equal(t, 1, len(pool.conns))
 	greater(t, d, time.Duration(0))
 
@@ -372,7 +372,7 @@ func Test_connPool_cleanup_concurrent_get(t *testing.T) {
 	<-done
 	noError(t, getErr)
 	noError(t, pool.close())
-	equal(t, 0, int(pool.numOpen.Load()))
+	equal(t, 0, int(pool.open.Load()))
 }
 
 func Test_connPool_close_wakes_waiters(t *testing.T) {
@@ -401,7 +401,7 @@ func Test_connPool_close_wakes_waiters(t *testing.T) {
 		}
 
 		noError(t, pool.put(cn))
-		equal(t, 0, int(pool.numOpen.Load()))
+		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
 	})
 }
@@ -410,14 +410,14 @@ func Test_connPool_get_closes_connection_created_during_close(t *testing.T) {
 	creationStarted := make(chan struct{})
 	releaseCreation := make(chan struct{})
 	createdConn := &closeTrackingConn{mockConn: newMockConn()}
-	pool := newConnPool(1, 1, time.Hour, time.Hour, func(context.Context) (memcachedConn, error) {
+	pool := newConnPool(1, 1, time.Hour, time.Hour, func(context.Context) (wireConn, error) {
 		close(creationStarted)
 		<-releaseCreation
 		return createdConn, nil
 	})
 
 	type getResult struct {
-		conn memcachedConn
+		conn wireConn
 		err  error
 	}
 	resultCh := make(chan getResult, 1)
@@ -434,15 +434,15 @@ func Test_connPool_get_closes_connection_created_during_close(t *testing.T) {
 	isNil(t, result.conn)
 	isErrorIs(t, result.err, errPoolClosed)
 	isTrue(t, createdConn.closed.Load())
-	equal(t, 0, int(pool.numOpen.Load()))
+	equal(t, 0, int(pool.open.Load()))
 }
 
 func Test_connPool_checkoutDropsExpired(t *testing.T) {
 	pool := newConnPool(5, 10, 50*time.Millisecond, 0, createConn)
 	old := newMockConn()
-	old.createdAt = nowFunc().Add(-time.Hour)
+	old.createdAt = clock().Add(-time.Hour)
 	pool.conns <- old
-	pool.numOpen.Add(1)
+	pool.open.Add(1)
 
 	got, err := pool.get(context.Background())
 	noError(t, err)
@@ -453,11 +453,11 @@ func Test_connPool_checkoutDropsExpired(t *testing.T) {
 	noError(t, pool.close())
 }
 
-func Test_connPool_numOpenReservedBeforeCreate(t *testing.T) {
+func Test_connPool_openReservedBeforeCreate(t *testing.T) {
 	var creating atomic.Int32
 	started := make(chan struct{}, 2)
 	block := make(chan struct{})
-	pool := newConnPool(1, 1, 0, 0, func(context.Context) (memcachedConn, error) {
+	pool := newConnPool(1, 1, 0, 0, func(context.Context) (wireConn, error) {
 		creating.Add(1)
 		started <- struct{}{}
 		<-block
@@ -474,47 +474,47 @@ func Test_connPool_numOpenReservedBeforeCreate(t *testing.T) {
 }
 
 func Test_connPool_discard(t *testing.T) {
-	pool := newConnPool(5, 10, 0, 0, func(context.Context) (memcachedConn, error) {
+	pool := newConnPool(5, 10, 0, 0, func(context.Context) (wireConn, error) {
 		return &closeTrackingConn{mockConn: newMockConn()}, nil
 	})
 	cn, err := pool.get(context.Background())
 	noError(t, err)
-	equal(t, 1, int(pool.numOpen.Load()))
+	equal(t, 1, int(pool.open.Load()))
 
 	noError(t, pool.discard(cn))
-	equal(t, 0, int(pool.numOpen.Load()))
+	equal(t, 0, int(pool.open.Load()))
 	equal(t, 0, pool.stats().IdleConns)
 	isTrue(t, cn.(*closeTrackingConn).closed.Load())
 }
 
 func TestMinIdleDoesNotRetainIdleExpired(t *testing.T) {
 	var created atomic.Int32
-	pool := newConnPool(2, 4, 0, time.Hour, func(context.Context) (memcachedConn, error) {
+	pool := newConnPool(2, 4, 0, time.Hour, func(context.Context) (wireConn, error) {
 		created.Add(1)
 		return newMockConn(), nil
 	})
 	pool.minIdle = 1
 	fixed := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	orig := nowFunc
-	nowFunc = func() time.Time { return fixed }
-	t.Cleanup(func() { nowFunc = orig })
+	orig := clock
+	clock = func() time.Time { return fixed }
+	t.Cleanup(func() { clock = orig })
 
 	old := newMockConn()
 	old.createdAt = fixed.Add(-time.Minute)
 	old.returnedAt = fixed.Add(-2 * time.Hour)
 	pool.conns <- old
-	pool.numOpen.Store(1)
+	pool.open.Store(1)
 
 	_, closing := pool.connectionCleanerRunLocked(time.Hour)
 	hasLen(t, closing, 1)
 	equal(t, 0, len(pool.conns))
 	for _, cn := range closing {
 		_ = cn.Close()
-		pool.numOpen.Add(-1)
+		pool.open.Add(-1)
 	}
 	pool.ensureMinIdle(context.Background())
 	equal(t, 1, len(pool.conns))
-	equal(t, 1, int(pool.numOpen.Load()))
+	equal(t, 1, int(pool.open.Load()))
 	equal(t, int32(1), created.Load())
 	fresh := <-pool.conns
 	if fresh == old {
@@ -544,9 +544,9 @@ func TestCleanerDoesNotExceedMaxOpenUnderGet(t *testing.T) {
 	_, closing := pool.connectionCleanerRunLocked(time.Hour)
 	for _, c := range closing {
 		_ = c.Close()
-		pool.numOpen.Add(-1)
+		pool.open.Add(-1)
 	}
 	pool.ensureMinIdle(ctx)
 	<-done
-	lessOrEqual(t, int(pool.numOpen.Load()), pool.maxOpen)
+	lessOrEqual(t, int(pool.open.Load()), pool.maxOpen)
 }

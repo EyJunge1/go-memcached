@@ -111,7 +111,7 @@ func idempotentReadCommand(cmd []byte) bool {
 
 // sendUDP sends the request to the memcached server.
 // https://github.com/memcached/memcached/blob/master/doc/protocol.txt#L1875-L1914
-func (req *request) sendUDP(rr memcachedConn) (err error) {
+func (req *request) sendUDP(rr wireConn) (err error) {
 	payload := req.wire()
 	if udpHeaderSize+len(payload) > maxUDPDatagram {
 		return fmt.Errorf("udp datagram too large: %w", ErrNotSupported)
@@ -144,7 +144,7 @@ func udpFragmentCap(maxValue int) int {
 	return n
 }
 
-func assembleUDP(rr memcachedConn, wantID uint16, maxFragments int) ([]byte, error) {
+func assembleUDP(rr wireConn, wantID uint16, maxFragments int) ([]byte, error) {
 	if maxFragments <= 0 {
 		maxFragments = udpFragmentCap(0)
 	}

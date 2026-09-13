@@ -49,7 +49,7 @@ func (a *AdminNode) Flush(ctx context.Context, o FlushOpts) error {
 	if err != nil {
 		return err
 	}
-	if !a.c.options.allowFlushAll {
+	if !a.c.rt.allowFlushAll {
 		return ErrFlushAllNotAllowed
 	}
 	return a.c.flushAllOnAddr(ctx, addr, flushDelayFor(o)(0), o.Quiet)
@@ -67,7 +67,7 @@ func (b *AdminBroadcast) Flush(ctx context.Context, o FlushOpts) error {
 }
 
 func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) Exptime, quiet bool) error {
-	if !c.options.allowFlushAll {
+	if !c.rt.allowFlushAll {
 		return ErrFlushAllNotAllowed
 	}
 
@@ -112,12 +112,12 @@ func (c *Client) flushAllOnAddr(ctx context.Context, node *addr, delay Exptime, 
 	defer func() { finishConn(cn, opErr) }()
 
 	c.enableUDPFraming(node, req, resp)
-	if err := req.send(ctx, cn, c.options.writeTimeout); err != nil {
+	if err := req.send(ctx, cn, c.rt.writeTimeout); err != nil {
 		opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
 		c.noteFailure(node)
 		return opErr
 	}
-	if err := resp.recv(ctx, cn, c.options.readTimeout); err != nil {
+	if err := resp.recv(ctx, cn, c.rt.readTimeout); err != nil {
 		opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 		c.noteFailure(node)
 		return opErr

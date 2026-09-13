@@ -13,70 +13,54 @@ type Item struct {
 	Quiet bool
 }
 
-// MetaItem represents a key-value pair with meta information.
+// MetaItem is a decoded mg/ms/md/ma/mn line (tokens c, f, t, l, s, O, h, W, X, Z, k, b).
 type MetaItem struct {
 	Key   []byte
 	Value []byte
 
-	/* Meta */
-	// CAS is a unique value that is used to check-and-set operation.
-	// Request it with MetaGet.Return.CAS or MetaSet.ReturnCAS.
+	// CAS is token c. Request it with MetaGet.Return.CAS or MetaSet.ReturnCAS.
 	CAS uint64
-	// Flags is the client flags stored with the item when a value is returned.
-	// Request it with MetaGet.Return.Flags.
+	// Flags is token f when a value is returned.
 	Flags uint32
-	// TTL is the time-to-live of the item. -1 means never expire.
-	// Request it with MetaGet.Return.TTL.
+	// TTL is token t in seconds. -1 means never expire.
 	TTL int64
-	// LastAccess is the time since item was last accessed in seconds.
-	// Request it with MetaGet.Return.LastAccess.
+	// LastAccess is token l (seconds since last access).
 	LastAccess int64
-	// Size is the size of the stored item on success.
-	// Request it with MetaGet.Return.Size or MetaSet.ReturnSize.
+	// Size is token s on success.
 	Size uint64
-	// Opaque is the raw opaque token (up to 32 bytes).
+	// Opaque is token O (up to 32 bytes).
 	Opaque string
-	// HitBefore is whether the item has been hit before.
-	// Request it with MetaGet.Return.Hit.
+	// HitBefore is token h.
 	HitBefore bool
-	// Won is set when the server returned recache flag W.
+	// Won is recache flag W.
 	Won bool
-	// Stale is set when the server returned stale flag X.
+	// Stale is flag X.
 	Stale bool
-	// RecacheBusy is set when the server returned winning-already-sent flag Z.
+	// RecacheBusy is flag Z (winner already sent).
 	RecacheBusy bool
-	// CASMatched is true when MetaGet.CompareCAS was used with a value
-	// request and the server returned HD (CAS still matches).
+	// CASMatched is true when MetaGet.CompareCAS was set and the server returned HD.
 	CASMatched bool
-	// WireKey is the k token as received (possibly Base64).
+	// WireKey is token k as received (possibly Base64).
 	WireKey []byte
-	// KeyBase64 is set when the server echoed response flag b.
+	// KeyBase64 is set when the server echoed flag b.
 	KeyBase64 bool
 	status    MetaStatus
 	gotHD     bool
 }
 
-// MetaItemDebug represents a key-value pair with meta information for debug.
-//
-//	exp   = expiration time
-//	la    = time in seconds since last access
-//	cas   = CAS ID
-//	fetch = whether an item has been fetched before
-//	cls   = slab class id
-//	size  = total size in bytes
+// MetaItemDebug is a decoded me line (exp, la, cas, fetch, cls, size).
 type MetaItemDebug struct {
 	Status      MetaStatus
 	Key         []byte // decoded when the request used b
-	WireKey     []byte // ME key token as received (possibly Base64)
-	KeyBase64   bool   // set when the request used BinaryKey
-	TTL         int64  // exp, expiration time in seconds, -1 means never expire
-	LastAccess  int64  // la, time in seconds since last access
+	WireKey     []byte // ME key token as received
+	KeyBase64   bool
+	TTL         int64  // exp; -1 never expires
+	LastAccess  int64  // la
 	CAS         uint64 // cas
 	HitBefore   bool   // fetch
 	SlabClassID uint64 // cls
 	Size        uint64 // size
-	// Fields holds unknown me key=value tokens. The six known keys stay
-	// on the typed fields above and are not copied here.
+	// Fields holds unknown me key=value tokens. The six known keys stay typed.
 	Fields map[string]string
 }
 

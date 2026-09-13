@@ -19,7 +19,7 @@ func isRetryable(err error) bool {
 }
 
 func (c *Client) liveAddrs(addrs []*addr) []*addr {
-	if !c.options.failover.Eject || c.options.failover.FailureLimit <= 0 {
+	if !c.rt.failover.Eject || c.rt.failover.FailureLimit <= 0 {
 		return addrs
 	}
 	live := make([]*addr, 0, len(addrs))
@@ -35,13 +35,13 @@ func (c *Client) liveAddrs(addrs []*addr) []*addr {
 }
 
 func (c *Client) isDead(node *addr) bool {
-	if node == nil || c.options.failover.FailureLimit <= 0 {
+	if node == nil || c.rt.failover.FailureLimit <= 0 {
 		return false
 	}
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
 	until, ok := c.deadUntil[node.id()]
-	return ok && nowFunc().Before(until)
+	return ok && clock().Before(until)
 }
 
 // deadUntilRevived is used when RetryAfter and DeadAfter are both 0:
@@ -59,16 +59,16 @@ func quarantineDuration(fo Failover, failures int) time.Duration {
 }
 
 func (c *Client) noteFailure(node *addr) {
-	if node == nil || c.options.failover.FailureLimit <= 0 {
+	if node == nil || c.rt.failover.FailureLimit <= 0 {
 		return
 	}
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
 	id := node.id()
 	c.failCount[id]++
-	if c.failCount[id] >= c.options.failover.FailureLimit {
-		if dur := quarantineDuration(c.options.failover, c.failCount[id]); dur > 0 {
-			c.deadUntil[id] = nowFunc().Add(dur)
+	if c.failCount[id] >= c.rt.failover.FailureLimit {
+		if dur := quarantineDuration(c.rt.failover, c.failCount[id]); dur > 0 {
+			c.deadUntil[id] = clock().Add(dur)
 		} else {
 			c.deadUntil[id] = deadUntilRevived
 		}
@@ -99,12 +99,12 @@ func (c *Client) DeadServers() []Server {
 }
 
 func (c *Client) startResolverRefresh() {
-	if c.options == nil || c.options.resolverRefresh <= 0 {
+	if c.rt == nil || c.rt.resolverRefresh <= 0 {
 		return
 	}
 	c.refreshStop = make(chan struct{})
 	go func() {
-		t := time.NewTicker(c.options.resolverRefresh)
+		t := time.NewTicker(c.rt.resolverRefresh)
 		defer t.Stop()
 		for {
 			select {
@@ -112,7 +112,7 @@ func (c *Client) startResolverRefresh() {
 				c.mu.RLock()
 				spec := c.resolveSpec
 				c.mu.RUnlock()
-				addrs, err := c.options.resolver.Resolve(spec)
+				addrs, err := c.rt.resolver.Resolve(spec)
 				if err != nil {
 					c.setResolverErr(err)
 					continue

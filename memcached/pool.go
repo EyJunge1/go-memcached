@@ -10,39 +10,27 @@ import (
 
 var errPoolClosed = errors.New("connection pool is closed")
 
-// The connPool holds a pool of connections to one memcached server instance
-// and provides a way to get a connection from the pool.
-//
-// It will automatically create a new connection if the pool is empty or all
-// connections are busy, of course, within the maximum connection limit. It also
-// automatically removes idle connections if the idle connection count exceeds
-// the maximum idle connection limit.
-//
-// Idle connections are connections that are not used for a certain period
-// of time decided by the maxIdleTime.
-//
-// The pool is thread-safe.
+// connPool is the per-node idle set. get() takes an idle conn or dials up to
+// maxOpen. put() returns a conn or closes it when the idle cap is reached.
+// A background cleaner drops conns past maxIdleTime or maxLifetime.
 type connPool struct {
 	maxIdle, maxOpen int
 	maxLifetime      time.Duration
 	maxIdleTime      time.Duration
 
-	mu         sync.Mutex // guards following
-	conns      chan memcachedConn
-	createConn func(ctx context.Context) (memcachedConn, error)
-	// The number of connections numOpen by the pool.
-	numOpen atomic.Int32
-	// Indicate if the pool is closed, if true, no new connections will be created
-	// and all existing connections will be closed.
-	closed bool
-	// closedCh is closed exactly once when the pool closes, so waiting get()
-	// callers can abort without receiving from a closed idle channel.
+	mu         sync.Mutex
+	conns      chan wireConn
+	createConn func(ctx context.Context) (wireConn, error)
+	open       atomic.Int32
+	closed     bool
+	// closedCh is closed once so waiters in get() abort without a receive
+	// on a closed idle channel.
 	closedCh  chan struct{}
 	cleanerCh chan struct{}
 
-	maxIdleClosed     int64 // the number of connections closed due to maxIdle
-	maxIdleTimeClosed int64 // the number of connections closed due to maxIdleTime
-	maxLifetimeClosed int64 // the number of connections closed due to maxLifetime
+	closedIdleCap  int64
+	closedIdleAge  int64
+	closedLifetime int64
 
 	minIdle int
 }
@@ -50,14 +38,14 @@ type connPool struct {
 func newConnPool(
 	maxIdle, maxOpen int,
 	maxLifetime, maxIdleTime time.Duration,
-	createConn func(ctx context.Context) (memcachedConn, error),
+	createConn func(ctx context.Context) (wireConn, error),
 ) *connPool {
 	p := &connPool{
 		maxIdle:     maxIdle,
 		maxOpen:     maxOpen,
 		maxLifetime: maxLifetime,
 		maxIdleTime: maxIdleTime,
-		conns:       make(chan memcachedConn, maxOpen),
+		conns:       make(chan wireConn, maxOpen),
 		createConn:  createConn,
 		closedCh:    make(chan struct{}),
 	}
@@ -81,7 +69,7 @@ func (p *connPool) close() error {
 		select {
 		case cn := <-p.conns:
 			_ = cn.Close()
-			p.numOpen.Add(-1)
+			p.open.Add(-1)
 		default:
 			goto drained
 		}
@@ -99,8 +87,8 @@ drained:
 	return nil
 }
 
-func (p *connPool) connReusable(cn memcachedConn) bool {
-	now := nowFunc()
+func (p *connPool) connReusable(cn wireConn) bool {
+	now := clock()
 	if p.maxLifetime > 0 {
 		if _, expired := cn.expired(now.Add(-p.maxLifetime)); expired {
 			return false
@@ -114,12 +102,12 @@ func (p *connPool) connReusable(cn memcachedConn) bool {
 	return true
 }
 
-func (p *connPool) closeIdle(cn memcachedConn) {
+func (p *connPool) closeIdle(cn wireConn) {
 	_ = cn.Close()
-	p.numOpen.Add(-1)
+	p.open.Add(-1)
 }
 
-func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
+func (p *connPool) get(ctx context.Context) (wireConn, error) {
 	for {
 		select {
 		case cn := <-p.conns:
@@ -136,7 +124,7 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 			p.mu.Unlock()
 			return nil, errPoolClosed
 		}
-		if int(p.numOpen.Load()) >= p.maxOpen {
+		if int(p.open.Load()) >= p.maxOpen {
 			p.mu.Unlock()
 			select {
 			case cn := <-p.conns:
@@ -151,12 +139,12 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 				return nil, ctx.Err()
 			}
 		}
-		p.numOpen.Add(1)
+		p.open.Add(1)
 		p.mu.Unlock()
 
 		cn, err := p.createConn(ctx)
 		if err != nil {
-			p.numOpen.Add(-1)
+			p.open.Add(-1)
 			return nil, err
 		}
 		cn.setConnPool(p)
@@ -164,7 +152,7 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 		p.mu.Lock()
 		if p.closed {
 			p.mu.Unlock()
-			p.numOpen.Add(-1)
+			p.open.Add(-1)
 			return nil, errors.Join(errPoolClosed, cn.Close())
 		}
 		p.mu.Unlock()
@@ -172,27 +160,27 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 	}
 }
 
-func (p *connPool) discard(cn memcachedConn) error {
+func (p *connPool) discard(cn wireConn) error {
 	if cn == nil {
 		return nil
 	}
 	err := cn.Close()
-	p.numOpen.Add(-1)
+	p.open.Add(-1)
 	return err
 }
 
-func (p *connPool) put(cn memcachedConn) error {
+func (p *connPool) put(cn wireConn) error {
 	if cn == nil {
 		panic("pool: put nil connection")
 	}
 
 	p.mu.Lock()
 	maxIdleClose := p.maxIdle <= 0 || len(p.conns) >= p.maxIdle
-	if p.closed || (p.maxOpen > 0 && int(p.numOpen.Load()) > p.maxOpen) || maxIdleClose {
+	if p.closed || (p.maxOpen > 0 && int(p.open.Load()) > p.maxOpen) || maxIdleClose {
 		_ = cn.Close()
-		p.numOpen.Add(-1)
+		p.open.Add(-1)
 		if maxIdleClose {
-			p.maxIdleClosed++
+			p.closedIdleCap++
 		}
 
 		p.mu.Unlock()
@@ -206,16 +194,14 @@ func (p *connPool) put(cn memcachedConn) error {
 		return nil
 	default:
 		p.mu.Unlock()
-		// rare case, the pool is full
-		p.numOpen.Add(-1)
+		p.open.Add(-1)
 		return cn.Close()
 	}
 }
 
-// startCleanerLocked starts a cleaner goroutine to clean up expired connections.
-// NOTE: MUST run in the connPool.mu.Lock()
+// startCleanerLocked runs under mu. One goroutine reaps idle/expired conns.
 func (p *connPool) startCleanerLocked() {
-	if (p.maxLifetime > 0 || p.maxIdleTime > 0) && int(p.numOpen.Load()) > 0 && p.cleanerCh == nil {
+	if (p.maxLifetime > 0 || p.maxIdleTime > 0) && int(p.open.Load()) > 0 && p.cleanerCh == nil {
 		p.cleanerCh = make(chan struct{}, 1)
 		go p.connectionsCleaner(p.shortestIdleTimeLocked())
 	}
@@ -232,28 +218,23 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 	for {
 		select {
 		case <-t.C:
-		case <-p.cleanerCh: // pool was closed
+		case <-p.cleanerCh:
 		}
 
 		p.mu.Lock()
-		// This step wants to adjust the cleaner interval to the shortest idle time
-		// among maxIdleTime and maxLifetime. Avoid maxIdleTime or maxLifetime is
-		// much longer than the cleaner interval.
 		d = p.shortestIdleTimeLocked()
-		if p.closed || p.numOpen.Load() == 0 || d <= 0 {
-			// stop the cleaner if the pool is closed or empty, or there's no need to clean up.
+		if p.closed || p.open.Load() == 0 || d <= 0 {
 			p.cleanerCh = nil
 			p.mu.Unlock()
 			return
 		}
 
-		// Snapshot idle connections that need to be closed.
 		d, closing := p.connectionCleanerRunLocked(d)
 		p.mu.Unlock()
 
 		for _, cn := range closing {
 			_ = cn.Close()
-			p.numOpen.Add(-1)
+			p.open.Add(-1)
 		}
 		p.ensureMinIdle(context.Background())
 
@@ -282,30 +263,25 @@ func (p *connPool) shortestIdleTimeLocked() time.Duration {
 	return min(p.maxLifetime, p.maxIdleTime)
 }
 
-// connectionCleanerRunLocked will remove two class connections:
-//
-// 1. if the connection is expired (exceeds maxLifetime since created).
-// 2. if the connection idle time exceeds the idle connection limit(maxIdleTime).
-//
-// The idle channel is kept intact: currently available connections are drained
-// with non-blocking receives, filtered in one pass, and survivors are put back.
-func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, []memcachedConn) {
+// connectionCleanerRunLocked drops idle-aged and lifetime-expired conns.
+// The idle channel is not closed: drain, filter, put survivors back.
+func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, []wireConn) {
 	var idleClosing int64
-	closing := make([]memcachedConn, 0, p.maxIdle/2)
-	kept := make([]memcachedConn, 0, len(p.conns))
+	closing := make([]wireConn, 0, p.maxIdle/2)
+	kept := make([]wireConn, 0, len(p.conns))
 
 	var idleSince, expiredSince time.Time
 	checkIdle := p.maxIdleTime > 0
 	checkLife := p.maxLifetime > 0
 	if checkIdle {
-		idleSince = nowFunc().Add(-p.maxIdleTime)
+		idleSince = clock().Add(-p.maxIdleTime)
 	}
 	if checkLife {
-		expiredSince = nowFunc().Add(-p.maxLifetime)
+		expiredSince = clock().Add(-p.maxLifetime)
 	}
 
 	for {
-		var c memcachedConn
+		var c wireConn
 		select {
 		case c = <-p.conns:
 		default:
@@ -318,7 +294,6 @@ func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, [
 				shouldClose = true
 				idleClosing++
 			} else if d2 < d {
-				// Ensure idle connections are cleaned up as soon as possible.
 				d = d2
 			}
 		}
@@ -326,7 +301,6 @@ func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, [
 			if d2, ok := c.expired(expiredSince); ok {
 				shouldClose = true
 			} else if d2 < d {
-				// Prevents connections staying in the pool when they have expired.
 				d = d2
 			}
 		}
@@ -343,8 +317,8 @@ drained:
 		p.conns <- c
 	}
 
-	p.maxIdleTimeClosed += idleClosing
-	p.maxLifetimeClosed += int64(len(closing)) - idleClosing
+	p.closedIdleAge += idleClosing
+	p.closedLifetime += int64(len(closing)) - idleClosing
 	return d, closing
 }
 
@@ -354,21 +328,21 @@ type connPoolStats struct {
 	MaxOpen    int
 	MaxIdle    int
 
-	maxIdleClosed     int64
-	maxIdleTimeClosed int64
-	maxLifetimeClosed int64
+	closedIdleCap  int64
+	closedIdleAge  int64
+	closedLifetime int64
 }
 
 func (p *connPool) stats() *connPoolStats {
 	p.mu.Lock()
 	s := &connPoolStats{
-		TotalConns:        int(p.numOpen.Load()),
-		IdleConns:         len(p.conns),
-		MaxOpen:           p.maxOpen,
-		MaxIdle:           p.maxIdle,
-		maxIdleClosed:     p.maxIdleClosed,
-		maxIdleTimeClosed: p.maxIdleTimeClosed,
-		maxLifetimeClosed: p.maxLifetimeClosed,
+		TotalConns:     int(p.open.Load()),
+		IdleConns:      len(p.conns),
+		MaxOpen:        p.maxOpen,
+		MaxIdle:        p.maxIdle,
+		closedIdleCap:  p.closedIdleCap,
+		closedIdleAge:  p.closedIdleAge,
+		closedLifetime: p.closedLifetime,
 	}
 	p.mu.Unlock()
 	return s
@@ -380,15 +354,15 @@ func (p *connPool) ensureMinIdle(ctx context.Context) {
 	}
 	for {
 		p.mu.Lock()
-		if p.closed || len(p.conns) >= p.minIdle || int(p.numOpen.Load()) >= p.maxOpen {
+		if p.closed || len(p.conns) >= p.minIdle || int(p.open.Load()) >= p.maxOpen {
 			p.mu.Unlock()
 			return
 		}
-		p.numOpen.Add(1)
+		p.open.Add(1)
 		p.mu.Unlock()
 		cn, err := p.createConn(ctx)
 		if err != nil {
-			p.numOpen.Add(-1)
+			p.open.Add(-1)
 			return
 		}
 		cn.setConnPool(p)
@@ -406,10 +380,10 @@ func (p *connPool) warmup(ctx context.Context, n int) {
 		n = p.maxIdle
 	}
 	for i := 0; i < n; i++ {
-		p.numOpen.Add(1)
+		p.open.Add(1)
 		cn, err := p.createConn(ctx)
 		if err != nil {
-			p.numOpen.Add(-1)
+			p.open.Add(-1)
 			return
 		}
 		cn.setConnPool(p)

@@ -97,7 +97,7 @@ func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response
 // normal round-trip.
 const quietFaultWait = 25 * time.Millisecond
 
-func connBuffered(cn memcachedConn) int {
+func connBuffered(cn wireConn) int {
 	type withBuf interface{ buffered() int }
 	if b, ok := cn.(withBuf); ok {
 		return b.buffered()
@@ -105,8 +105,8 @@ func connBuffered(cn memcachedConn) int {
 	return -1
 }
 
-func readQuietFault(ctx context.Context, cn memcachedConn) error {
-	deadline := nowFunc().Add(quietFaultWait)
+func readQuietFault(ctx context.Context, cn wireConn) error {
+	deadline := clock().Add(quietFaultWait)
 	if ctx != nil {
 		select {
 		case <-ctx.Done():
@@ -114,9 +114,9 @@ func readQuietFault(ctx context.Context, cn memcachedConn) error {
 			case 0:
 				return nil
 			case -1:
-				deadline = nowFunc().Add(time.Millisecond)
+				deadline = clock().Add(time.Millisecond)
 			default:
-				deadline = nowFunc().Add(time.Second)
+				deadline = clock().Add(time.Second)
 			}
 		default:
 			if d, ok := ctx.Deadline(); ok && !d.IsZero() && d.Before(deadline) {
@@ -150,7 +150,7 @@ func (c *Client) sendQuietToAddr(ctx context.Context, node *addr, req *request, 
 		return wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
 	}
 	c.enableUDPFraming(node, req, resp)
-	sendErr := req.send(ctx, cn, c.options.writeTimeout)
+	sendErr := req.send(ctx, cn, c.rt.writeTimeout)
 	var fault error
 	if sendErr == nil && probeFault {
 		fault = readQuietFault(ctx, cn)

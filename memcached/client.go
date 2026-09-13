@@ -12,7 +12,7 @@ import (
 // Client is a thread-safe memcached client. It manages a connection pool per
 // server address and, in cluster mode, picks a node per key.
 type Client struct {
-	options *clientOptions
+	rt *runtime
 
 	mu               sync.RWMutex
 	addrs            []*addr
@@ -43,7 +43,7 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	options, err := optionsFromConfig(cfg)
+	rt, err := runtimeFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -55,9 +55,9 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	c := &Client{
-		options:          options,
+		rt:               rt,
 		addrs:            addrs,
-		picker:           options.pickBuilder.Build(addrs),
+		picker:           rt.pickBuilder.Build(addrs),
 		connPools:        make(map[string]*connPool, 4),
 		resolveSpec:      resolveSpec,
 		resolveSpecFixed: resolveSpecFixed,
@@ -72,7 +72,7 @@ func New(cfg Config) (*Client, error) {
 // Existing pools for hosts that remain are reused; pools for removed hosts are
 // closed. Health state for removed IDs is dropped.
 func (c *Client) SetServers(servers []Server) error {
-	if c.options == nil || !c.options.allowSetServers {
+	if c.rt == nil || !c.rt.allowSetServers {
 		return ErrSetServersNotAllowed
 	}
 	return c.applyServers(servers, true)
@@ -80,14 +80,14 @@ func (c *Client) SetServers(servers []Server) error {
 
 func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	var tlsCfg *tls.Config
-	if c.options != nil && c.options.tlsSet {
-		tlsCfg = c.options.tlsConfig
+	if c.rt != nil && c.rt.tlsSet {
+		tlsCfg = c.rt.tlsConfig
 	}
 	if err := validateTransportServers(servers, tlsCfg); err != nil {
 		return err
 	}
-	if c.options != nil && (c.options.authUser != "" || c.options.authPass != "") {
-		if err := validateAuthAgainstServers(servers, c.options.authAllowPlain, c.options.tlsSet); err != nil {
+	if c.rt != nil && (c.rt.authUser != "" || c.rt.authPass != "") {
+		if err := validateAuthAgainstServers(servers, c.rt.authAllowPlain, c.rt.tlsSet); err != nil {
 			return err
 		}
 	}
@@ -100,7 +100,7 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 		}
 	}
 
-	picker := c.options.pickBuilder.Build(addrs)
+	picker := c.rt.pickBuilder.Build(addrs)
 	keep := make(map[string]struct{}, len(addrs))
 	for _, a := range addrs {
 		keep[a.id()] = struct{}{}
@@ -279,19 +279,19 @@ func (c *Client) PoolStats() []PoolStat {
 }
 
 func (c *Client) nsBytes(key []byte) []byte {
-	if c.options == nil || c.options.namespace == "" {
+	if c.rt == nil || c.rt.namespace == "" {
 		return key
 	}
-	out := make([]byte, 0, len(c.options.namespace)+len(key))
-	out = append(out, c.options.namespace...)
+	out := make([]byte, 0, len(c.rt.namespace)+len(key))
+	out = append(out, c.rt.namespace...)
 	return append(out, key...)
 }
 
 func (c *Client) stripNS(key []byte) []byte {
-	if c == nil || c.options == nil || c.options.namespace == "" {
+	if c == nil || c.rt == nil || c.rt.namespace == "" {
 		return key
 	}
-	prefix := []byte(c.options.namespace)
+	prefix := []byte(c.rt.namespace)
 	if !bytes.HasPrefix(key, prefix) {
 		return key
 	}

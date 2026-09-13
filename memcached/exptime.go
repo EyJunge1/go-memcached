@@ -35,7 +35,7 @@ func Rel(d time.Duration) Exptime {
 	case d < time.Second:
 		return 1
 	case d > maxRelativeExpiry:
-		return Exptime(nowFunc().Add(d).Unix())
+		return Exptime(clock().Add(d).Unix())
 	default:
 		return Exptime(d / time.Second)
 	}

@@ -344,7 +344,7 @@ func TestReadQuietFaultCancelledStillReadsBuffered(t *testing.T) {
 	contains(t, err.Error(), "already here")
 	noError(t, readQuietFault(ctx, &quietLineConn{}))
 
-	expired, stop := context.WithDeadline(context.Background(), nowFunc().Add(-time.Second))
+	expired, stop := context.WithDeadline(context.Background(), clock().Add(-time.Second))
 	defer stop()
 	err = readQuietFault(expired, &quietLineConn{line: []byte("SERVER_ERROR oom\r\n")})
 	isErrorIs(t, err, ErrServerError)

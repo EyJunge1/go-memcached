@@ -97,7 +97,7 @@ func (c *Client) StatsAll(ctx context.Context, args ...string) ([]NodeStats, err
 	}
 	var out []NodeStats
 	var mu sync.Mutex
-	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn memcachedConn) error {
+	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
 		req, resp := buildStatsCommand(strings.Join(args, " "))
 		defer releaseReqAndResp(req, resp)
 		if err := c.sendOnConn(ctx, node, cn, req, resp); err != nil {

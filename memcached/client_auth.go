@@ -26,7 +26,7 @@ func newAuthProbeKey() []byte {
 	}
 	// Unique even if the CSPRNG is unavailable: nano + monotonic counter.
 	n := authProbeSeq.Add(1)
-	t := uint64(nowFunc().UnixNano()) //nolint:gosec // uniqueness only
+	t := uint64(clock().UnixNano()) //nolint:gosec // uniqueness only
 	return []byte(fmt.Sprintf("%s%016x%08x", authProbeKeyPrefix, t, n))
 }
 
@@ -48,7 +48,7 @@ func buildAuthCommand(username, password string, key []byte) (*request, *respons
 	return buildStorageCommand("set", key, payload, 0, ExptimeNever, false)
 }
 
-func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, writeTimeout, readTimeout time.Duration) error {
+func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTimeout, readTimeout time.Duration) error {
 	payload := []byte(user + " " + pass)
 	probeKey := newAuthProbeKey()
 	req, resp := buildAuthCommand(user, pass, probeKey)

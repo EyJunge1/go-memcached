@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-var _ memcachedConn = (*mockConn)(nil)
+var _ wireConn = (*mockConn)(nil)
 
-// mockConn is an implementation of the memcachedConn interface for testing purposes.
+// mockConn is a wireConn for pool tests.
 type mockConn struct {
 	createdAt     time.Time
 	returnedAt    time.Time
@@ -49,7 +49,7 @@ func (m *mockConn) readExact(n int) ([]byte, error) { return make([]byte, n), ni
 func (m *mockConn) readDatagram() ([]byte, error) { return nil, nil }
 
 func (m *mockConn) expired(since time.Time) (time.Duration, bool) {
-	now := nowFunc()
+	now := clock()
 	past := now.Sub(m.createdAt)
 	if since.IsZero() {
 		return past, false
@@ -100,6 +100,6 @@ func (m *mockConn) setWriteDeadline(d time.Time) error {
 	return nil
 }
 
-func createConn(_ context.Context) (memcachedConn, error) {
+func createConn(_ context.Context) (wireConn, error) {
 	return newMockConn(), nil
 }
