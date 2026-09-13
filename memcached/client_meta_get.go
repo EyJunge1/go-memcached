@@ -11,7 +11,7 @@ import (
 
 // stripTrailingMN removes a trailing mn\r\n so a pipelined command can share one barrier.
 func stripTrailingMN(raw []byte) []byte {
-	return bytes.TrimSuffix(raw, []byte("mn\r\n"))
+	return bytes.TrimSuffix(raw, _MnCRLFBytes)
 }
 
 // Get sends mg for key using flags f.
@@ -31,18 +31,15 @@ func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet) (MetaResult
 		}
 	}
 
-	req, resp := buildMetaGetCommand(key, mgFlags)
+	req, resp := buildMetaGetCommand(key, &mgFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItem{Key: key}
-	resp.afterRecv = func(r *response) error {
-		return parseMetaItem(r.rawLines, item, mgFlags.q, true)
-	}
-	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
+	item := MetaItem{Key: key}
+	res, err := finishMetaParse(&item, c.dispatchRequest(ctx, req, resp), parseMetaItem(resp.rawLines, &item, mgFlags.q, true))
 	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
+		return MetaResult{}, err
 	}
-	applyCheckCAS(item, mgFlags)
+	applyCheckCAS(&item, &mgFlags)
 	res.Item.CASMatched = item.CASMatched
 	return res, nil
 }
@@ -61,8 +58,12 @@ type preparedMetaOp struct {
 	key      []byte
 	cmd      []byte
 	line     []byte
+	lineBox  *[]byte
 	tok      string
-	getFlags *metaGetFlags
+	tokNum   uint64
+	hasTok   bool
+	getFlags metaGetFlags
+	hasGet   bool
 	noop     bool
 	barrier  MetaNoop
 }
@@ -109,14 +110,18 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if err := c.checkKeyValueFlags(key, nil, mg.b); err != nil {
 			return preparedMetaOp{}, err
 		}
-		if err := ensurePipelineOpaque(mg, idx); err != nil {
+		if err := ensurePipelineOpaque(&mg, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		_, line := encodeMetaGetLine(key, mg)
-		prep.cmd = []byte("mg")
+		_, line, box := encodeMetaGetOwned(key, &mg)
+		prep.cmd = _MgBytes
 		prep.line = line
-		prep.tok = opaqueToken(mg.Otoken, mg.O, mg.Oset || mg.OtokenSet)
+		prep.lineBox = box
+		prep.tok = opaqueToken(mg.Otoken, mg.O, mg.OtokenSet)
+		prep.tokNum = mg.O
+		prep.hasTok = mg.Oset || mg.OtokenSet
 		prep.getFlags = mg
+		prep.hasGet = true
 	case op.Set != nil:
 		f := *op.Set
 		ms := f.toFlags()
@@ -130,15 +135,17 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if !validMetaSetMode(ms.M) {
 			return preparedMetaOp{}, fmt.Errorf("invalid meta set mode: %w", ErrInvalidArgument)
 		}
-		if err := ensureSetOpaque(ms, idx); err != nil {
+		if err := ensureSetOpaque(&ms, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		req, resp := buildMetaSetCommand(key, op.Body, ms)
+		req, resp := buildMetaSetCommand(key, op.Body, &ms)
 		line := stripTrailingMN(append([]byte(nil), req.wire()...))
 		releaseReqAndResp(req, resp)
-		prep.cmd = []byte("ms")
+		prep.cmd = _MsBytes
 		prep.line = line
-		prep.tok = opaqueToken(ms.Otoken, ms.O, ms.Oset || ms.OtokenSet)
+		prep.tok = opaqueToken(ms.Otoken, ms.O, ms.OtokenSet)
+		prep.tokNum = ms.O
+		prep.hasTok = ms.Oset || ms.OtokenSet
 		prep.key = key
 	case op.Del != nil:
 		f := *op.Del
@@ -150,15 +157,17 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if err := c.checkKeyValueFlags(key, nil, md.b); err != nil {
 			return preparedMetaOp{}, err
 		}
-		if err := ensureDeleteOpaque(md, idx); err != nil {
+		if err := ensureDeleteOpaque(&md, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		req, resp := buildMetaDeleteCommand(key, md)
+		req, resp := buildMetaDeleteCommand(key, &md)
 		line := stripTrailingMN(append([]byte(nil), req.raw...))
 		releaseReqAndResp(req, resp)
-		prep.cmd = []byte("md")
+		prep.cmd = _MdBytes
 		prep.line = line
-		prep.tok = opaqueToken(md.Otoken, md.O, md.Oset || md.OtokenSet)
+		prep.tok = opaqueToken(md.Otoken, md.O, md.OtokenSet)
+		prep.tokNum = md.O
+		prep.hasTok = md.Oset || md.OtokenSet
 	case op.Arith != nil:
 		f := *op.Arith
 		if err := f.validate(); err != nil {
@@ -174,22 +183,24 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if !validMetaArithmeticMode(ma.M) {
 			return preparedMetaOp{}, fmt.Errorf("invalid meta arithmetic mode: %w", ErrInvalidArgument)
 		}
-		if err := ensureArithOpaque(ma, idx); err != nil {
+		if err := ensureArithOpaque(&ma, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		req, resp := buildMetaArithmeticCommand(key, op.Delta, ma)
+		req, resp := buildMetaArithmeticCommand(key, op.Delta, &ma)
 		line := stripTrailingMN(append([]byte(nil), req.raw...))
 		releaseReqAndResp(req, resp)
-		prep.cmd = []byte("ma")
+		prep.cmd = _MaBytes
 		prep.line = line
-		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.Oset || ma.OtokenSet)
+		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.OtokenSet)
+		prep.tokNum = ma.O
+		prep.hasTok = ma.Oset || ma.OtokenSet
 	case op.Noop != nil:
 		// The batch already ends with mn; another mn would make the barrier reader stop early.
 		f := *op.Noop
 		if err := f.validate(); err != nil {
 			return preparedMetaOp{}, err
 		}
-		prep.cmd = []byte("mn")
+		prep.cmd = _MnBytes
 		prep.line = nil
 		prep.noop = true
 		prep.barrier = f
@@ -216,8 +227,8 @@ func ensurePipelineOpaque(flags *metaGetFlags, idx int) error {
 	if flags.Oset {
 		return nil
 	}
-	flags.Otoken = strconv.Itoa(idx)
-	flags.OtokenSet = true
+	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.Oset = true
 	return nil
 }
 
@@ -229,8 +240,8 @@ func ensureSetOpaque(flags *metaSetFlags, idx int) error {
 	if flags.Oset {
 		return nil
 	}
-	flags.Otoken = strconv.Itoa(idx)
-	flags.OtokenSet = true
+	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.Oset = true
 	return nil
 }
 
@@ -242,8 +253,8 @@ func ensureDeleteOpaque(flags *metaDeleteFlags, idx int) error {
 	if flags.Oset {
 		return nil
 	}
-	flags.Otoken = strconv.Itoa(idx)
-	flags.OtokenSet = true
+	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.Oset = true
 	return nil
 }
 
@@ -255,8 +266,8 @@ func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
 	if flags.Oset {
 		return nil
 	}
-	flags.Otoken = strconv.Itoa(idx)
-	flags.OtokenSet = true
+	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.Oset = true
 	return nil
 }
 
@@ -275,6 +286,9 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 	for i, op := range ops {
 		p, err := encodeMetaPipelineOp(c, op, i)
 		if err != nil {
+			for _, prev := range prepared {
+				putBuilderBox(prev.lineBox)
+			}
 			return nil, err
 		}
 		prepared = append(prepared, p)
@@ -286,6 +300,12 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = c.liveAddrs(addrs)
+	if len(addrs) == 1 {
+		if err := c.metaPipelineDispatch(ctx, addrs[0], prepared, out); err != nil {
+			return out, err
+		}
+		return out, nil
+	}
 
 	groups := make(map[*addr][]preparedMetaOp, len(addrs))
 	for _, p := range prepared {
@@ -327,14 +347,20 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []preparedMetaOp, out []MetaResult) error {
 	var raw []byte
 	var barrier MetaNoop
-	byOpaque := make(map[string]int, len(group))
-	for _, p := range group {
+	var byOpaque map[string]int
+	for i := range group {
+		p := &group[i]
 		raw = append(raw, p.line...)
+		putBuilderBox(p.lineBox)
+		p.lineBox = nil
 		if p.noop {
 			barrier = p.barrier
 		}
 		if p.tok == "" {
 			continue
+		}
+		if byOpaque == nil {
+			byOpaque = make(map[string]int, len(group))
 		}
 		if _, exists := byOpaque[p.tok]; exists {
 			return fmt.Errorf("duplicate opaque %q: %w", p.tok, ErrInvalidArgument)
@@ -347,25 +373,22 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	resp := buildQuietBarrierResponse()
 	defer releaseReqAndResp(req, resp)
 
-	var parsed []*MetaItem
-	gotLines := false
-	resp.afterRecv = func(r *response) error {
-		items, err := parseMetaPipeline(r.rawLines)
-		parsed = items
-		gotLines = true
-		return err
-	}
 	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
-	if !gotLines {
+	if dispatchErr != nil && len(resp.rawLines) == 0 {
 		return dispatchErr
+	}
+	parsed, parseErr := parseMetaPipeline(resp.rawLines)
+	if parseErr != nil && dispatchErr == nil {
+		dispatchErr = parseErr
 	}
 	for _, p := range group {
 		if p.noop {
 			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key}}
 		}
 	}
-	for _, item := range parsed {
-		idx, ok := byOpaque[item.Opaque]
+	for i := range parsed {
+		item := &parsed[i]
+		idx, ok := matchMetaPipelineOp(item, group, byOpaque)
 		if !ok {
 			continue
 		}
@@ -373,8 +396,8 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 			item.Key = out[idx].Item.Key
 		}
 		for _, p := range group {
-			if p.idx == idx && p.getFlags != nil {
-				applyCheckCAS(item, p.getFlags)
+			if p.idx == idx && p.hasGet {
+				applyCheckCAS(item, &p.getFlags)
 				break
 			}
 		}
@@ -391,11 +414,27 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 		switch {
 		case p.noop:
 			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key}}
-		case string(p.cmd) == "mg":
+		case bytes.Equal(p.cmd, _MgBytes):
 			out[p.idx] = MetaResult{Status: MetaStatusEN, Item: MetaItem{Key: p.key}}
 		default:
 			out[p.idx] = MetaResult{Status: MetaStatusHD, Item: MetaItem{Key: p.key}}
 		}
 	}
 	return dispatchErr
+}
+
+func matchMetaPipelineOp(item *MetaItem, group []preparedMetaOp, byOpaque map[string]int) (int, bool) {
+	if item.hasOpaqueNum {
+		for _, p := range group {
+			if p.tok == "" && p.hasTok && p.tokNum == item.opaqueNum {
+				return p.idx, true
+			}
+		}
+	}
+	if item.Opaque != "" {
+		if idx, ok := byOpaque[item.Opaque]; ok {
+			return idx, true
+		}
+	}
+	return 0, false
 }

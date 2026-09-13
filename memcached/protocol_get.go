@@ -246,3 +246,34 @@ func parseUintFromBytes(bs []byte) (uint64, error) {
 
 	return r, nil
 }
+
+// parseIntFromBytes decodes an ASCII signed integer. Empty input is 0.
+func parseIntFromBytes(bs []byte) (int64, error) {
+	if len(bs) == 0 {
+		return 0, nil
+	}
+	neg := bs[0] == '-'
+	if neg {
+		bs = bs[1:]
+		if len(bs) == 0 {
+			return 0, fmt.Errorf("invalid int number: %w", ErrMalformedResponse)
+		}
+	}
+	u, err := parseUintFromBytes(bs)
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		if u > uint64(math.MaxInt64)+1 {
+			return 0, fmt.Errorf("int number overflows int64: %w", ErrMalformedResponse)
+		}
+		if u == uint64(math.MaxInt64)+1 {
+			return math.MinInt64, nil
+		}
+		return -int64(u), nil
+	}
+	if u > math.MaxInt64 {
+		return 0, fmt.Errorf("int number overflows int64: %w", ErrMalformedResponse)
+	}
+	return int64(u), nil
+}

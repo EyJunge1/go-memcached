@@ -22,7 +22,7 @@ func (c *Client) Touch(ctx context.Context, key []byte, expiry Exptime, opts Mut
 		return nil
 	}
 
-	resp.afterRecv = expectLine(_TouchedCRLFBytes)
+	resp.afterRecv = mapTouchedReply
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

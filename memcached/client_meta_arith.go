@@ -25,16 +25,9 @@ func (m *MetaClient) Arithmetic(ctx context.Context, key []byte, delta uint64, f
 		}
 	}
 
-	req, resp := buildMetaArithmeticCommand(key, delta, maFlags)
+	req, resp := buildMetaArithmeticCommand(key, delta, &maFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItem{Key: key}
-	resp.afterRecv = func(r *response) error {
-		return parseMetaItem(r.rawLines, item, maFlags.q, false)
-	}
-	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
-	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
-	}
-	return res, nil
+	item := MetaItem{Key: key}
+	return finishMetaParse(&item, c.dispatchRequest(ctx, req, resp), parseMetaItem(resp.rawLines, &item, maFlags.q, false))
 }

@@ -83,12 +83,12 @@ func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *res
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
 
-	req := b.AddCRLF().request([]byte("ms"), key)
+	req := b.AddCRLF().request(_MsBytes, key)
 	req.body = value
 
 	var resp *response
 	if flags.q {
-		req.tail = []byte("\r\nmn\r\n")
+		req.tail = _CRLFMnCRLFBytes
 		resp = buildQuietBarrierResponse()
 	} else {
 		req.tail = _CRLFBytes

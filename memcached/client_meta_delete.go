@@ -2,7 +2,6 @@ package memcached
 
 import (
 	"context"
-	"fmt"
 )
 
 // Delete sends md for key using flags f.
@@ -22,16 +21,9 @@ func (m *MetaClient) Delete(ctx context.Context, key []byte, f MetaDelete) (Meta
 		}
 	}
 
-	req, resp := buildMetaDeleteCommand(key, mdFlags)
+	req, resp := buildMetaDeleteCommand(key, &mdFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItem{Key: key}
-	resp.afterRecv = func(r *response) error {
-		return parseMetaItem(r.rawLines, item, mdFlags.q, false)
-	}
-	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
-	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
-	}
-	return res, nil
+	item := MetaItem{Key: key}
+	return finishMetaParse(&item, c.dispatchRequest(ctx, req, resp), parseMetaItem(resp.rawLines, &item, mdFlags.q, false))
 }

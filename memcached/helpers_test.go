@@ -131,13 +131,6 @@ func notNil(t *testing.T, got any) {
 	}
 }
 
-func notEmpty(t *testing.T, got string) {
-	t.Helper()
-	if got == "" {
-		t.Fatal("want non-empty string")
-	}
-}
-
 func notZero[T comparable](t *testing.T, got T) {
 	t.Helper()
 	var zero T

@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"time"
@@ -69,22 +70,22 @@ func (s MetaStatus) String() string {
 
 // metaStatusFromCD maps a two-letter meta status token to MetaStatus.
 func metaStatusFromCD(cd []byte) MetaStatus {
-	switch string(cd) {
-	case "HD":
+	switch {
+	case bytes.Equal(cd, _HDBytes):
 		return MetaStatusHD
-	case "VA":
+	case bytes.Equal(cd, _VABytes):
 		return MetaStatusVA
-	case "EN":
+	case bytes.Equal(cd, _ENBytes):
 		return MetaStatusEN
-	case "NF":
+	case bytes.Equal(cd, _NFBytes):
 		return MetaStatusNF
-	case "NS":
+	case bytes.Equal(cd, _NSBytes):
 		return MetaStatusNS
-	case "EX":
+	case bytes.Equal(cd, _EXBytes):
 		return MetaStatusEX
-	case "MN":
+	case bytes.Equal(cd, _MNBytes):
 		return MetaStatusMN
-	case "ME":
+	case bytes.Equal(cd, _MEBytes):
 		return MetaStatusME
 	default:
 		return MetaStatusUnknown
@@ -241,8 +242,8 @@ func applyOpaque(token string, flagsO *uint64, flagsOset *bool, flagsTok *string
 }
 
 // toFlags maps MetaGet onto the mg wire flags.
-func (f MetaGet) toFlags() *metaGetFlags {
-	out := &metaGetFlags{
+func (f MetaGet) toFlags() metaGetFlags {
+	out := metaGetFlags{
 		b: f.BinaryKey,
 		c: f.Return.CAS,
 		f: f.Return.Flags,
@@ -282,8 +283,8 @@ func (f MetaGet) toFlags() *metaGetFlags {
 }
 
 // toFlags maps MetaSet onto the ms wire flags.
-func (f MetaSet) toFlags() *metaSetFlags {
-	out := &metaSetFlags{
+func (f MetaSet) toFlags() metaSetFlags {
+	out := metaSetFlags{
 		b: f.BinaryKey,
 		c: f.ReturnCAS,
 		F: f.Flags,
@@ -316,8 +317,8 @@ func (f MetaSet) toFlags() *metaSetFlags {
 }
 
 // toFlags maps MetaDelete onto the md wire flags.
-func (f MetaDelete) toFlags() *metaDeleteFlags {
-	out := &metaDeleteFlags{
+func (f MetaDelete) toFlags() metaDeleteFlags {
+	out := metaDeleteFlags{
 		b: f.BinaryKey,
 		I: f.Invalidate,
 		k: f.ReturnKey,
@@ -343,8 +344,8 @@ func (f MetaDelete) toFlags() *metaDeleteFlags {
 }
 
 // toFlags maps MetaArithmetic onto the ma wire flags.
-func (f MetaArithmetic) toFlags() *metaArithmeticFlags {
-	out := &metaArithmeticFlags{
+func (f MetaArithmetic) toFlags() metaArithmeticFlags {
+	out := metaArithmeticFlags{
 		b: f.BinaryKey,
 		q: f.Quiet,
 		t: f.ReturnTTL,
@@ -380,8 +381,8 @@ func (f MetaArithmetic) toFlags() *metaArithmeticFlags {
 }
 
 // toFlags maps MetaDebug onto the me wire flags.
-func (f MetaDebug) toFlags() *metaDebugFlags {
-	return &metaDebugFlags{b: f.BinaryKey, P: f.P, L: f.L}
+func (f MetaDebug) toFlags() metaDebugFlags {
+	return metaDebugFlags{b: f.BinaryKey, P: f.P, L: f.L}
 }
 
 // validate checks MetaGet proxy hints and the recache window.

@@ -26,20 +26,13 @@ func (m *MetaClient) Set(ctx context.Context, key, value []byte, f MetaSet) (Met
 	}
 	clientFlags := msFlags.F
 
-	req, resp := buildMetaSetCommand(key, value, msFlags)
+	req, resp := buildMetaSetCommand(key, value, &msFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItem{
+	item := MetaItem{
 		Key:   key,
 		TTL:   msFlags.T,
 		Flags: clientFlags,
 	}
-	resp.afterRecv = func(r *response) error {
-		return parseMetaItem(r.rawLines, item, msFlags.q, false)
-	}
-	res, err := finishMeta(item, c.dispatchRequest(ctx, req, resp))
-	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
-	}
-	return res, nil
+	return finishMetaParse(&item, c.dispatchRequest(ctx, req, resp), parseMetaItem(resp.rawLines, &item, msFlags.q, false))
 }

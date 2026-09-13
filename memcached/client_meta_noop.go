@@ -13,15 +13,16 @@ func (m *MetaClient) Noop(ctx context.Context, f MetaNoop) (MetaResult, error) {
 	req, resp := buildMetaNoopCommand(f)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItem{}
-	resp.afterRecv = func(r *response) error {
-		if err := expectLine(_MetaMNCRLFBytes)(r); err != nil {
-			return err
-		}
-		item.status = MetaStatusMN
-		return nil
+	item := MetaItem{}
+	err := m.c.dispatchRequest(ctx, req, resp)
+	if err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}
-	res, err := finishMeta(item, m.c.dispatchRequest(ctx, req, resp))
+	if err := mapStatusLine(resp, _MetaMNCRLFBytes); err != nil {
+		return MetaResult{}, fmt.Errorf("request failed: %w", err)
+	}
+	item.status = MetaStatusMN
+	res, err := finishMeta(&item, nil)
 	if err != nil {
 		return MetaResult{}, fmt.Errorf("request failed: %w", err)
 	}

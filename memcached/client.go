@@ -32,6 +32,7 @@ type Client struct {
 	resolverErr error
 
 	closed bool
+	meta   MetaClient
 }
 
 // New builds a Client from Config.
@@ -64,6 +65,7 @@ func New(cfg Config) (*Client, error) {
 		failCount:        make(map[string]int),
 		deadUntil:        make(map[string]time.Time),
 	}
+	c.meta.c = c
 	c.startResolverRefresh()
 	return c, nil
 }
@@ -279,24 +281,21 @@ func (c *Client) PoolStats() []PoolStat {
 
 // nsBytes prefixes key with Config.Cluster.Namespace.
 func (c *Client) nsBytes(key []byte) []byte {
-	if c.rt == nil || c.rt.namespace == "" {
+	if c.rt == nil || len(c.rt.nsPrefix) == 0 {
 		return key
 	}
-	out := make([]byte, 0, len(c.rt.namespace)+len(key))
-	out = append(out, c.rt.namespace...)
+	out := make([]byte, 0, len(c.rt.nsPrefix)+len(key))
+	out = append(out, c.rt.nsPrefix...)
 	return append(out, key...)
 }
 
 // stripNS removes the configured namespace from a returned key.
 func (c *Client) stripNS(key []byte) []byte {
-	if c == nil || c.rt == nil || c.rt.namespace == "" {
+	if c == nil || c.rt == nil || len(c.rt.nsPrefix) == 0 {
 		return key
 	}
-	prefix := []byte(c.rt.namespace)
-	if !bytes.HasPrefix(key, prefix) {
+	if !bytes.HasPrefix(key, c.rt.nsPrefix) {
 		return key
 	}
-	out := make([]byte, len(key)-len(prefix))
-	copy(out, key[len(prefix):])
-	return out
+	return key[len(c.rt.nsPrefix):]
 }

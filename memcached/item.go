@@ -43,9 +43,11 @@ type MetaItem struct {
 	// WireKey is the k token as the server sent it (may be Base64).
 	WireKey []byte
 	// KeyBase64 is set when the server sent the key in Base64 (b).
-	KeyBase64 bool
-	status    MetaStatus
-	gotHD     bool
+	KeyBase64    bool
+	status       MetaStatus
+	gotHD        bool
+	opaqueNum    uint64
+	hasOpaqueNum bool
 }
 
 // MetaItemDebug is a parsed me reply.

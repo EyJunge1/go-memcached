@@ -103,7 +103,7 @@ func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTim
 
 	dreq, dresp := buildDeleteCommand(probeKey, false)
 	defer releaseReqAndResp(dreq, dresp)
-	dresp.afterRecv = expectLine(_DeletedCRLFBytes)
+	dresp.afterRecv = mapDeletedReply
 	_ = dreq.send(ctx, cn, writeTimeout)
 	_ = dresp.recv(ctx, cn, readTimeout)
 	return fmt.Errorf("auth left credential item: %w", ErrInvalidArgument)

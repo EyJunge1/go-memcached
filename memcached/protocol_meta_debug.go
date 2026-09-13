@@ -30,7 +30,7 @@ func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *respon
 	b.AddFlagString("L", flags.L)
 	b.AddCRLF()
 
-	req := b.request([]byte("me"), key)
+	req := b.request(_MeBytes, key)
 	resp := buildLimitedLineResponse(1)
 
 	return req, resp

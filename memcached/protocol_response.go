@@ -157,16 +157,17 @@ func buildQuietBarrierResponse() *response {
 
 // appendMetaQuietBarrier appends mn [P] [L] after raw.
 func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
+	if f.P == "" && f.L == "" {
+		return append(raw, _MnCRLFBytes...)
+	}
 	b := newProtocolBuilder().AddString("mn")
 	defer b.release()
 	b.AddFlagString("P", f.P)
 	b.AddFlagString("L", f.L)
-	line := b.AddCRLF().build()
-	out := make([]byte, 0, len(raw)+len(line))
-	out = append(out, raw...)
-	out = append(out, line...)
-	putBuilderBuf(line)
-	return out
+	line, box := b.AddCRLF().takeBytes()
+	raw = append(raw, line...)
+	putBuilderBox(box)
+	return raw
 }
 
 // protocolReader is the line and framed-body reader used by recv.
@@ -210,6 +211,23 @@ func (p *payloadReader) readFramedValueInto(dst []byte) error {
 	return readFramedValueIntoFrom(p.r, dst)
 }
 
+func (p *payloadReader) buffered() int {
+	if p == nil || p.r == nil {
+		return 0
+	}
+	return p.r.Buffered()
+}
+
+type wireProtocolReader struct{ c wireConn }
+
+func (w wireProtocolReader) readLine(delim byte) ([]byte, error) {
+	return w.c.readLine(delim)
+}
+
+func (w wireProtocolReader) readExact(n int) ([]byte, error) {
+	return w.c.readExact(n)
+}
+
 // recv reads the server frame according to endIndicator.
 func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Duration) error {
 	if has := selectProximateDeadline(ctx, rr, readTimeout, clock, true); has {
@@ -220,15 +238,20 @@ func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Du
 		defer stop()
 	}
 
-	var reader protocolReader = rr
 	if resp.udpEnabled {
 		payload, err := assembleUDP(rr, resp.udpReqID, udpFragmentCap(resp.maxValueBytes))
 		if err != nil {
 			return err
 		}
-		reader = newPayloadReader(payload)
+		return resp.recvFrom(newPayloadReader(payload))
 	}
+	if c, ok := rr.(*conn); ok {
+		return resp.recvFrom(c)
+	}
+	return resp.recvFrom(wireProtocolReader{rr})
+}
 
+func (resp *response) recvFrom(reader protocolReader) error {
 	switch resp.endIndicator {
 	case endIndicatorNoReply:
 		return nil
@@ -291,7 +314,7 @@ func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
 	case bytes.HasPrefix(trimmed, _ValueSpaceBytes):
 		size, err = parseValueDataLen(trimmed)
 		return size, true, err
-	case bytes.HasPrefix(trimmed, []byte("VA ")):
+	case bytes.HasPrefix(trimmed, _VASpaceBytes):
 		rest := trimmed[3:]
 		end := bytes.IndexByte(rest, ' ')
 		if end < 0 {
@@ -339,9 +362,7 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 	}
 	resp.rawLines = append(resp.rawLines, header)
 	resp.rawLines = append(resp.rawLines, payload)
-	if resp.readConn != nil {
-		_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, clock, true)
-	}
+	refreshReadDeadlineIfIdle(resp, rr)
 	return 2, nil
 }
 
@@ -349,14 +370,26 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 // and count as the next record.
 func (resp *response) read1(rr protocolReader) error {
 	read := 0
+	sr, sliceOK := rr.(sliceReader)
 	for read < int(resp.limitedLines) {
-		line, err := rr.readLine('\n')
+		var line []byte
+		var err error
+		if sliceOK {
+			line, err = sr.readSlice('\n')
+		} else {
+			line, err = rr.readLine('\n')
+		}
 		if err != nil {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 
 		if err = forecastCommonFaultLine(line); err != nil {
 			return err
+		}
+		if sliceOK {
+			if _, has, sizeErr := protocolDataBlockSize(line); sizeErr == nil && has {
+				line = bytes.Clone(line)
+			}
 		}
 
 		consumed, err := resp.appendDataBlock(rr, line)
@@ -498,9 +531,7 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 			return fmt.Errorf("read data block: %w", err)
 		}
 		items = append(items, item)
-		if resp.readConn != nil {
-			_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, clock, true)
-		}
+		refreshReadDeadlineIfIdle(resp, rr)
 	}
 }
 
@@ -528,9 +559,28 @@ func mapStatusLine(resp *response, want []byte) error {
 	return fmt.Errorf("unexpected response: %s: %w", snippet, ErrMalformedResponse)
 }
 
-// expectLine is an afterRecv that accepts want via mapStatusLine.
-func expectLine(want []byte) func(*response) error {
-	return func(resp *response) error {
-		return mapStatusLine(resp, want)
+func mapDeletedReply(resp *response) error {
+	return mapStatusLine(resp, _DeletedCRLFBytes)
+}
+
+func mapTouchedReply(resp *response) error {
+	return mapStatusLine(resp, _TouchedCRLFBytes)
+}
+
+func readerBuffered(rr protocolReader) int {
+	type withBuf interface{ buffered() int }
+	if b, ok := rr.(withBuf); ok {
+		return b.buffered()
 	}
+	return -1
+}
+
+func refreshReadDeadlineIfIdle(resp *response, rr protocolReader) {
+	if resp == nil || resp.readConn == nil {
+		return
+	}
+	if n := readerBuffered(rr); n > 0 {
+		return
+	}
+	_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, clock, true)
 }

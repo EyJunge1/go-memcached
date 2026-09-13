@@ -100,6 +100,25 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 		return c.getFromAddr(ctx, addr, command, expiry, wired, withCAS)
 	}
 
+	first, err := picker.Pick(addrs, wired[0])
+	if err != nil {
+		return nil, fmt.Errorf("pick node failed: %w", err)
+	}
+	same := true
+	for i := 1; i < len(wired); i++ {
+		addr, err := picker.Pick(addrs, wired[i])
+		if err != nil {
+			return nil, fmt.Errorf("pick node failed: %w", err)
+		}
+		if addr != first {
+			same = false
+			break
+		}
+	}
+	if same {
+		return c.getFromAddr(ctx, first, command, expiry, wired, withCAS)
+	}
+
 	groups := make(map[*addr][][]byte, len(addrs))
 	for _, key := range wired {
 		addr, err := picker.Pick(addrs, key)

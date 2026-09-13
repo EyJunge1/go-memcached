@@ -72,7 +72,7 @@ func (p *Pipeline) Delete(key []byte) *Pipeline {
 		return p
 	}
 	req, resp := buildDeleteCommand(key, false)
-	resp.afterRecv = expectLine(_DeletedCRLFBytes)
+	resp.afterRecv = mapDeletedReply
 	p.ops = append(p.ops, pipeOp{req: req, resp: resp, key: key})
 	return p
 }
@@ -88,7 +88,7 @@ func (p *Pipeline) Touch(key []byte, expiry Exptime) *Pipeline {
 		return p
 	}
 	req, resp := buildTouchCommand(key, expiry, false)
-	resp.afterRecv = expectLine(_TouchedCRLFBytes)
+	resp.afterRecv = mapTouchedReply
 	p.ops = append(p.ops, pipeOp{req: req, resp: resp, key: key})
 	return p
 }
@@ -140,6 +140,12 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = p.c.liveAddrs(addrs)
+	if len(addrs) == 1 {
+		if err := p.runAddr(ctx, addrs[0], p.ops); err != nil {
+			return errors.Join(append(p.errs, err)...)
+		}
+		return errors.Join(p.errs...)
+	}
 
 	groups := make(map[*addr][]pipeOp, len(addrs))
 	for _, op := range p.ops {

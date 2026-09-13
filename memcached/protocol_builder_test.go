@@ -74,7 +74,8 @@ func BenchmarkProtocolBuilder_GetShortKey(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		pb := newProtocolBuilder().AddString("get").AddString("test_key").AddCRLF()
-		putBuilderBuf(pb.build())
+		_, box := pb.takeBytes()
+		putBuilderBox(box)
 		pb.release()
 	}
 }
@@ -83,7 +84,8 @@ func BenchmarkProtocolBuilder_DeleteShortKey(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		pb := newProtocolBuilder().AddString("delete").AddString("test_key").AddCRLF()
-		putBuilderBuf(pb.build())
+		_, box := pb.takeBytes()
+		putBuilderBox(box)
 		pb.release()
 	}
 }
@@ -96,7 +98,8 @@ func BenchmarkProtocolBuilder_SetSmallValue(b *testing.B) {
 			AddString("set").AddString("test_key").AddInt(0).AddInt(0).AddInt(len(value)).
 			AddCRLF().
 			AddBytes(value)
-		putBuilderBuf(pb.build())
+		_, box := pb.takeBytes()
+		putBuilderBox(box)
 		pb.release()
 	}
 }
@@ -111,7 +114,8 @@ func BenchmarkProtocolBuilder_MetaSetManyFlags(b *testing.B) {
 			AddString("T").AddUint(60).AddString("S").AddInt(len(value)).
 			AddCRLF().
 			AddBytes(value)
-		putBuilderBuf(pb.build())
+		_, box := pb.takeBytes()
+		putBuilderBox(box)
 		pb.release()
 	}
 }
@@ -124,7 +128,8 @@ func BenchmarkProtocolBuilder_SetLargeValue(b *testing.B) {
 			AddString("set").AddString("test_key").AddInt(0).AddInt(0).AddInt(len(value)).
 			AddCRLF().
 			AddBytes(value)
-		putBuilderBuf(pb.build())
+		_, box := pb.takeBytes()
+		putBuilderBox(box)
 		pb.release()
 	}
 }

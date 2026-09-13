@@ -226,6 +226,64 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	if storeAllocs > 12 {
 		t.Fatalf("Store allocs/op = %.1f, want <= 12 (includes in-process fake server)", storeAllocs)
 	}
+
+	meta := client.Meta()
+	mg := MetaGet{Return: MetaGetReturn{Value: true}}
+	_, err = meta.Set(ctx, key, val, MetaSet{})
+	noError(t, err)
+	_, err = meta.Get(ctx, key, mg)
+	noError(t, err)
+	metaAllocs := testing.AllocsPerRun(200, func() {
+		if _, err := meta.Set(ctx, key, val, MetaSet{}); err != nil {
+			t.Fatalf("meta set: %v", err)
+		}
+		res, err := meta.Get(ctx, key, mg)
+		if err != nil || res.Err() != nil {
+			t.Fatalf("meta get: %v %v", err, res.Err())
+		}
+	})
+	if metaAllocs > 24 {
+		t.Fatalf("Meta Set+Get allocs/op = %.1f, want <= 24 (includes in-process fake server)", metaAllocs)
+	}
+
+	multiKeys := make([][]byte, 8)
+	for i := range multiKeys {
+		multiKeys[i] = []byte{byte('m'), byte('0' + i)}
+		mustStore(t, client, ctx, multiKeys[i], val)
+	}
+	_, err = client.Get(ctx, multiKeys, GetOpts{})
+	noError(t, err)
+	multiAllocs := testing.AllocsPerRun(100, func() {
+		items, err := client.Get(ctx, multiKeys, GetOpts{})
+		if err != nil || len(items) != 8 {
+			t.Fatalf("multiget: %v n=%d", err, len(items))
+		}
+	})
+	if multiAllocs > 40 {
+		t.Fatalf("MultiGet8 allocs/op = %.1f, want <= 40 (includes in-process fake server)", multiAllocs)
+	}
+
+	pipeKeys := make([][]byte, 8)
+	for i := range pipeKeys {
+		pipeKeys[i] = []byte{byte('p'), byte('0' + i)}
+	}
+	p := client.Pipeline()
+	for _, k := range pipeKeys {
+		p.Store(Item{Key: k, Value: val})
+	}
+	noError(t, p.Run(ctx))
+	pipeAllocs := testing.AllocsPerRun(100, func() {
+		p := client.Pipeline()
+		for _, k := range pipeKeys {
+			p.Store(Item{Key: k, Value: val})
+		}
+		if err := p.Run(ctx); err != nil {
+			t.Fatalf("pipeline: %v", err)
+		}
+	})
+	if pipeAllocs > 96 {
+		t.Fatalf("Pipeline Store x8 allocs/op = %.1f, want <= 96 (includes in-process fake server)", pipeAllocs)
+	}
 }
 
 func BenchmarkClientGetSmall(b *testing.B) {

@@ -28,7 +28,7 @@ func (c *Client) Delete(ctx context.Context, key []byte, opts MutateOpts) error 
 		return nil
 	}
 
-	resp.afterRecv = expectLine(_DeletedCRLFBytes)
+	resp.afterRecv = mapDeletedReply
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

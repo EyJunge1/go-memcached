@@ -35,6 +35,23 @@ var (
 	_VersionBytes     = []byte("VERSION")
 
 	_MetaMNCRLFBytes = []byte("MN\r\n")
+	_MnCRLFBytes     = []byte("mn\r\n")
+	_CRLFMnCRLFBytes = []byte("\r\nmn\r\n")
+	_DeletedBytes    = []byte("DELETED")
+	_TouchedBytes    = []byte("TOUCHED")
+	_OKBytes         = []byte("OK")
+	_RESETBytes      = []byte("RESET")
+	_STATBytes       = []byte("STAT")
+	_MNBytes         = []byte("MN")
+	_HDBytes         = []byte("HD")
+	_VABytes         = []byte("VA")
+	_ENBytes         = []byte("EN")
+	_NFBytes         = []byte("NF")
+	_NSBytes         = []byte("NS")
+	_EXBytes         = []byte("EX")
+	_MEBytes         = []byte("ME")
+	_HDSpaceBytes    = []byte("HD ")
+	_MESpaceBytes    = []byte("ME ")
 
 	_GetBytes     = []byte("get")
 	_GetsBytes    = []byte("gets")
@@ -48,6 +65,14 @@ var (
 	_CasBytes     = []byte("cas")
 	_IncrBytes    = []byte("incr")
 	_DecrBytes    = []byte("decr")
+	_DeleteBytes  = []byte("delete")
+	_TouchBytes   = []byte("touch")
+	_MgBytes      = []byte("mg")
+	_MsBytes      = []byte("ms")
+	_MdBytes      = []byte("md")
+	_MaBytes      = []byte("ma")
+	_MnBytes      = []byte("mn")
+	_MeBytes      = []byte("me")
 )
 
 // verbBytes returns a interned command verb, or a copy for unknown verbs.
@@ -77,6 +102,22 @@ func verbBytes(command string) []byte {
 		return _IncrBytes
 	case "decr":
 		return _DecrBytes
+	case "delete":
+		return _DeleteBytes
+	case "touch":
+		return _TouchBytes
+	case "mg":
+		return _MgBytes
+	case "ms":
+		return _MsBytes
+	case "md":
+		return _MdBytes
+	case "ma":
+		return _MaBytes
+	case "mn":
+		return _MnBytes
+	case "me":
+		return _MeBytes
 	default:
 		return []byte(command)
 	}
@@ -99,21 +140,21 @@ func forecastCommonFaultLine(line []byte) error {
 func isKnownNominalLine(t []byte) bool {
 	switch {
 	case bytes.Equal(t, _StoredBytes),
-		bytes.Equal(t, []byte("DELETED")),
-		bytes.Equal(t, []byte("TOUCHED")),
-		bytes.Equal(t, []byte("OK")),
+		bytes.Equal(t, _DeletedBytes),
+		bytes.Equal(t, _TouchedBytes),
+		bytes.Equal(t, _OKBytes),
 		bytes.Equal(t, _EndBytes),
-		bytes.Equal(t, []byte("MN")),
-		bytes.Equal(t, []byte("HD")),
-		bytes.Equal(t, []byte("RESET")):
+		bytes.Equal(t, _MNBytes),
+		bytes.Equal(t, _HDBytes),
+		bytes.Equal(t, _RESETBytes):
 		return true
 	case bytes.HasPrefix(t, _ValueBytes),
 		bytes.HasPrefix(t, _VASpaceBytes),
-		bytes.HasPrefix(t, []byte("HD ")),
-		bytes.HasPrefix(t, []byte("ME ")),
-		bytes.Equal(t, []byte("ME")),
+		bytes.HasPrefix(t, _HDSpaceBytes),
+		bytes.HasPrefix(t, _MESpaceBytes),
+		bytes.Equal(t, _MEBytes),
 		bytes.HasPrefix(t, _VersionBytes),
-		bytes.HasPrefix(t, []byte("STAT")):
+		bytes.HasPrefix(t, _STATBytes):
 		return true
 	default:
 		return false
@@ -164,6 +205,17 @@ func putBuilderBuf(b []byte) {
 	p := builderBufPool.Get().(*[]byte)
 	*p = b[:0]
 	builderBufPool.Put(p)
+}
+
+func putBuilderBox(box *[]byte) {
+	if box == nil {
+		return
+	}
+	if cap(*box) < defaultBufferSize || cap(*box) > maxPooledBufferCap {
+		return
+	}
+	*box = (*box)[:0]
+	builderBufPool.Put(box)
 }
 
 // protocolBuilder is a pooled space-separated command encoder.
@@ -338,15 +390,22 @@ func (b *protocolBuilder) finalize() {
 	}
 }
 
-// build detaches the command bytes. Call at most once; release then has no buffer.
-func (b *protocolBuilder) build() []byte {
+// takeBytes detaches the command bytes and the pool slot. Call at most once.
+func (b *protocolBuilder) takeBytes() (raw []byte, box *[]byte) {
 	if b.box == nil {
-		return nil
+		return nil, nil
 	}
 	b.finalize()
-	out := *b.box
+	raw = *b.box
+	box = b.box
 	b.box = nil
-	return out
+	return raw, box
+}
+
+// build detaches the command bytes. Call at most once; release then has no buffer.
+func (b *protocolBuilder) build() []byte {
+	raw, _ := b.takeBytes()
+	return raw
 }
 
 // request builds a pooled request that returns the command buffer on release.
@@ -374,7 +433,7 @@ func trimCRLF(line []byte) []byte {
 
 // isMetaNoopLine reports whether line is a meta MN reply.
 func isMetaNoopLine(line []byte) bool {
-	return bytes.Equal(trimCRLF(line), []byte("MN"))
+	return bytes.Equal(trimCRLF(line), _MNBytes)
 }
 
 // base64Encode encodes src with standard Base64.

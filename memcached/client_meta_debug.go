@@ -17,18 +17,18 @@ func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug) (MetaIt
 		return MetaItemDebug{}, err
 	}
 
-	req, resp := buildMetaDebugCommand(key, mdFlags)
+	req, resp := buildMetaDebugCommand(key, &mdFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := &MetaItemDebug{Key: key}
-	resp.afterRecv = func(r *response) error {
-		return parseMetaItemDebug(r.rawLines, item, mdFlags.b)
-	}
+	item := MetaItemDebug{Key: key}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
+		return MetaItemDebug{}, fmt.Errorf("request failed: %w", err)
+	}
+	if err := parseMetaItemDebug(resp.rawLines, &item, mdFlags.b); err != nil {
 		if item.Status.Err() != nil {
-			return *item, nil
+			return item, nil
 		}
 		return MetaItemDebug{}, fmt.Errorf("request failed: %w", err)
 	}
-	return *item, nil
+	return item, nil
 }

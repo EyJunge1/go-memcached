@@ -44,6 +44,7 @@ type runtime struct {
 	keepAlive       time.Duration
 	minIdle         int
 	namespace       string
+	nsPrefix        []byte
 	resolverRefresh time.Duration
 	maxValueBytes   int
 
@@ -85,6 +86,9 @@ func runtimeFromConfig(cfg Config) (*runtime, error) {
 	}
 	if rt.maxValueBytes <= 0 {
 		rt.maxValueBytes = defaultMaxValueBytes
+	}
+	if rt.namespace != "" {
+		rt.nsPrefix = []byte(rt.namespace)
 	}
 	if rt.pickBuilder == nil {
 		rt.pickBuilder = defaultPickBuilder()
