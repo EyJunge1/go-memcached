@@ -82,7 +82,7 @@ func (c *Client) noteFailure(node *addr) {
 
 // noteSuccess clears the node's failure count and lifts any quarantine.
 func (c *Client) noteSuccess(node *addr) {
-	if node == nil {
+	if node == nil || c.rt == nil || c.rt.failover.FailureLimit <= 0 {
 		return
 	}
 	c.healthMu.Lock()

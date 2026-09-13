@@ -10,8 +10,11 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+var errConnClosed = errors.New("connection is closed")
 
 // clockFunc is the time source; tests replace clock.
 type clockFunc func() time.Time
@@ -90,9 +93,9 @@ type conn struct {
 	network    string
 	returnedAt time.Time
 
-	sync.Mutex // guards the fields below
+	sync.Mutex // guards Close
 	raw        net.Conn
-	closed     bool
+	closed     atomic.Bool
 	pool       *connPool
 
 	rr *bufio.Reader
@@ -164,9 +167,7 @@ func (c *conn) setWriteDeadline(d time.Time) error {
 
 // isClosed reports whether Close has already been called.
 func (c *conn) isClosed() bool {
-	c.Lock()
-	defer c.Unlock()
-	return c.closed
+	return c.closed.Load()
 }
 
 // buffered returns the number of unread bytes in the read buffer.
@@ -180,16 +181,28 @@ func (c *conn) buffered() int {
 // readLine reads from the buffered socket through the next delim byte.
 func (c *conn) readLine(delim byte) ([]byte, error) {
 	if c.isClosed() {
-		return nil, errors.New("connection is closed")
+		return nil, errConnClosed
 	}
 
 	return c.rr.ReadBytes(delim)
 }
 
+// readSlice returns a line that is only valid until the next read.
+func (c *conn) readSlice(delim byte) ([]byte, error) {
+	if c.isClosed() {
+		return nil, errConnClosed
+	}
+	line, err := c.rr.ReadSlice(delim)
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return c.rr.ReadBytes(delim)
+	}
+	return line, err
+}
+
 // readExact reads exactly n bytes into a fresh buffer for VALUE/VA bodies.
 func (c *conn) readExact(n int) ([]byte, error) {
 	if c.isClosed() {
-		return nil, errors.New("connection is closed")
+		return nil, errConnClosed
 	}
 	if n < 0 {
 		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
@@ -199,10 +212,17 @@ func (c *conn) readExact(n int) ([]byte, error) {
 	return buf, err
 }
 
+func (c *conn) readFramedValue(size int) ([]byte, error) {
+	if c.isClosed() {
+		return nil, errConnClosed
+	}
+	return readFramedValueFrom(c.rr, size)
+}
+
 // readDatagram reads one UDP datagram from the raw socket into a copied buffer.
 func (c *conn) readDatagram() ([]byte, error) {
 	if c.isClosed() {
-		return nil, errors.New("connection is closed")
+		return nil, errConnClosed
 	}
 	scratch := udpScratchPool.Get().(*[]byte)
 	n, err := c.raw.Read(*scratch)
@@ -219,7 +239,7 @@ func (c *conn) readDatagram() ([]byte, error) {
 // Read implements io.Reader on the buffered socket.
 func (c *conn) Read(p []byte) (n int, err error) {
 	if c.isClosed() {
-		return 0, errors.New("connection is closed")
+		return 0, errConnClosed
 	}
 
 	return c.rr.Read(p)
@@ -228,7 +248,7 @@ func (c *conn) Read(p []byte) (n int, err error) {
 // Write implements io.Writer on the buffered socket.
 func (c *conn) Write(p []byte) (n int, err error) {
 	if c.isClosed() {
-		return 0, errors.New("connection is closed")
+		return 0, errConnClosed
 	}
 
 	return c.wr.Write(p)
@@ -237,7 +257,7 @@ func (c *conn) Write(p []byte) (n int, err error) {
 // Flush implements flushing the write buffer to the socket.
 func (c *conn) Flush() error {
 	if c.isClosed() {
-		return errors.New("connection is closed")
+		return errConnClosed
 	}
 	return c.wr.Flush()
 }
@@ -246,11 +266,11 @@ func (c *conn) Flush() error {
 func (c *conn) Close() error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return nil
 	}
 
-	c.closed = true
+	c.closed.Store(true)
 
 	if !isUDPNetwork(c.network) {
 		_ = c.raw.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))

@@ -6,8 +6,15 @@ import (
 	"math"
 )
 
-// buildGetsCommand encodes get/gets <key>*\r\n.
-func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
+func pickKey(keys [][]byte) []byte {
+	if len(keys) == 1 {
+		return keys[0]
+	}
+	return nil
+}
+
+// encodeGetsCommand encodes get/gets <key>*\r\n.
+func encodeGetsCommand(command string, keys ...[]byte) *request {
 	b := newProtocolBuilder().
 		AddString(command)
 	defer b.release()
@@ -16,19 +23,18 @@ func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
 		b.AddBytes(key)
 	}
 	b.AddCRLF()
+	return b.request(verbBytes(command), pickKey(keys))
+}
 
-	var pickKey []byte
-	if len(keys) == 1 {
-		pickKey = keys[0]
-	}
-	req := buildRequest([]byte(command), pickKey, b.build())
+// buildGetsCommand encodes get/gets and reads until END (auth and tests).
+func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
+	req := encodeGetsCommand(command, keys...)
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
-
 	return req, resp
 }
 
-// buildGetAndTouchesCommand encodes gat/gats <exptime> <key>*\r\n.
-func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (*request, *response) {
+// encodeGetAndTouchesCommand encodes gat/gats <exptime> <key>*\r\n.
+func encodeGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) *request {
 	b := newProtocolBuilder().
 		AddString(command).
 		AddInt64(expiryToken(expiry))
@@ -37,21 +43,19 @@ func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (
 	for _, key := range keys {
 		b.AddBytes(key)
 	}
-
 	b.AddCRLF()
+	return b.request(verbBytes(command), pickKey(keys))
+}
 
-	var pickKey []byte
-	if len(keys) == 1 {
-		pickKey = keys[0]
-	}
-	req := buildRequest([]byte(command), pickKey, b.build())
+// buildGetAndTouchesCommand encodes gat/gats and reads until END.
+func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (*request, *response) {
+	req := encodeGetAndTouchesCommand(command, expiry, keys...)
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
-
 	return req, resp
 }
 
 // parseValueItems reads VALUE/data pairs, optionally ending with END.
-func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, err error) {
+func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []Item, err error) {
 	n := len(lines)
 	if withoutEndLine && n%2 != 0 {
 		return nil, fmt.Errorf("want times of 2 lines, got %d: %w", n, ErrMalformedResponse)
@@ -61,9 +65,8 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 	}
 
 	var (
-		rn      = n
-		items   = make([]*Item, 0, (n/2)+1)
-		dataLen uint64
+		rn    = n
+		items = make([]Item, 0, (n/2)+1)
 	)
 
 	if !withoutEndLine {
@@ -72,12 +75,12 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 
 	for i := 0; i < rn; i += 2 {
 		line := trimCRLF(lines[i])
-		if !bytes.HasPrefix(line, []byte("VALUE ")) {
+		if !bytes.HasPrefix(line, _ValueSpaceBytes) {
 			return nil, fmt.Errorf("unexpected retrieval line: %w", ErrMalformedResponse)
 		}
 
-		item := &Item{}
-		dataLen, err = parseValueLine(line, item, withCAS)
+		var item Item
+		dataLen, err := parseValueLine(line, &item, withCAS)
 		if err != nil {
 			return nil, err
 		}
@@ -171,6 +174,41 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 	}
 
 	return dataLen, nil
+}
+
+// parseValueDataLen reads only the <bytes> field from a VALUE header.
+func parseValueDataLen(line []byte) (uint64, error) {
+	const dataLenIndex = 3
+
+	n := len(line)
+	start := len(_ValueBytes)
+	fieldStart := start
+	nField := 0
+	var dataLen uint64
+
+	for i := start; i < n; i++ {
+		if nField > 5 {
+			return 0, fmt.Errorf("invalid VALUE line: %w", ErrMalformedResponse)
+		}
+		if line[i] != ' ' && i != n-1 {
+			continue
+		}
+		if nField == dataLenIndex {
+			si := i
+			if i == n-1 {
+				si = i + 1
+			}
+			var err error
+			dataLen, err = parseUintFromBytes(line[fieldStart:si])
+			if err != nil {
+				return 0, fmt.Errorf("invalid data length: %w", ErrMalformedResponse)
+			}
+			return dataLen, nil
+		}
+		fieldStart = i + 1
+		nField++
+	}
+	return 0, fmt.Errorf("invalid VALUE line: %w", ErrMalformedResponse)
 }
 
 // parseUintFromBytes decodes an ASCII unsigned integer. Empty input is 0.

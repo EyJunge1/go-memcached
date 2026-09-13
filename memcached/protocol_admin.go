@@ -49,7 +49,7 @@ func buildAdminLine(cmd string, noReply bool, args ...string) (*request, *respon
 	if noReply {
 		b.AddBytes(_NoReplyBytes)
 	}
-	req := buildRequest([]byte(cmd), nil, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte(cmd), nil)
 	if noReply {
 		return req, buildNoReplyResponse()
 	}
@@ -125,7 +125,7 @@ func buildWatchCommand(topics []WatchTopic) (*request, *response) {
 	for _, a := range args {
 		b.AddString(a)
 	}
-	req := buildRequest([]byte("watch"), nil, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("watch"), nil)
 	return req, buildLimitedLineResponse(1)
 }
 
@@ -139,7 +139,7 @@ func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 	for _, a := range rest {
 		b.AddString(a)
 	}
-	req := buildRequest([]byte("lru_crawler"), nil, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("lru_crawler"), nil)
 	return req, buildLimitedLineResponse(1)
 }
 

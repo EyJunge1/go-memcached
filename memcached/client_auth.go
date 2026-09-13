@@ -73,7 +73,7 @@ func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTim
 
 	greq, gresp := buildGetsCommand("get", probeKey)
 	defer releaseReqAndResp(greq, gresp)
-	var leftover []*Item
+	var leftover []Item
 	gresp.afterRecv = func(r *response) error {
 		items, err := parseValueItems(r.rawLines, false, false)
 		if err != nil {

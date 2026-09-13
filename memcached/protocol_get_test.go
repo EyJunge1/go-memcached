@@ -16,7 +16,7 @@ func Test_parseValueItems(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    []*Item
+		want    []Item
 		wantErr bool
 	}{
 		{
@@ -32,7 +32,7 @@ func Test_parseValueItems(t *testing.T) {
 				withoutEndLine: false,
 				withCAS:        false,
 			},
-			want: []*Item{
+			want: []Item{
 				{
 					Key:   []byte("key"),
 					Value: []byte("value"),
@@ -57,7 +57,7 @@ func Test_parseValueItems(t *testing.T) {
 				withoutEndLine: false,
 				withCAS:        true,
 			},
-			want: []*Item{
+			want: []Item{
 				{
 					Key:   []byte("key"),
 					Value: []byte("value"),
@@ -85,7 +85,7 @@ func Test_parseValueItems(t *testing.T) {
 				withoutEndLine: true,
 				withCAS:        true,
 			},
-			want: []*Item{
+			want: []Item{
 				{
 					Key:   []byte("key"),
 					Value: []byte("value"),

@@ -18,13 +18,7 @@ func buildArithmeticCommand(command string, key []byte, delta uint64, noReply bo
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	raw := b.AddCRLF().build()
-
-	req := &request{
-		cmd: []byte(command),
-		key: key,
-		raw: raw,
-	}
+	req := b.AddCRLF().request(verbBytes(command), key)
 
 	var resp *response
 	if noReply {

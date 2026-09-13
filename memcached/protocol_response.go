@@ -36,6 +36,8 @@ const (
 	endIndicatorSpecificEndLine
 	// endIndicatorQuietBarrier reads until MN and keeps quiet error replies.
 	endIndicatorQuietBarrier
+	// endIndicatorRetrieval reads VALUE/data pairs until END into items.
+	endIndicatorRetrieval
 )
 
 // response is one decoded server frame.
@@ -56,6 +58,10 @@ type response struct {
 
 	// afterRecv parses the frame before the socket returns to the pool.
 	afterRecv func(*response) error
+
+	// items is filled by endIndicatorRetrieval.
+	items   []Item
+	withCAS bool
 
 	maxValueBytes int
 	readTimeout   time.Duration
@@ -122,11 +128,24 @@ func (resp *response) release() {
 	resp.udpEnabled = false
 	resp.udpReqID = 0
 	resp.afterRecv = nil
+	resp.items = nil
+	resp.withCAS = false
 	resp.maxValueBytes = 0
 	resp.readTimeout = 0
 	resp.readCtx = nil
 	resp.readConn = nil
 	responsePool.Put(resp)
+}
+
+// buildRetrievalResponse returns a pooled response that parses VALUE pairs into items.
+func buildRetrievalResponse(nKeys int, withCAS bool) *response {
+	resp := responsePool.Get().(*response)
+	resp.endIndicator = endIndicatorRetrieval
+	resp.withCAS = withCAS
+	if nKeys > 0 {
+		resp.items = make([]Item, 0, nKeys)
+	}
+	return resp
 }
 
 // buildQuietBarrierResponse returns a response that reads until MN.
@@ -146,6 +165,7 @@ func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
 	out := make([]byte, 0, len(raw)+len(line))
 	out = append(out, raw...)
 	out = append(out, line...)
+	putBuilderBuf(line)
 	return out
 }
 
@@ -170,6 +190,15 @@ func (p *payloadReader) readLine(delim byte) ([]byte, error) {
 	return p.r.ReadBytes(delim)
 }
 
+// readSlice returns a line that is only valid until the next read.
+func (p *payloadReader) readSlice(delim byte) ([]byte, error) {
+	line, err := p.r.ReadSlice(delim)
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return p.r.ReadBytes(delim)
+	}
+	return line, err
+}
+
 // readExact reads exactly n bytes.
 func (p *payloadReader) readExact(n int) ([]byte, error) {
 	buf := make([]byte, n)
@@ -177,13 +206,19 @@ func (p *payloadReader) readExact(n int) ([]byte, error) {
 	return buf, err
 }
 
+func (p *payloadReader) readFramedValue(size int) ([]byte, error) {
+	return readFramedValueFrom(p.r, size)
+}
+
 // recv reads the server frame according to endIndicator.
 func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Duration) error {
 	if has := selectProximateDeadline(ctx, rr, readTimeout, clock, true); has {
-		defer func() { _ = rr.setReadDeadline(zeroTime) }()
+		defer clearReadDeadline(rr)
 	}
-	stop := watchContextCancel(ctx, rr)
-	defer stop()
+	if ctx != nil && ctx.Done() != nil {
+		stop := watchContextCancel(ctx, rr)
+		defer stop()
+	}
 
 	var reader protocolReader = rr
 	if resp.udpEnabled {
@@ -203,6 +238,8 @@ func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Du
 		return resp.read2(reader, false)
 	case endIndicatorQuietBarrier:
 		return resp.read2(reader, true)
+	case endIndicatorRetrieval:
+		return resp.readRetrieval(reader)
 	default:
 	}
 
@@ -251,10 +288,8 @@ func selectProximateDeadline(
 func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
 	trimmed := trimCRLF(line)
 	switch {
-	case bytes.HasPrefix(trimmed, []byte("VALUE ")):
-		item := &Item{}
-		// Framing only needs <bytes>; CAS is optional (get vs gets).
-		size, err = parseValueLine(trimmed, item, false)
+	case bytes.HasPrefix(trimmed, _ValueSpaceBytes):
+		size, err = parseValueDataLen(trimmed)
 		return size, true, err
 	case bytes.HasPrefix(trimmed, []byte("VA ")):
 		rest := trimmed[3:]
@@ -360,6 +395,98 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 	}
 
 	return nil
+}
+
+// sliceReader can return a line that is only valid until the next read.
+type sliceReader interface {
+	readSlice(delim byte) ([]byte, error)
+}
+
+type framedValueReader interface {
+	readFramedValue(size int) ([]byte, error)
+}
+
+func readFramedValueFrom(r io.Reader, size int) ([]byte, error) {
+	if size < 0 {
+		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
+	}
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	var crlf [2]byte
+	if _, err := io.ReadFull(r, crlf[:]); err != nil {
+		return nil, err
+	}
+	if crlf[0] != '\r' || crlf[1] != '\n' {
+		return nil, fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+	}
+	return buf, nil
+}
+
+func readFramedValue(rr protocolReader, size int) ([]byte, error) {
+	if fr, ok := rr.(framedValueReader); ok {
+		return fr.readFramedValue(size)
+	}
+	payload, err := rr.readExact(size + 2)
+	if err != nil {
+		return nil, err
+	}
+	return dataBlockValue(payload, uint64(size)) //nolint:gosec // G115: size already bounded by maxValueBytes
+}
+
+// readRetrieval reads VALUE/data pairs until END without keeping rawLines.
+func (resp *response) readRetrieval(rr protocolReader) error {
+	items := resp.items[:0]
+	limit := resp.maxValueBytes
+	if limit <= 0 {
+		limit = defaultMaxValueBytes
+	}
+	sr, sliceOK := rr.(sliceReader)
+
+	for {
+		var line []byte
+		var err error
+		if sliceOK {
+			line, err = sr.readSlice('\n')
+		} else {
+			line, err = rr.readLine('\n')
+		}
+		if err != nil {
+			return fmt.Errorf("dispatchRequest read: %w", err)
+		}
+		trimmed := trimCRLF(line)
+		if bytes.Equal(trimmed, _EndBytes) {
+			resp.items = items
+			return nil
+		}
+		if !bytes.HasPrefix(trimmed, _ValueSpaceBytes) {
+			if err = forecastCommonFaultLine(line); err != nil {
+				return err
+			}
+			return fmt.Errorf("unexpected retrieval line: %w", ErrMalformedResponse)
+		}
+
+		var item Item
+		dataLen, err := parseValueLine(trimmed, &item, resp.withCAS)
+		if err != nil {
+			return err
+		}
+		if dataLen > uint64(limit) {
+			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
+		}
+		item.Value, err = readFramedValue(rr, int(dataLen)) //nolint:gosec // G115: size already bounded by maxValueBytes
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
+			}
+			return fmt.Errorf("read data block: %w", err)
+		}
+		items = append(items, item)
+		if resp.readConn != nil {
+			_ = selectProximateDeadline(resp.readCtx, resp.readConn, resp.readTimeout, clock, true)
+		}
+	}
 }
 
 // mapStatusLine accepts want, else a known protocol error, else ErrMalformedResponse.

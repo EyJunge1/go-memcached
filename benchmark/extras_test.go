@@ -84,11 +84,13 @@ func BenchmarkTCPGetCAS(b *testing.B) {
 	b.Run("ours", func(b *testing.B) {
 		c := newOursTCP(b)
 		ctx := context.Background()
+		var one [1][]byte
 		b.ReportAllocs()
 		b.ResetTimer()
 		i := 0
 		for b.Loop() {
-			items, err := c.Get(ctx, [][]byte{keyBytes[i%len(keyBytes)]}, casOpts)
+			one[0] = keyBytes[i%len(keyBytes)]
+			items, err := c.Get(ctx, one[:], casOpts)
 			if err != nil {
 				b.Fatal(err)
 			}

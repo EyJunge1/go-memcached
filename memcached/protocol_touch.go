@@ -12,7 +12,7 @@ func buildTouchCommand(key []byte, expTime Exptime, noReply bool) (*request, *re
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	req := buildRequest([]byte("touch"), key, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("touch"), key)
 
 	var resp *response
 	if noReply {

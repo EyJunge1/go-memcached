@@ -1,7 +1,6 @@
 package memcached
 
 import (
-	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -18,15 +17,15 @@ func Test_protocolBuilder(t *testing.T) {
 }
 
 func Test_protocolBuilder_releaseDiscardsOversizedBuffer(t *testing.T) {
-	large := bytes.NewBuffer(make([]byte, 0, maxPooledBufferCap+1024))
-	_, _ = large.Write(make([]byte, maxPooledBufferCap+1))
-	b := &protocolBuilder{buf: large}
+	large := make([]byte, 0, maxPooledBufferCap+1024)
+	large = append(large, make([]byte, maxPooledBufferCap+1)...)
+	b := &protocolBuilder{box: &large}
 	b.release()
-	isNil(t, b.buf)
+	isNil(t, b.box)
 
 	for range 32 {
 		pb := newProtocolBuilder()
-		capSize := pb.buf.Cap()
+		capSize := cap(pb.buf())
 		pb.release()
 		lessOrEqual(t, capSize, maxPooledBufferCap)
 	}
@@ -65,8 +64,8 @@ func Test_protocolBuilder_shortCommandsFitDefaultCap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pb := tc.build()
 			defer pb.release()
-			lessOrEqual(t, pb.buf.Len(), defaultBufferSize)
-			lessOrEqual(t, pb.buf.Cap(), maxPooledBufferCap)
+			lessOrEqual(t, len(pb.buf()), defaultBufferSize)
+			lessOrEqual(t, cap(pb.buf()), maxPooledBufferCap)
 		})
 	}
 }
@@ -75,7 +74,7 @@ func BenchmarkProtocolBuilder_GetShortKey(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		pb := newProtocolBuilder().AddString("get").AddString("test_key").AddCRLF()
-		_ = pb.build()
+		putBuilderBuf(pb.build())
 		pb.release()
 	}
 }
@@ -84,7 +83,7 @@ func BenchmarkProtocolBuilder_DeleteShortKey(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		pb := newProtocolBuilder().AddString("delete").AddString("test_key").AddCRLF()
-		_ = pb.build()
+		putBuilderBuf(pb.build())
 		pb.release()
 	}
 }
@@ -97,7 +96,7 @@ func BenchmarkProtocolBuilder_SetSmallValue(b *testing.B) {
 			AddString("set").AddString("test_key").AddInt(0).AddInt(0).AddInt(len(value)).
 			AddCRLF().
 			AddBytes(value)
-		_ = pb.build()
+		putBuilderBuf(pb.build())
 		pb.release()
 	}
 }
@@ -112,7 +111,7 @@ func BenchmarkProtocolBuilder_MetaSetManyFlags(b *testing.B) {
 			AddString("T").AddUint(60).AddString("S").AddInt(len(value)).
 			AddCRLF().
 			AddBytes(value)
-		_ = pb.build()
+		putBuilderBuf(pb.build())
 		pb.release()
 	}
 }
@@ -125,7 +124,7 @@ func BenchmarkProtocolBuilder_SetLargeValue(b *testing.B) {
 			AddString("set").AddString("test_key").AddInt(0).AddInt(0).AddInt(len(value)).
 			AddCRLF().
 			AddBytes(value)
-		_ = pb.build()
+		putBuilderBuf(pb.build())
 		pb.release()
 	}
 }
@@ -213,6 +212,16 @@ func Test_selectProximateDeadline(t *testing.T) {
 			equal(t, tt.wantDeadline, tt.conn.readDeadline)
 		})
 	}
+}
+
+func Test_readRetrievalValueContainsCRLFAndEND(t *testing.T) {
+	payload := []byte("VALUE k 0 11\r\nhello\nworld\r\nEND\r\n")
+	resp := buildRetrievalResponse(1, false)
+	defer resp.release()
+	noError(t, resp.readRetrieval(newPayloadReader(payload)))
+	hasLen(t, resp.items, 1)
+	equal(t, []byte("hello\nworld"), resp.items[0].Value)
+	equal(t, []byte("k"), resp.items[0].Key)
 }
 
 func Test_read2ValueContainsCRLFAndEND(t *testing.T) {

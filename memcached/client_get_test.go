@@ -195,3 +195,56 @@ func TestGetMissOmitsMissingKeys(t *testing.T) {
 	noError(t, err)
 	hasLen(t, items, 0)
 }
+
+func TestGetStoreHotPathAllocs(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	key := []byte("alloc-key")
+	val := []byte("test_value")
+	mustStore(t, client, ctx, key, val)
+	keys := [][]byte{key}
+
+	_, err := client.Get(ctx, keys, GetOpts{})
+	noError(t, err)
+
+	getAllocs := testing.AllocsPerRun(200, func() {
+		items, err := client.Get(ctx, keys, GetOpts{})
+		if err != nil || len(items) != 1 {
+			t.Fatalf("get: %v n=%d", err, len(items))
+		}
+	})
+	if getAllocs > 12 {
+		t.Fatalf("Get allocs/op = %.1f, want <= 12 (includes in-process fake server)", getAllocs)
+	}
+
+	storeAllocs := testing.AllocsPerRun(200, func() {
+		if err := client.Store(ctx, Item{Key: key, Value: val}); err != nil {
+			t.Fatalf("store: %v", err)
+		}
+	})
+	if storeAllocs > 12 {
+		t.Fatalf("Store allocs/op = %.1f, want <= 12 (includes in-process fake server)", storeAllocs)
+	}
+}
+
+func BenchmarkClientGetSmall(b *testing.B) {
+	srv := startFakeMemcached(b)
+	client := testClient(b, srv.Addr())
+	ctx := context.Background()
+	key := []byte("alloc-key")
+	mustStore(b, client, ctx, key, []byte("test_value"))
+	keys := [][]byte{key}
+	_, err := client.Get(ctx, keys, GetOpts{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		items, err := client.Get(ctx, keys, GetOpts{})
+		if err != nil || len(items) != 1 {
+			b.Fatal(err)
+		}
+	}
+}

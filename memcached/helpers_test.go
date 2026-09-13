@@ -41,7 +41,7 @@ func delayPtr(e Exptime) *Exptime {
 	return &e
 }
 
-func testClient(t *testing.T, addr string, tweak ...func(*Config)) *Client {
+func testClient(t testing.TB, addr string, tweak ...func(*Config)) *Client {
 	t.Helper()
 	cfg, err := testConfig(addr, tweak...)
 	noError(t, err)
@@ -51,14 +51,14 @@ func testClient(t *testing.T, addr string, tweak ...func(*Config)) *Client {
 	return c
 }
 
-func noError(t *testing.T, err error) {
+func noError(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func mustStore(t *testing.T, c *Client, ctx context.Context, key, value []byte) {
+func mustStore(t testing.TB, c *Client, ctx context.Context, key, value []byte) {
 	t.Helper()
 	noError(t, c.Store(ctx, Item{Mode: StoreSet, Key: key, Value: value}))
 }

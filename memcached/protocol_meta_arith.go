@@ -78,8 +78,7 @@ func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticF
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
 
-	raw := b.AddCRLF().build()
-	req := buildRequest([]byte("ma"), key, raw)
+	req := b.AddCRLF().request([]byte("ma"), key)
 
 	var resp *response
 	if flags.q {

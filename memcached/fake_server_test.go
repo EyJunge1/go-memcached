@@ -49,7 +49,7 @@ func startFakeMemcachedAuth(t *testing.T) *fakeMemcached {
 	return f
 }
 
-func startFakeMemcached(t *testing.T) *fakeMemcached {
+func startFakeMemcached(t testing.TB) *fakeMemcached {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -73,7 +73,7 @@ func startFakeMemcachedUnix(t *testing.T) (*fakeMemcached, string) {
 	return serveFake(t, ln), path
 }
 
-func serveFake(t *testing.T, ln net.Listener) *fakeMemcached {
+func serveFake(t testing.TB, ln net.Listener) *fakeMemcached {
 	t.Helper()
 	f := &fakeMemcached{ln: ln, items: make(map[string]*fakeItem)}
 	go f.serve()

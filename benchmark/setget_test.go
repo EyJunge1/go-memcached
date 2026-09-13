@@ -68,12 +68,13 @@ func BenchmarkTCPSetGetParallel(b *testing.B) {
 				b.ResetTimer()
 				b.RunParallel(func(pb *testing.PB) {
 					ctx := context.Background()
+					w := worker(sg)
 					for pb.Next() {
 						key := benchKey(b.Name(), n.Add(1))
-						if err := sg.set(ctx, key, size.val); err != nil {
+						if err := w.set(ctx, key, size.val); err != nil {
 							b.Fatal(err)
 						}
-						if err := sg.get(ctx, key); err != nil {
+						if err := w.get(ctx, key); err != nil {
 							b.Fatal(err)
 						}
 					}

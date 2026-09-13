@@ -83,8 +83,7 @@ func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *res
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
 
-	raw := b.AddCRLF().build()
-	req := buildRequest([]byte("ms"), key, raw)
+	req := b.AddCRLF().request([]byte("ms"), key)
 	req.body = value
 
 	var resp *response

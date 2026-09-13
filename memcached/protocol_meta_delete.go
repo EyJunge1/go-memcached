@@ -45,10 +45,7 @@ func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *resp
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
 
-	raw := b.AddCRLF().
-		build()
-
-	req := buildRequest([]byte("md"), key, raw)
+	req := b.AddCRLF().request([]byte("md"), key)
 
 	var resp *response
 	if flags.q {

@@ -22,6 +22,8 @@ type request struct {
 	cmd []byte // verb, for UDP retry classification
 	key []byte // routing key; nil when the command has none
 	raw []byte
+	// rawBox is the pool slot for raw when the builder detached it.
+	rawBox *[]byte
 	// body and tail follow raw so storage values skip the builder buffer.
 	body []byte
 	tail []byte
@@ -54,6 +56,15 @@ func buildRequest(cmd []byte, key []byte, raw []byte) *request {
 
 // release clears the request and returns it to the pool.
 func (req *request) release() {
+	if req.rawBox != nil {
+		if cap(*req.rawBox) <= maxPooledBufferCap {
+			*req.rawBox = (*req.rawBox)[:0]
+			builderBufPool.Put(req.rawBox)
+		}
+		req.rawBox = nil
+	} else {
+		putBuilderBuf(req.raw)
+	}
 	req.cmd = nil
 	req.key = nil
 	req.raw = nil
@@ -68,10 +79,12 @@ func (req *request) release() {
 // send writes the request over TCP or UDP and flushes.
 func (req *request) send(ctx context.Context, rr wireConn, writeTimeout time.Duration) (err error) {
 	if has := selectProximateDeadline(ctx, rr, writeTimeout, clock, false); has {
-		defer func() { _ = rr.setWriteDeadline(zeroTime) }()
+		defer clearWriteDeadline(rr)
 	}
-	stop := watchContextCancel(ctx, rr)
-	defer stop()
+	if ctx != nil && ctx.Done() != nil {
+		stop := watchContextCancel(ctx, rr)
+		defer stop()
+	}
 
 	if req.udpEnabled {
 		return req.sendUDP(rr)
@@ -98,10 +111,16 @@ func (req *request) write(rr wireConn) (err error) {
 	return err
 }
 
+func nopStop() {}
+
+func clearWriteDeadline(rr wireConn) { _ = rr.setWriteDeadline(zeroTime) }
+
+func clearReadDeadline(rr wireConn) { _ = rr.setReadDeadline(zeroTime) }
+
 // watchContextCancel shortens the conn deadlines when ctx is canceled.
 func watchContextCancel(ctx context.Context, rr wireConn) (stop func()) {
-	if ctx == nil {
-		return func() {}
+	if ctx == nil || ctx.Done() == nil {
+		return nopStop
 	}
 	cancelWatch := context.AfterFunc(ctx, func() {
 		now := clock()

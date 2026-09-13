@@ -24,22 +24,100 @@ var (
 
 	_OKCRLFBytes      = []byte("OK\r\n")
 	_ValueBytes       = []byte("VALUE")
+	_ValueSpaceBytes  = []byte("VALUE ")
+	_VASpaceBytes     = []byte("VA ")
+	_EndBytes         = []byte("END")
 	_EndCRLFBytes     = []byte("END\r\n")
+	_StoredBytes      = []byte("STORED")
 	_StoredCRLFBytes  = []byte("STORED\r\n")
 	_DeletedCRLFBytes = []byte("DELETED\r\n")
 	_TouchedCRLFBytes = []byte("TOUCHED\r\n")
 	_VersionBytes     = []byte("VERSION")
 
 	_MetaMNCRLFBytes = []byte("MN\r\n")
+
+	_GetBytes     = []byte("get")
+	_GetsBytes    = []byte("gets")
+	_GatBytes     = []byte("gat")
+	_GatsBytes    = []byte("gats")
+	_SetBytes     = []byte("set")
+	_AddBytes     = []byte("add")
+	_ReplaceBytes = []byte("replace")
+	_AppendBytes  = []byte("append")
+	_PrependBytes = []byte("prepend")
+	_CasBytes     = []byte("cas")
+	_IncrBytes    = []byte("incr")
+	_DecrBytes    = []byte("decr")
 )
+
+// verbBytes returns a interned command verb, or a copy for unknown verbs.
+func verbBytes(command string) []byte {
+	switch command {
+	case "get":
+		return _GetBytes
+	case "gets":
+		return _GetsBytes
+	case "gat":
+		return _GatBytes
+	case "gats":
+		return _GatsBytes
+	case "set":
+		return _SetBytes
+	case "add":
+		return _AddBytes
+	case "replace":
+		return _ReplaceBytes
+	case "append":
+		return _AppendBytes
+	case "prepend":
+		return _PrependBytes
+	case "cas":
+		return _CasBytes
+	case "incr":
+		return _IncrBytes
+	case "decr":
+		return _DecrBytes
+	default:
+		return []byte(command)
+	}
+}
 
 // forecastCommonFaultLine maps a well-known status line to a sentinel, or nil.
 func forecastCommonFaultLine(line []byte) error {
+	if isKnownNominalLine(trimCRLF(line)) {
+		return nil
+	}
 	hit := mapWireLine(line, wireApp)
 	if hit.Class != wireFault || errors.Is(hit.Err, ErrMalformedResponse) {
 		return nil
 	}
 	return hit.Err
+}
+
+// isKnownNominalLine is true for success and data headers that must not be
+// stringified just to decide they are not faults.
+func isKnownNominalLine(t []byte) bool {
+	switch {
+	case bytes.Equal(t, _StoredBytes),
+		bytes.Equal(t, []byte("DELETED")),
+		bytes.Equal(t, []byte("TOUCHED")),
+		bytes.Equal(t, []byte("OK")),
+		bytes.Equal(t, _EndBytes),
+		bytes.Equal(t, []byte("MN")),
+		bytes.Equal(t, []byte("HD")),
+		bytes.Equal(t, []byte("RESET")):
+		return true
+	case bytes.HasPrefix(t, _ValueBytes),
+		bytes.HasPrefix(t, _VASpaceBytes),
+		bytes.HasPrefix(t, []byte("HD ")),
+		bytes.HasPrefix(t, []byte("ME ")),
+		bytes.Equal(t, []byte("ME")),
+		bytes.HasPrefix(t, _VersionBytes),
+		bytes.HasPrefix(t, []byte("STAT")):
+		return true
+	default:
+		return false
+	}
 }
 
 // prefixedProtocolError maps a prefix-matched status line onto sentinel.
@@ -66,45 +144,64 @@ const (
 )
 
 var (
-	bufferPool = sync.Pool{
+	builderBufPool = sync.Pool{
 		New: func() any {
-			return bytes.NewBuffer(make([]byte, 0, defaultBufferSize))
+			b := make([]byte, 0, defaultBufferSize)
+			return &b
 		},
 	}
 	builderPool = sync.Pool{
 		New: func() any {
-			return &protocolBuilder{
-				buf: bufferPool.Get().(*bytes.Buffer),
-			}
+			return &protocolBuilder{}
 		},
 	}
 )
 
+func putBuilderBuf(b []byte) {
+	if cap(b) < defaultBufferSize || cap(b) > maxPooledBufferCap {
+		return
+	}
+	p := builderBufPool.Get().(*[]byte)
+	*p = b[:0]
+	builderBufPool.Put(p)
+}
+
 // protocolBuilder is a pooled space-separated command encoder.
 type protocolBuilder struct {
-	buf *bytes.Buffer
+	box *[]byte
+}
+
+func (b *protocolBuilder) buf() []byte {
+	if b.box == nil {
+		return nil
+	}
+	return *b.box
+}
+
+func (b *protocolBuilder) scratch() *[]byte {
+	if b.box == nil {
+		p := builderBufPool.Get().(*[]byte)
+		*p = (*p)[:0]
+		b.box = p
+	}
+	return b.box
 }
 
 // newProtocolBuilder returns a pooled protocolBuilder.
 func newProtocolBuilder() *protocolBuilder {
 	pb := builderPool.Get().(*protocolBuilder)
-	if pb.buf == nil {
-		pb.buf = bufferPool.Get().(*bytes.Buffer)
-	} else {
-		pb.buf.Reset()
-	}
-
+	_ = pb.scratch()
 	return pb
 }
 
 // release returns the builder and its buffer to the pools.
 func (b *protocolBuilder) release() {
-	if b.buf != nil {
-		if b.buf.Cap() <= maxPooledBufferCap {
-			b.buf.Reset()
-			bufferPool.Put(b.buf)
+	if b.box != nil {
+		*b.box = (*b.box)[:0]
+		if cap(*b.box) <= maxPooledBufferCap {
+			builderBufPool.Put(b.box)
 		}
-		b.buf = nil
+		b.box = nil
 	}
 
 	builderPool.Put(b)
@@ -112,46 +209,52 @@ func (b *protocolBuilder) release() {
 
 // AddString appends s and a trailing space.
 func (b *protocolBuilder) AddString(s string) *protocolBuilder {
-	b.buf.WriteString(s)
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = append(*p, s...)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
 // AddBytes appends bs and a trailing space.
 func (b *protocolBuilder) AddBytes(bs []byte) *protocolBuilder {
-	b.buf.Write(bs)
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = append(*p, bs...)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
 // AddInt appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddInt(i int) *protocolBuilder {
-	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), int64(i), 10))
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = strconv.AppendInt(*p, int64(i), 10)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
 // AddUint appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddUint(i uint64) *protocolBuilder {
-	b.buf.Write(strconv.AppendUint(b.buf.AvailableBuffer(), i, 10))
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = strconv.AppendUint(*p, i, 10)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
 // AddInt64 appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddInt64(i int64) *protocolBuilder {
-	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), i, 10))
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = strconv.AppendInt(*p, i, 10)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
 // AddCRLF trims a trailing space and appends CRLF.
 func (b *protocolBuilder) AddCRLF() *protocolBuilder {
-	if bytes.HasSuffix(b.buf.Bytes(), _SpaceBytes) {
-		b.buf.Truncate(b.buf.Len() - 1)
+	p := b.scratch()
+	if bytes.HasSuffix(*p, _SpaceBytes) {
+		*p = (*p)[:len(*p)-1]
 	}
 
-	b.buf.Write(_CRLFBytes)
+	*p = append(*p, _CRLFBytes...)
 	return b
 }
 
@@ -161,16 +264,18 @@ func (b *protocolBuilder) AddFlagBool(flag string, v bool) *protocolBuilder {
 		return b
 	}
 
-	b.buf.WriteString(flag)
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = append(*p, flag...)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
 // AddFlagUint writes flag plus tok, including 0 (for example "D0 ").
 func (b *protocolBuilder) AddFlagUint(flag string, tok uint64) *protocolBuilder {
-	b.buf.WriteString(flag)
-	b.buf.Write(strconv.AppendUint(b.buf.AvailableBuffer(), tok, 10))
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = append(*p, flag...)
+	*p = strconv.AppendUint(*p, tok, 10)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
@@ -187,9 +292,10 @@ func (b *protocolBuilder) AddFlagInt64Present(flag string, tok int64, set bool) 
 	if !set && tok == 0 {
 		return b
 	}
-	b.buf.WriteString(flag)
-	b.buf.Write(strconv.AppendInt(b.buf.AvailableBuffer(), tok, 10))
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = append(*p, flag...)
+	*p = strconv.AppendInt(*p, tok, 10)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
@@ -207,9 +313,10 @@ func (b *protocolBuilder) AddFlagString(flag, tok string) *protocolBuilder {
 		return b
 	}
 
-	b.buf.WriteString(flag)
-	b.buf.WriteString(tok)
-	b.buf.WriteByte(_SpaceByte)
+	p := b.scratch()
+	*p = append(*p, flag...)
+	*p = append(*p, tok...)
+	*p = append(*p, _SpaceByte)
 	return b
 }
 
@@ -221,23 +328,37 @@ func (b *protocolBuilder) AddOpaque(token string, num uint64, numSet bool) *prot
 	return b.AddFlagUintPresent("O", num, numSet)
 }
 
-// build returns a copy of the command bytes, trimming a trailing space and ensuring CRLF.
+func (b *protocolBuilder) finalize() {
+	p := b.scratch()
+	if bytes.HasSuffix(*p, _SpaceBytes) {
+		*p = (*p)[:len(*p)-1]
+	}
+	if !bytes.HasSuffix(*p, _CRLFBytes) {
+		*p = append(*p, _CRLFBytes...)
+	}
+}
+
+// build detaches the command bytes. Call at most once; release then has no buffer.
 func (b *protocolBuilder) build() []byte {
-	data := b.buf.Bytes()
-
-	result := make([]byte, len(data))
-	copy(result, data)
-
-	if bytes.HasSuffix(result, _SpaceBytes) {
-		result = result[:len(result)-1]
+	if b.box == nil {
+		return nil
 	}
+	b.finalize()
+	out := *b.box
+	b.box = nil
+	return out
+}
 
-	if bytes.HasSuffix(result, _CRLFBytes) {
-		return result
+// request builds a pooled request that returns the command buffer on release.
+func (b *protocolBuilder) request(cmd, key []byte) *request {
+	if b.box == nil {
+		return buildRequest(cmd, key, nil)
 	}
-
-	result = append(result, _CRLFBytes...)
-	return result
+	b.finalize()
+	req := buildRequest(cmd, key, *b.box)
+	req.rawBox = b.box
+	b.box = nil
+	return req
 }
 
 // trimCRLF strips a trailing CRLF or LF from line.

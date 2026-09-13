@@ -243,7 +243,7 @@ func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 			}
 
 			var opErr error
-			defer func() { finishConn(cn, opErr) }()
+			defer finishDispatch(cn, &opErr)
 
 			opErr = call(ctx, addr, cn)
 			if opErr != nil {
@@ -374,7 +374,7 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 	if err != nil {
 		return false, wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
 	}
-	defer func() { finishConn(cn, err) }()
+	defer finishDispatch(cn, &err)
 
 	c.enableUDPFraming(node, req, resp)
 	if req.udpEnabled {
@@ -402,6 +402,14 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 		err = wrapRecvError(resp.afterRecv(resp))
 	}
 	return sent, err
+}
+
+func finishDispatch(cn wireConn, errp *error) {
+	var err error
+	if errp != nil {
+		err = *errp
+	}
+	finishConn(cn, err)
 }
 
 // valueLimit is the maximum VALUE/VA body the client will accept from the server.

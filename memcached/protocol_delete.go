@@ -11,7 +11,7 @@ func buildDeleteCommand(key []byte, noReply bool) (*request, *response) {
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	req := buildRequest([]byte("delete"), key, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("delete"), key)
 
 	var resp *response
 	if noReply {

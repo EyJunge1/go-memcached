@@ -22,17 +22,17 @@ func (c *Client) Get(ctx context.Context, keys [][]byte, opts GetOpts) ([]Item, 
 	if opts.Touch != nil {
 		exp = *opts.Touch
 	}
-	ptrs, err := c.getFromNodes(ctx, command, exp, keys, withCAS)
-	out := make([]Item, 0, len(ptrs))
-	for _, p := range ptrs {
-		if p == nil {
-			continue
+	items, err := c.getFromNodes(ctx, command, exp, keys, withCAS)
+	if c.hasNS() {
+		for i := range items {
+			items[i].Key = c.stripNS(items[i].Key)
 		}
-		it := *p
-		it.Key = c.stripNS(it.Key)
-		out = append(out, it)
 	}
-	return out, err
+	return items, err
+}
+
+func (c *Client) hasNS() bool {
+	return c != nil && c.rt != nil && c.rt.namespace != ""
 }
 
 // getCommand selects get, gets, gat, or gats from GetOpts.
@@ -50,46 +50,31 @@ func getCommand(opts GetOpts) (command string, withCAS bool) {
 }
 
 // getFromAddr fetches keys from one node and parses VALUE replies.
-func (c *Client) getFromAddr(ctx context.Context, node *addr, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
+func (c *Client) getFromAddr(ctx context.Context, node *addr, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]Item, error) {
 	var req *request
-	var resp *response
 	if command == "gats" || command == "gat" {
-		req, resp = buildGetAndTouchesCommand(command, expiry, keys...)
+		req = encodeGetAndTouchesCommand(command, expiry, keys...)
 	} else {
-		req, resp = buildGetsCommand(command, keys...)
+		req = encodeGetsCommand(command, keys...)
 	}
+	resp := buildRetrievalResponse(len(keys), withCAS)
 	defer releaseReqAndResp(req, resp)
 
-	var items []*Item
-	resp.afterRecv = func(r *response) error {
-		parsed, err := parseValueItems(r.rawLines, false, withCAS)
-		if err != nil {
-			return fmt.Errorf("parse values failed: %w", err)
-		}
-		items = parsed
-		return nil
-	}
 	if err := c.dispatchToAddr(ctx, node, req, resp); err != nil {
 		return nil, err
 	}
+	items := resp.items
+	resp.items = nil
 	return items, nil
 }
 
 // getFromNodes groups keys by picker and fetches each node concurrently.
-func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]*Item, error) {
+func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptime, keys [][]byte, withCAS bool) ([]Item, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if len(keys) == 0 {
-		return []*Item{}, nil
-	}
-
-	wired := make([][]byte, len(keys))
-	for i, key := range keys {
-		wired[i] = c.nsBytes(key)
-		if err := validateKeyAndValue(wired[i], nil); err != nil {
-			return nil, err
-		}
+		return []Item{}, nil
 	}
 
 	addrs, picker := c.snapshotCluster()
@@ -97,6 +82,23 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = c.liveAddrs(addrs)
+
+	wired, err := c.wireGetKeys(keys)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(addrs) == 1 {
+		return c.getFromAddr(ctx, addrs[0], command, expiry, wired, withCAS)
+	}
+
+	if len(wired) == 1 {
+		addr, err := picker.Pick(addrs, wired[0])
+		if err != nil {
+			return nil, fmt.Errorf("pick node failed: %w", err)
+		}
+		return c.getFromAddr(ctx, addr, command, expiry, wired, withCAS)
+	}
 
 	groups := make(map[*addr][][]byte, len(addrs))
 	for _, key := range wired {
@@ -114,7 +116,7 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 	}
 
 	type nodeResult struct {
-		items []*Item
+		items []Item
 		err   error
 	}
 	ch := make(chan nodeResult, len(groups))
@@ -125,7 +127,7 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 		}(target, nodeKeys)
 	}
 
-	var items []*Item
+	var items []Item
 	var errs []error
 	for range groups {
 		result := <-ch
@@ -135,4 +137,24 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 		}
 	}
 	return items, errors.Join(errs...)
+}
+
+// wireGetKeys prefixes keys with the namespace when one is configured.
+func (c *Client) wireGetKeys(keys [][]byte) ([][]byte, error) {
+	if !c.hasNS() {
+		for _, key := range keys {
+			if err := validateKeyAndValue(key, nil); err != nil {
+				return nil, err
+			}
+		}
+		return keys, nil
+	}
+	wired := make([][]byte, len(keys))
+	for i, key := range keys {
+		wired[i] = c.nsBytes(key)
+		if err := validateKeyAndValue(wired[i], nil); err != nil {
+			return nil, err
+		}
+	}
+	return wired, nil
 }

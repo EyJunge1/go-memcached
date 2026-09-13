@@ -30,10 +30,7 @@ func buildStatsCommand(subCommand string) (*request, *response) {
 		b.AddString(subCommand)
 	}
 
-	raw := b.AddCRLF().
-		build()
-
-	req := buildRequest([]byte("stats"), nil, raw)
+	req := b.AddCRLF().request([]byte("stats"), nil)
 	if subCommand == "reset" {
 		return req, buildLimitedLineResponse(1)
 	}
@@ -46,7 +43,7 @@ func buildStatsCommand(subCommand string) (*request, *response) {
 func buildStatsDetailCommand(mode string) (*request, *response) {
 	b := newProtocolBuilder().AddString("stats").AddString("detail").AddString(mode)
 	defer b.release()
-	req := buildRequest([]byte("stats"), nil, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("stats"), nil)
 	if mode == "dump" {
 		return req, buildSpecEndLineResponse(_EndCRLFBytes, 64)
 	}

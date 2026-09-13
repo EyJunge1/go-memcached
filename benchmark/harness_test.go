@@ -146,6 +146,7 @@ func newRainycape(tb testing.TB) *rainycape.Client {
 		tb.Skipf("rainycape: %v", err)
 	}
 	tb.Cleanup(func() { _ = c.Close() })
+	c.SetTimeout(5 * time.Second)
 	if err := c.Set(&rainycape.Item{Key: "b/rainycape/probe", Value: []byte("v")}); err != nil {
 		tb.Skipf("rainycape binary not available: %v", err)
 	}
@@ -180,14 +181,19 @@ type setGetter interface {
 	get(ctx context.Context, key string) error
 }
 
-type oursSG struct{ c *ours.Client }
-
-func (s oursSG) set(ctx context.Context, key string, value []byte) error {
-	return s.c.Store(ctx, ours.Item{Key: []byte(key), Value: value})
+type oursSG struct {
+	c   *ours.Client
+	one [1][]byte
 }
 
-func (s oursSG) get(ctx context.Context, key string) error {
-	items, err := s.c.Get(ctx, [][]byte{[]byte(key)}, ours.GetOpts{})
+func (s *oursSG) set(ctx context.Context, key string, value []byte) error {
+	s.one[0] = append(s.one[0][:0], key...)
+	return s.c.Store(ctx, ours.Item{Key: s.one[0], Value: value})
+}
+
+func (s *oursSG) get(ctx context.Context, key string) error {
+	s.one[0] = append(s.one[0][:0], key...)
+	items, err := s.c.Get(ctx, s.one[:], ours.GetOpts{})
 	if err != nil {
 		return err
 	}
@@ -195,6 +201,14 @@ func (s oursSG) get(ctx context.Context, key string) error {
 		return errMiss
 	}
 	return nil
+}
+
+// worker returns a setGetter that does not share per-call scratch with other goroutines.
+func worker(sg setGetter) setGetter {
+	if o, ok := sg.(*oursSG); ok {
+		return &oursSG{c: o.c}
+	}
+	return sg
 }
 
 type yeqownSG struct{ c yeqown.Client }
@@ -237,7 +251,7 @@ type tcpFactory struct {
 
 func tcpFactories() []tcpFactory {
 	return []tcpFactory{
-		{name: "ours", open: func(tb testing.TB) setGetter { return oursSG{c: newOursTCP(tb)} }},
+		{name: "ours", open: func(tb testing.TB) setGetter { return &oursSG{c: newOursTCP(tb)} }},
 		{name: "yeqown", open: func(tb testing.TB) setGetter { return yeqownSG{c: newYeqown(tb, tcpAddr())} }},
 		{name: "bradfitz", open: func(tb testing.TB) setGetter { return bradfitzSG{c: newBradfitz(tb)} }},
 		{name: "rainycape", open: func(tb testing.TB) setGetter { return rainycapeSG{c: newRainycape(tb)} }},

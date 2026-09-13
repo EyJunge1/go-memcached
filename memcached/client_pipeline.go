@@ -106,6 +106,22 @@ func shouldDiscardPipelineConn(err error) bool {
 	return shouldDiscardConn(err)
 }
 
+func finishPipelineConn(cn wireConn, errp *error) {
+	var err error
+	if errp != nil {
+		err = *errp
+	}
+	if shouldDiscardPipelineConn(err) {
+		if pool := cn.getConnPool(); pool != nil {
+			_ = pool.discard(cn)
+			return
+		}
+		_ = cn.Close()
+		return
+	}
+	_ = cn.release()
+}
+
 // Run writes every queued frame, then reads every reply. Distinct nodes run concurrently.
 func (p *Pipeline) Run(ctx context.Context) error {
 	if p == nil || p.c == nil {
@@ -170,22 +186,14 @@ func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error 
 		return wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
 	}
 	var opErr error
-	defer func() {
-		if shouldDiscardPipelineConn(opErr) {
-			if pool := cn.getConnPool(); pool != nil {
-				_ = pool.discard(cn)
-				return
-			}
-			_ = cn.Close()
-			return
-		}
-		_ = cn.release()
-	}()
+	defer finishPipelineConn(cn, &opErr)
 
-	stop := watchContextCancel(ctx, cn)
-	defer stop()
+	if ctx != nil && ctx.Done() != nil {
+		stop := watchContextCancel(ctx, cn)
+		defer stop()
+	}
 	if selectProximateDeadline(ctx, cn, p.c.rt.writeTimeout, clock, false) {
-		defer func() { _ = cn.setWriteDeadline(zeroTime) }()
+		defer clearWriteDeadline(cn)
 	}
 	for _, op := range ops {
 		if err = op.req.write(cn); err != nil {

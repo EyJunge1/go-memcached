@@ -21,8 +21,8 @@ func buildStorageCommand(
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	raw := b.AddCRLF().build()
-	req := buildRequest([]byte(command), key, raw)
+	b.AddCRLF()
+	req := b.request(verbBytes(command), key)
 	req.body = value
 	req.tail = _CRLFBytes
 
@@ -53,8 +53,8 @@ func buildCasCommand(
 		b.AddBytes(_NoReplyBytes)
 	}
 
-	raw := b.AddCRLF().build()
-	req := buildRequest([]byte("cas"), key, raw)
+	b.AddCRLF()
+	req := b.request(_CasBytes, key)
 	req.body = value
 	req.tail = _CRLFBytes
 

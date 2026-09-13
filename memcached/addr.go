@@ -11,15 +11,18 @@ type addr struct {
 	Network string
 	Address string
 	Weight  uint32 // 0 is treated as 1 by Ketama
+	ident   string
 }
 
 // newAddrWeighted returns a cluster addr with the given network, host, and Ketama weight.
 func newAddrWeighted(network, address string, weight uint32) *addr {
-	return &addr{
+	a := &addr{
 		Network: network,
 		Address: address,
 		Weight:  weight,
 	}
+	a.ident = network + "\x00" + address
+	return a
 }
 
 // ketamaWeight returns the node's Ketama weight, treating a nil addr or zero weight as 1.
@@ -32,7 +35,10 @@ func (a *addr) ketamaWeight() uint32 {
 
 // id returns a stable node identity of network and address joined by a NUL.
 func (a *addr) id() string {
-	return a.Network + "\x00" + a.Address
+	if a.ident == "" {
+		a.ident = a.Network + "\x00" + a.Address
+	}
+	return a.ident
 }
 
 // dial opens a socket to this addr using dialFn when set, otherwise net.Dialer.

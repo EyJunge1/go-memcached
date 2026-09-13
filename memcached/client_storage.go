@@ -121,7 +121,7 @@ func readQuietFault(ctx context.Context, cn wireConn) error {
 		}
 	}
 	_ = cn.setReadDeadline(deadline)
-	defer func() { _ = cn.setReadDeadline(zeroTime) }()
+	defer clearReadDeadline(cn)
 	line, err := cn.readLine('\n')
 	if err != nil {
 		return nil

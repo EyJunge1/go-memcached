@@ -10,7 +10,7 @@ func buildFlushAllCommand(delay Exptime, noReply bool) (*request, *response) {
 	if noReply {
 		b.AddBytes(_NoReplyBytes)
 	}
-	req := buildRequest([]byte("flush_all"), nil, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("flush_all"), nil)
 
 	var resp *response
 	if noReply {

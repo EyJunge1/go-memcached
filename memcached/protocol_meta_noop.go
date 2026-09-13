@@ -6,7 +6,7 @@ func buildMetaNoopCommand(f MetaNoop) (*request, *response) {
 	defer b.release()
 	b.AddFlagString("P", f.P)
 	b.AddFlagString("L", f.L)
-	req := buildRequest([]byte("mn"), nil, b.AddCRLF().build())
+	req := b.AddCRLF().request([]byte("mn"), nil)
 	resp := buildLimitedLineResponse(1)
 	return req, resp
 }

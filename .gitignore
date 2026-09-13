@@ -2,4 +2,5 @@
 .DS_Store
 coverage.txt
 coverage.html
+*.test
 benchmark/results/
