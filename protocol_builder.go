@@ -1,14 +1,19 @@
 package memcached
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,34 +52,54 @@ var (
 // NS <flags>*\r\n or NS\r\n
 // NF <flags>*\r\n or NF\r\n
 func forecastCommonFaultLine(line []byte) error {
+	if err := prefixedProtocolError(line, "CLIENT_ERROR", ErrClientError); err != nil {
+		return err
+	}
+	if err := prefixedProtocolError(line, "SERVER_ERROR", ErrServerError); err != nil {
+		return err
+	}
 	switch {
-	case bytes.Equal(line, []byte("ERROR\r\n")):
+	case bytes.Equal(trimCRLF(line), []byte("ERROR")):
 		return ErrNonexistentCommand
-	case bytes.HasPrefix(line, []byte("CLIENT_ERROR")):
-		message := string(line[12 : len(line)-2])
-		return fmt.Errorf("%s: %w", message, ErrClientError)
-	case bytes.HasPrefix(line, []byte("SERVER_ERROR")):
-		message := string(line[12 : len(line)-2])
-		return fmt.Errorf("%s: %w", message, ErrServerError)
-	case bytes.Equal(line, []byte("NOT_FOUND\r\n")):
+	case bytes.Equal(trimCRLF(line), []byte("NOT_FOUND")):
 		return ErrNotFound
-	case bytes.Equal(line, []byte("EXISTS\r\n")):
+	case bytes.Equal(trimCRLF(line), []byte("EXISTS")):
 		return ErrExists
-	case bytes.Equal(line, []byte("NOT_STORED\r\n")):
+	case bytes.Equal(trimCRLF(line), []byte("NOT_STORED")):
 		return ErrNotStored
-	//	meta ERROR lines
-	case bytes.HasPrefix(line, []byte("NF")):
+	// meta status codes: exact token or token plus flags, never prefixes of END.
+	case metaStatusCode(line, "NF"):
 		return ErrNotFound
-	case bytes.HasPrefix(line, []byte("NS")):
+	case metaStatusCode(line, "NS"):
 		return ErrNotStored
-	case bytes.HasPrefix(line, []byte("EX")):
+	case metaStatusCode(line, "EX"):
 		return ErrExists
-	case bytes.HasPrefix(line, []byte("EN")):
+	case metaStatusCode(line, "EN"):
 		return ErrNotFound
-
 	}
 
 	return nil
+}
+
+func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
+	trimmed := trimCRLF(line)
+	p := []byte(prefix)
+	if !bytes.HasPrefix(trimmed, p) {
+		return nil
+	}
+	rest := trimmed[len(p):]
+	if len(rest) > 0 && rest[0] != ' ' {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", bytes.TrimSpace(rest), sentinel)
+}
+
+func metaStatusCode(line []byte, code string) bool {
+	trimmed := trimCRLF(line)
+	if bytes.Equal(trimmed, []byte(code)) {
+		return true
+	}
+	return bytes.HasPrefix(trimmed, []byte(code+" "))
 }
 
 const (
@@ -167,6 +192,12 @@ func (b *protocolBuilder) AddUint(i uint64) *protocolBuilder {
 	return b
 }
 
+func (b *protocolBuilder) AddInt64(i int64) *protocolBuilder {
+	b.buf.WriteString(strconv.FormatInt(i, 10))
+	b.buf.WriteByte(_SpaceByte)
+	return b
+}
+
 func (b *protocolBuilder) AddCRLF() *protocolBuilder {
 	// trim space if needed
 	if bytes.HasSuffix(b.buf.Bytes(), _SpaceBytes) {
@@ -189,17 +220,28 @@ func (b *protocolBuilder) AddFlagBool(flag string, v bool) *protocolBuilder {
 	return b
 }
 
-// AddFlagUint adds a flag with uint64 value to the protocol message.
-// e.g. AddFlagUint("c", 1) will append "c1 " to the protocol message.
+// AddFlagUint adds a flag with uint64 value, including token 0 (e.g. "D0 ").
 func (b *protocolBuilder) AddFlagUint(flag string, tok uint64) *protocolBuilder {
-	if tok == 0 {
-		return b
-	}
-
 	b.buf.WriteString(flag)
 	b.buf.WriteString(strconv.FormatUint(tok, 10))
 	b.buf.WriteByte(_SpaceByte)
 	return b
+}
+
+// AddFlagUintPresent writes the flag when it was set or the token is non-zero.
+func (b *protocolBuilder) AddFlagUintPresent(flag string, tok uint64, set bool) *protocolBuilder {
+	if !set && tok == 0 {
+		return b
+	}
+	return b.AddFlagUint(flag, tok)
+}
+
+// AddFlagUintNonZero writes the flag only when tok != 0 (used for F0 omit).
+func (b *protocolBuilder) AddFlagUintNonZero(flag string, tok uint64) *protocolBuilder {
+	if tok == 0 {
+		return b
+	}
+	return b.AddFlagUint(flag, tok)
 }
 
 func (b *protocolBuilder) AddFlagString(flag, tok string) *protocolBuilder {
@@ -211,6 +253,13 @@ func (b *protocolBuilder) AddFlagString(flag, tok string) *protocolBuilder {
 	b.buf.WriteString(tok)
 	b.buf.WriteByte(_SpaceByte)
 	return b
+}
+
+func (b *protocolBuilder) AddOpaque(token string, num uint64, numSet bool) *protocolBuilder {
+	if token != "" {
+		return b.AddFlagString("O", token)
+	}
+	return b.AddFlagUintPresent("O", num, numSet)
 }
 
 func (b *protocolBuilder) build() []byte {
@@ -232,7 +281,13 @@ func (b *protocolBuilder) build() []byte {
 }
 
 func trimCRLF(line []byte) []byte {
-	return bytes.TrimSuffix(line, _CRLFBytes)
+	if n := len(line); n >= 2 && line[n-2] == '\r' && line[n-1] == '\n' {
+		return line[:n-2]
+	}
+	if n := len(line); n >= 1 && line[n-1] == '\n' {
+		return line[:n-1]
+	}
+	return line
 }
 
 var requestPool = sync.Pool{
@@ -254,6 +309,7 @@ type request struct {
 	// this field is used to indicate whether the request is UDP enabled.
 	// And it's set by the memcached client before sending the request.
 	udpEnabled bool
+	udpReqID   uint16
 }
 
 func buildRequest(cmd []byte, key []byte, raw []byte) *request {
@@ -269,6 +325,7 @@ func (req *request) release() {
 	req.key = nil
 	req.raw = nil
 	req.udpEnabled = false
+	req.udpReqID = 0
 
 	requestPool.Put(req)
 }
@@ -277,6 +334,8 @@ func (req *request) send(ctx context.Context, rr memcachedConn, writeTimeout tim
 	if has := selectProximateDeadline(ctx, rr, writeTimeout, nowFunc, false); has {
 		defer func() { _ = rr.setWriteDeadline(zeroTime) }()
 	}
+	stop := watchContextCancel(ctx, rr)
+	defer stop()
 
 	if req.udpEnabled {
 		return req.sendUDP(rr)
@@ -286,27 +345,57 @@ func (req *request) send(ctx context.Context, rr memcachedConn, writeTimeout tim
 	return err
 }
 
-// udpHeader is the header of UDP datagram, now it's simply set to fixed value.
-var udpHeader = []byte{
-	0x00,
-	0x01, // Request ID
-	0x00,
-	0x00, // Sequence Number
-	0x00,
-	0x01, // Total Number of datagrams in this message
-	0x00,
-	0x00, // Reserved for future use: must be set to 0
+func watchContextCancel(ctx context.Context, rr memcachedConn) (stop func()) {
+	if ctx == nil {
+		return func() {}
+	}
+	cancelWatch := context.AfterFunc(ctx, func() {
+		now := nowFunc()
+		_ = rr.setReadDeadline(now)
+		_ = rr.setWriteDeadline(now)
+	})
+	return func() { _ = cancelWatch() }
+}
+
+const udpHeaderSize = 8
+
+var udpRequestID atomic.Uint32
+
+func init() {
+	seedUDPRequestID()
+}
+
+func seedUDPRequestID() {
+	var b [2]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return
+	}
+	udpRequestID.Store(uint32(binary.BigEndian.Uint16(b[:])))
+}
+
+func nextUDPRequestID() uint16 {
+	// 16-bit field; skip 0 so an unset/spoofed header never matches a live request.
+	for {
+		id := uint16(udpRequestID.Add(1) & 0xffff) //nolint:gosec // G115: protocol field is 16-bit
+		if id != 0 {
+			return id
+		}
+	}
+}
+
+func isUDPNetwork(network string) bool {
+	return network == "udp" || network == "udp4" || network == "udp6"
 }
 
 // sendUDP sends the request to the memcached server.
 // https://github.com/memcached/memcached/blob/master/doc/protocol.txt#L1875-L1914
 func (req *request) sendUDP(rr memcachedConn) (err error) {
-	// 0-1 Request ID
-	// 2-3 Sequence Number
-	// 4-5 Total Number of datagrams in this message
-	// 6-7 Reserved for future use: must be set to 0
-	datagram := make([]byte, 0, 8+len(req.raw))
-	datagram = append(datagram, udpHeader...)
+	header := make([]byte, udpHeaderSize)
+	binary.BigEndian.PutUint16(header[0:2], req.udpReqID)
+	binary.BigEndian.PutUint16(header[2:4], 0)
+	binary.BigEndian.PutUint16(header[4:6], 1)
+	datagram := make([]byte, 0, udpHeaderSize+len(req.raw))
+	datagram = append(datagram, header...)
 	datagram = append(datagram, req.raw...)
 
 	_, err = rr.Write(datagram)
@@ -339,6 +428,8 @@ const (
 	// the client should read lines from response until the specific end line.
 	// The delimiter is '\n'.
 	endIndicatorSpecificEndLine
+	// endIndicatorQuietBarrier reads until MN, collecting quiet (non-nominal) replies.
+	endIndicatorQuietBarrier
 )
 
 // response represents a structural response from memcached server.
@@ -363,6 +454,11 @@ type response struct {
 	// This field is used to indicate whether the request is UDP enabled.
 	// And it's set by the memcached client before sending the request.
 	udpEnabled bool
+	udpReqID   uint16
+
+	// afterRecv runs after a successful frame read and before the conn is
+	// returned to the pool, so parse/expect failures can discard a desynced conn.
+	afterRecv func(*response) error
 }
 
 func buildNoReplyResponse() *response {
@@ -397,25 +493,72 @@ func (resp *response) release() {
 	resp.specEndLine = nil
 	resp.rawLines = nil
 	resp.udpEnabled = false
+	resp.udpReqID = 0
+	resp.afterRecv = nil
 	responsePool.Put(resp)
+}
+
+func buildQuietBarrierResponse() *response {
+	resp := buildSpecEndLineResponse(_MetaMNCRLFBytes, 4)
+	resp.endIndicator = endIndicatorQuietBarrier
+	return resp
+}
+
+func appendMetaQuietBarrier(raw []byte) []byte {
+	out := make([]byte, 0, len(raw)+4)
+	out = append(out, raw...)
+	out = append(out, []byte("mn\r\n")...)
+	return out
+}
+
+type protocolReader interface {
+	readLine(delim byte) ([]byte, error)
+	readExact(n int) ([]byte, error)
+}
+
+type payloadReader struct {
+	r *bufio.Reader
+}
+
+func newPayloadReader(payload []byte) *payloadReader {
+	return &payloadReader{r: bufio.NewReader(bytes.NewReader(payload))}
+}
+
+func (p *payloadReader) readLine(delim byte) ([]byte, error) {
+	return p.r.ReadBytes(delim)
+}
+
+func (p *payloadReader) readExact(n int) ([]byte, error) {
+	buf := make([]byte, n)
+	_, err := io.ReadFull(p.r, buf)
+	return buf, err
 }
 
 func (resp *response) recv(ctx context.Context, rr memcachedConn, readTimeout time.Duration) error {
 	if has := selectProximateDeadline(ctx, rr, readTimeout, nowFunc, true); has {
 		defer func() { _ = rr.setReadDeadline(zeroTime) }()
 	}
+	stop := watchContextCancel(ctx, rr)
+	defer stop()
+
+	var reader protocolReader = rr
+	if resp.udpEnabled {
+		payload, err := assembleUDP(rr, resp.udpReqID)
+		if err != nil {
+			return err
+		}
+		reader = newPayloadReader(payload)
+	}
 
 	switch resp.endIndicator {
 	case endIndicatorNoReply:
 		return nil
 	case endIndicatorLimitedLines:
-		// FIXME(@yeqown): read limited line would block waiting for the response
-		//  But there's no more lines to read, since error encountered.
-		// 	.e.g: "EN kfoo\r\n" means the key "foo" does not exist, but the client
-		//  maybe want 2 lines, but only 1 line to read.
-		return resp.read1(rr)
+		return resp.read1(reader)
 	case endIndicatorSpecificEndLine:
-		return resp.read2(rr)
+		return resp.read2(reader, false)
+	case endIndicatorQuietBarrier:
+		return resp.read2(reader, true)
 	default:
 	}
 
@@ -459,17 +602,111 @@ func selectProximateDeadline(
 	return has
 }
 
-func parseUDPHeader(line []byte) []byte {
-	if len(line) < 8 {
-		return line
+func assembleUDP(rr memcachedConn, wantID uint16) ([]byte, error) {
+	var slots [][]byte
+	var total int
+	got := 0
+	for {
+		dgram, err := rr.readDatagram()
+		if err != nil {
+			return nil, fmt.Errorf("udp datagram: %w", err)
+		}
+		if len(dgram) < udpHeaderSize {
+			return nil, fmt.Errorf("short udp header: %w", ErrMalformedResponse)
+		}
+		id := binary.BigEndian.Uint16(dgram[0:2])
+		if id != wantID {
+			continue
+		}
+		seq := int(binary.BigEndian.Uint16(dgram[2:4]))
+		tot := int(binary.BigEndian.Uint16(dgram[4:6]))
+		if tot <= 0 {
+			return nil, fmt.Errorf("invalid udp total: %w", ErrMalformedResponse)
+		}
+		if slots == nil {
+			slots = make([][]byte, tot)
+			total = tot
+		} else if tot != total {
+			return nil, fmt.Errorf("udp total mismatch: %w", ErrMalformedResponse)
+		}
+		if seq < 0 || seq >= total {
+			return nil, fmt.Errorf("udp sequence out of range: %w", ErrMalformedResponse)
+		}
+		if slots[seq] != nil {
+			continue
+		}
+		slots[seq] = dgram[udpHeaderSize:]
+		got++
+		if got == total {
+			n := 0
+			for _, p := range slots {
+				n += len(p)
+			}
+			out := make([]byte, 0, n)
+			for _, p := range slots {
+				out = append(out, p...)
+			}
+			return out, nil
+		}
 	}
-
-	// cut off the first 8 bytes
-	return line[8:]
 }
 
-// read1 reads the response from the connection with limited lines.
-func (resp *response) read1(rr memcachedConn) error {
+func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
+	trimmed := trimCRLF(line)
+	switch {
+	case bytes.HasPrefix(trimmed, []byte("VALUE ")):
+		item := &Item{}
+		size, err = parseValueLine(trimmed, item, true)
+		return size, true, err
+	case bytes.HasPrefix(trimmed, []byte("VA ")):
+		rest := trimmed[3:]
+		end := bytes.IndexByte(rest, ' ')
+		if end < 0 {
+			end = len(rest)
+		}
+		size, err = parseUintFromBytes(rest[:end])
+		if err != nil {
+			return 0, true, fmt.Errorf("invalid VA size: %w", ErrMalformedResponse)
+		}
+		return size, true, nil
+	default:
+		return 0, false, nil
+	}
+}
+
+func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consumed int, err error) {
+	size, has, err := protocolDataBlockSize(header)
+	if err != nil {
+		return 0, fmt.Errorf("data block size: %w", err)
+	}
+	if !has {
+		resp.rawLines = append(resp.rawLines, header)
+		return 1, nil
+	}
+	if size > uint64(maxValueSize) {
+		return 0, fmt.Errorf("data block too large: %w", ErrMalformedResponse)
+	}
+	payload, err := rr.readExact(int(size) + 2)
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, fmt.Errorf("short data block: %w", ErrMalformedResponse)
+		}
+		return 0, fmt.Errorf("read data block: %w", err)
+	}
+	if !bytes.HasSuffix(payload, _CRLFBytes) {
+		return 0, fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+	}
+	if uint64(len(payload)) != size+2 {
+		return 0, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
+	}
+	resp.rawLines = append(resp.rawLines, header)
+	resp.rawLines = append(resp.rawLines, payload)
+	return 2, nil
+}
+
+// read1 reads the response from the connection with limited protocol lines.
+// VALUE/VA payloads are length-framed and count as the following line.
+func (resp *response) read1(rr protocolReader) error {
 	read := 0
 	for read < int(resp.limitedLines) {
 		line, err := rr.readLine('\n')
@@ -477,59 +714,57 @@ func (resp *response) read1(rr memcachedConn) error {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 
-		if read == 0 {
-			if resp.udpEnabled {
-				line = parseUDPHeader(line)
-			}
-
-			if err = forecastCommonFaultLine(line); err != nil {
-				return err
-			}
+		if err = forecastCommonFaultLine(line); err != nil {
+			return err
 		}
 
-		resp.rawLines = append(resp.rawLines, line)
-		read++
+		consumed, err := resp.appendDataBlock(rr, line)
+		if err != nil {
+			return err
+		}
+		read += consumed
 	}
 
 	return nil
 }
 
-// read2 reads the response from the connection with specific end line.
-func (resp *response) read2(rr memcachedConn) error {
-	read := 0
+// read2 reads protocol lines until specEndLine. Data blocks are length-framed.
+// When collectFaults is set, EX/NF/NS/CLIENT_ERROR stay on the wire until MN.
+func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 	for {
-		// FIXME(@yeqown): read line would cost too much capacity.
 		line, err := rr.readLine('\n')
 		if err != nil {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 
-		if read == 0 && resp.udpEnabled {
-			line = parseUDPHeader(line)
-		}
-
-		// FIXED(@yeqown): The end line also should be added to the rawLines.
 		if bytes.Equal(line, resp.specEndLine) {
 			resp.rawLines = append(resp.rawLines, line)
 			break
 		}
 
 		if err = forecastCommonFaultLine(line); err != nil {
-			return err
+			if !collectFaults || errors.Is(err, ErrServerError) {
+				return err
+			}
 		}
 
-		resp.rawLines = append(resp.rawLines, line)
-		read++
+		if _, err = resp.appendDataBlock(rr, line); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// expect checks the response from the server is expected or not.
-// if the response is not expected, it returns error.
-//
-// The response is expected if the response is equal to the line.
-func (resp *response) expect(line []byte) error {
+// mapStorageReply maps a storage-class reply (set/add/replace/append/prepend/cas).
+// STORED is success; NOT_STORED/EXISTS/NOT_FOUND stay protocol sentinels so the
+// pooled conn is released. Anything else is malformed.
+func mapStorageReply(resp *response) error {
+	return mapStatusLine(resp, _StoredCRLFBytes)
+}
+
+// mapStatusLine accepts want, otherwise protocol sentinels from forecast, else malformed.
+func mapStatusLine(resp *response, want []byte) error {
 	if resp.endIndicator == endIndicatorNoReply {
 		return nil
 	}
@@ -537,15 +772,25 @@ func (resp *response) expect(line []byte) error {
 		return fmt.Errorf("expect only 1 line, but got %d: %w", n, ErrMalformedResponse)
 	}
 
-	if bytes.Equal(resp.rawLines[0], line) {
+	line := resp.rawLines[0]
+	if bytes.Equal(line, want) || bytes.Equal(trimCRLF(line), trimCRLF(want)) {
 		return nil
 	}
-
-	message := "unexpected response: "
-	if len(resp.rawLines[0]) <= 256 {
-		return errors.New(message + string(resp.rawLines[0]))
+	if err := forecastCommonFaultLine(line); err != nil {
+		return err
 	}
-	return errors.New(message + string(resp.rawLines[0]))
+
+	snippet := line
+	if len(snippet) > 256 {
+		snippet = snippet[:256]
+	}
+	return fmt.Errorf("unexpected response: %s: %w", snippet, ErrMalformedResponse)
+}
+
+func expectLine(want []byte) func(*response) error {
+	return func(resp *response) error {
+		return mapStatusLine(resp, want)
+	}
 }
 
 func base64Encode(src []byte) []byte {

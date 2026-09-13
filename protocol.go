@@ -50,12 +50,25 @@ type MetaItem struct {
 	// Size is the size of the stored item on success.
 	// use MetaGetFlagReturnSize() or MetaSetFlagReturnSize() to get this value.
 	Size uint64
-	// Opaque is the opaque value, consumes a token and copies back with response.
+	// Opaque is the opaque value when the token is decimal.
 	// use MetaGetFlagOpaque(token) to get this value.
 	Opaque uint64
+	// OpaqueToken is the raw opaque token (up to 32 bytes).
+	// use MetaGetFlagOpaqueToken(token) to request a string token.
+	OpaqueToken string
 	// HitBefore is the flag to return whether item has been hit before as a 0 or 1.
 	// use MetaGetFlagReturnHitBefore() to get this value.
 	HitBefore bool
+	// Won is set when the server returned recache flag W.
+	Won bool
+	// Stale is set when the server returned stale flag X.
+	Stale bool
+	// RecacheBusy is set when the server returned winning-already-sent flag Z.
+	RecacheBusy bool
+	// CASMatched is true when MetaGetFlagCheckCAS was used with a value
+	// request (v) and the server returned HD (CAS still matches).
+	CASMatched bool
+	gotHD      bool
 }
 
 func (m *MetaItem) String() string {
@@ -68,7 +81,12 @@ func (m *MetaItem) String() string {
 		" LastAccessedTime:" + strconv.FormatInt(m.LastAccessedTime, 10) +
 		" Size:" + strconv.FormatUint(m.Size, 10) +
 		" Opaque:" + strconv.FormatUint(m.Opaque, 10) +
+		" OpaqueToken:" + m.OpaqueToken +
 		" HitBefore:" + strconv.FormatBool(m.HitBefore) +
+		" Won:" + strconv.FormatBool(m.Won) +
+		" Stale:" + strconv.FormatBool(m.Stale) +
+		" RecacheBusy:" + strconv.FormatBool(m.RecacheBusy) +
+		" CASMatched:" + strconv.FormatBool(m.CASMatched) +
 		"}"
 }
 
@@ -96,8 +114,20 @@ func buildVersionCommand() (*request, *response) {
 	return req, resp
 }
 
-func buildFlushAllCommand(noReply bool) (*request, *response) {
-	req := buildRequest([]byte("flush_all"), nil, []byte("flush_all\r\n"))
+func buildFlushAllCommand(delay time.Duration, noReply bool) (*request, *response) {
+	b := newProtocolBuilder().AddString("flush_all")
+	defer b.release()
+	if delay > 0 {
+		sec := delay / time.Second
+		if sec == 0 {
+			sec = 1
+		}
+		b.AddInt64(int64(sec))
+	}
+	if noReply {
+		b.AddBytes(_NoReplyBytes)
+	}
+	req := buildRequest([]byte("flush_all"), nil, b.AddCRLF().build())
 
 	var resp *response
 	if noReply {
@@ -115,6 +145,26 @@ func buildFlushAllCommand(noReply bool) (*request, *response) {
 //
 // <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 // <data block>\r\n
+const maxRelativeExpiry = 30 * 24 * time.Hour
+
+// expiryToken maps a Go duration onto memcached's exptime integer.
+// 0 stays 0 (never expire). Sub-second positives become 1. Negatives become -1
+// (immediately expired). Values above 30 days become now+ttl Unix timestamps.
+func expiryToken(d time.Duration) int64 {
+	switch {
+	case d == 0:
+		return 0
+	case d < 0:
+		return -1
+	case d < time.Second:
+		return 1
+	case d > maxRelativeExpiry:
+		return nowFunc().Add(d).Unix()
+	default:
+		return int64(d / time.Second)
+	}
+}
+
 func buildStorageCommand(
 	command, key string,
 	value []byte,
@@ -124,10 +174,10 @@ func buildStorageCommand(
 ) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command).
-		AddString(key).                     // key
-		AddUint(uint64(flags)).             // flags
-		AddUint(uint64(exptime.Seconds())). // exptime
-		AddInt(len(value))                  // bytes
+		AddString(key).                 // key
+		AddUint(uint64(flags)).         // flags
+		AddInt64(expiryToken(exptime)). // exptime
+		AddInt(len(value))              // bytes
 	defer b.release()
 
 	if noReply {
@@ -179,7 +229,7 @@ func buildTouchCommand(key string, expTime time.Duration, noReply bool) (*reques
 	b := newProtocolBuilder().
 		AddString("touch").
 		AddString(key).
-		AddUint(uint64(expTime.Seconds()))
+		AddInt64(expiryToken(expTime))
 	defer b.release()
 
 	if noReply {
@@ -203,12 +253,12 @@ func buildCasCommand(
 	key string, value []byte, flag uint32, expTime time.Duration, casUnique uint64, noReply bool,
 ) (*request, *response) {
 	b := newProtocolBuilder().
-		AddString("cas").                   // command
-		AddString(key).                     // key
-		AddUint(uint64(flag)).              // flags
-		AddUint(uint64(expTime.Seconds())). // exptime
-		AddInt(len(value)).                 // bytes
-		AddUint(casUnique)                  // cas unique
+		AddString("cas").               // command
+		AddString(key).                 // key
+		AddUint(uint64(flag)).          // flags
+		AddInt64(expiryToken(expTime)). // exptime
+		AddInt(len(value)).             // bytes
+		AddUint(casUnique)              // cas unique
 	defer b.release()
 
 	if noReply {
@@ -244,7 +294,11 @@ func buildGetsCommand(command string, keys ...string) (*request, *response) {
 	}
 	b.AddCRLF()
 
-	req := buildRequest([]byte(command), nil, b.build())
+	var pickKey []byte
+	if len(keys) == 1 {
+		pickKey = []byte(keys[0])
+	}
+	req := buildRequest([]byte(command), pickKey, b.build())
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
 
 	return req, resp
@@ -255,7 +309,7 @@ func buildGetsCommand(command string, keys ...string) (*request, *response) {
 func buildGetAndTouchesCommand(command string, expiry time.Duration, keys ...string) (*request, *response) {
 	b := newProtocolBuilder().
 		AddString(command).
-		AddUint(uint64(expiry.Seconds()))
+		AddInt64(expiryToken(expiry))
 	defer b.release()
 
 	for _, key := range keys {
@@ -264,7 +318,11 @@ func buildGetAndTouchesCommand(command string, expiry time.Duration, keys ...str
 
 	b.AddCRLF()
 
-	req := buildRequest([]byte(command), nil, b.build())
+	var pickKey []byte
+	if len(keys) == 1 {
+		pickKey = []byte(keys[0])
+	}
+	req := buildRequest([]byte(command), pickKey, b.build())
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
 
 	return req, resp
@@ -304,8 +362,8 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 
 	for i := 0; i < rn; i += 2 {
 		line := trimCRLF(lines[i])
-		if !bytes.HasPrefix(line, _ValueBytes) {
-			continue
+		if !bytes.HasPrefix(line, []byte("VALUE ")) {
+			return nil, fmt.Errorf("unexpected retrieval line: %w", ErrMalformedResponse)
 		}
 
 		item := &Item{}
@@ -314,19 +372,32 @@ func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []*Item, e
 			return nil, err
 		}
 
-		// Read the data block
 		if i+1 >= n {
 			return nil, fmt.Errorf("missing data block: %w", ErrMalformedResponse)
 		}
-		item.Value = trimCRLF(lines[i+1]) //nolint:gosec // G602: i+1 is bounds-checked above
-		if uint64(len(item.Value)) != dataLen {
-			return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
+		item.Value, err = dataBlockValue(lines[i+1], dataLen) //nolint:gosec // G602: i+1 is bounds-checked above
+		if err != nil {
+			return nil, err
 		}
 
 		items = append(items, item)
 	}
 
 	return items, nil
+}
+
+// dataBlockValue returns the payload of a length-framed VALUE/VA body.
+// The reader stores size+CRLF; the value is the declared size, not a trim of the
+// last CRLF (a value may itself end in CR/LF).
+func dataBlockValue(raw []byte, size uint64) ([]byte, error) {
+	if uint64(len(raw)) == size+2 && bytes.HasSuffix(raw, _CRLFBytes) {
+		return raw[:size], nil
+	}
+	trimmed := trimCRLF(raw)
+	if uint64(len(trimmed)) != size {
+		return nil, fmt.Errorf("data block length mismatch: %w", ErrMalformedResponse)
+	}
+	return trimmed, nil
 }
 
 // parseValueLine extract item from VALUE line, like following:
@@ -392,6 +463,10 @@ func parseValueLine(line []byte, item *Item, withCas bool) (dataLen uint64, err 
 
 		fieldStart = i + 1
 		nField++
+	}
+
+	if item.Key == "" {
+		return 0, fmt.Errorf("empty VALUE key: %w", ErrMalformedResponse)
 	}
 
 	return dataLen, nil
@@ -578,7 +653,7 @@ func parseStats(lines [][]byte) (*Statistic, error) {
 
 	stat := &Statistic{}
 	for _, line := range lines {
-		line = bytes.TrimSuffix(line, _CRLFBytes)
+		line = trimCRLF(line)
 		key, val, ok := cutStatLine(line)
 		if !ok {
 			continue
@@ -849,7 +924,29 @@ func buildStatsCommand(subCommand string) (*request, *response) {
 		build()
 
 	req := buildRequest([]byte("stats"), nil, raw)
+	if subCommand == "reset" {
+		return req, buildLimitedLineResponse(1)
+	}
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, 64)
 
 	return req, resp
+}
+
+func parseStatsMap(lines [][]byte) (map[string]string, error) {
+	out := make(map[string]string, len(lines))
+	for _, line := range lines {
+		trimmed := trimCRLF(line)
+		if bytes.Equal(trimmed, []byte("END")) || bytes.Equal(trimmed, []byte("RESET")) {
+			continue
+		}
+		if err := forecastCommonFaultLine(line); err != nil {
+			return nil, err
+		}
+		key, val, ok := cutStatLine(trimmed)
+		if !ok {
+			continue
+		}
+		out[key] = val
+	}
+	return out, nil
 }

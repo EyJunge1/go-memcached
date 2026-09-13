@@ -170,6 +170,41 @@ func Test_rendezvousHash_Pick(t *testing.T) {
 	}
 }
 
+func Test_crc32HashPicker_distributes(t *testing.T) {
+	addrs, err := newDefaultResolver().Resolve("localhost:11211,localhost:11212")
+	noError(t, err)
+	p := NewCRC32HashPickBuilder().Build(addrs)
+	a, err := p.Pick(addrs, nil, []byte("alpha"))
+	noError(t, err)
+	b, err := p.Pick(addrs, nil, []byte("beta"))
+	noError(t, err)
+	notNil(t, a)
+	notNil(t, b)
+	// Deterministic: same key always same node.
+	a2, err := p.Pick(addrs, nil, []byte("alpha"))
+	noError(t, err)
+	equal(t, a.Address, a2.Address)
+}
+
+func Test_murmur3_knownVector(t *testing.T) {
+	// Locked output of murmur3.go (64-bit one-lane, seed 0). Not libhashkit murmur3.
+	equal(t, uint64(0xd35fde0222ad4f2f), newMurmur3(0).hash([]byte("hello")))
+	equal(t, uint64(0x1d3547705c43c07e), newMurmur3(0).hash([]byte("a")))
+	h := newMurmur3(0).hash([]byte("hello"))
+	h2 := newMurmur3(0).hash([]byte("hello"))
+	equal(t, h, h2)
+	p := NewMurmur3HashPickBuilder(0).Build([]*Addr{
+		NewAddr("tcp", "127.0.0.1:11211", 0),
+		NewAddr("tcp", "127.0.0.1:11212", 1),
+	})
+	addr, err := p.Pick([]*Addr{
+		NewAddr("tcp", "127.0.0.1:11211", 0),
+		NewAddr("tcp", "127.0.0.1:11212", 1),
+	}, nil, []byte("hello"))
+	noError(t, err)
+	notNil(t, addr)
+}
+
 func Test_rendezvousHash_Pick_stable(t *testing.T) {
 	addrsBefore, err := newDefaultResolver().Resolve("localhost:11211,localhost:11212,localhost:11213")
 	noError(t, err)
@@ -190,5 +225,5 @@ func Test_rendezvousHash_Pick_stable(t *testing.T) {
 	addr2, err := picker.Pick(addrsAfter, []byte("set"), []byte("key"))
 	noError(t, err)
 	notNil(t, addr2)
-	equal(t, "localhost:11211", addr.Address)
+	equal(t, "localhost:11211", addr2.Address)
 }

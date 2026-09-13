@@ -217,3 +217,43 @@ func Test_selectProximateDeadline(t *testing.T) {
 		})
 	}
 }
+
+func Test_read2ValueContainsCRLFAndEND(t *testing.T) {
+	payload := []byte("VALUE k 0 11\r\nhello\nworld\r\nEND\r\n")
+	resp := buildSpecEndLineResponse(_EndCRLFBytes, 3)
+	defer resp.release()
+	noError(t, resp.read2(newPayloadReader(payload), false))
+	items, err := parseValueItems(resp.rawLines, false, false)
+	noError(t, err)
+	hasLen(t, items, 1)
+	equal(t, []byte("hello\nworld"), items[0].Value)
+}
+
+func Test_read2ValueLooksLikeEND(t *testing.T) {
+	payload := []byte("VALUE k 0 3\r\nEND\r\nEND\r\n")
+	resp := buildSpecEndLineResponse(_EndCRLFBytes, 3)
+	defer resp.release()
+	noError(t, resp.read2(newPayloadReader(payload), false))
+	items, err := parseValueItems(resp.rawLines, false, false)
+	noError(t, err)
+	hasLen(t, items, 1)
+	equal(t, []byte("END"), items[0].Value)
+}
+
+func Test_read1VAContainsCRLF(t *testing.T) {
+	payload := []byte("VA 11\r\nhello\nworld\r\n")
+	resp := buildLimitedLineResponse(1)
+	defer resp.release()
+	noError(t, resp.read1(newPayloadReader(payload)))
+	item := &MetaItem{}
+	noError(t, parseMetaItem(resp.rawLines, item, false, false))
+	equal(t, []byte("hello\nworld"), item.Value)
+}
+
+func Test_read1HDIsOneProtocolRecord(t *testing.T) {
+	resp := buildLimitedLineResponse(1)
+	defer resp.release()
+	noError(t, resp.read1(newPayloadReader([]byte("HD c1\r\n"))))
+	hasLen(t, resp.rawLines, 1)
+	equal(t, []byte("HD c1\r\n"), resp.rawLines[0])
+}

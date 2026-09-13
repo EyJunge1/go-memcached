@@ -46,6 +46,10 @@ func (m *mockConn) Close() error { return nil }
 
 func (m *mockConn) readLine(_ byte) ([]byte, error) { return nil, nil }
 
+func (m *mockConn) readExact(n int) ([]byte, error) { return make([]byte, n), nil }
+
+func (m *mockConn) readDatagram() ([]byte, error) { return nil, nil }
+
 func (m *mockConn) expired(since time.Time) (time.Duration, bool) {
 	now := nowFunc()
 	past := now.Sub(m.createdAt)
@@ -527,6 +531,42 @@ func Test_connPool_get_closes_connection_created_during_close(t *testing.T) {
 	isErrorIs(t, result.err, errPoolClosed)
 	isTrue(t, createdConn.closed.Load())
 	equal(t, 0, int(pool.numOpen.Load()))
+}
+
+func Test_connPool_checkoutDropsExpired(t *testing.T) {
+	pool := newConnPool(5, 10, 50*time.Millisecond, 0, createConn)
+	old := newMockConn()
+	old.createdAt = nowFunc().Add(-time.Hour)
+	pool.conns <- old
+	pool.numOpen.Add(1)
+
+	got, err := pool.get(context.Background())
+	noError(t, err)
+	notNil(t, got)
+	if got == old {
+		t.Fatal("expired conn was reused")
+	}
+	noError(t, pool.close())
+}
+
+func Test_connPool_numOpenReservedBeforeCreate(t *testing.T) {
+	var creating atomic.Int32
+	started := make(chan struct{}, 2)
+	block := make(chan struct{})
+	pool := newConnPool(1, 1, 0, 0, func(context.Context) (memcachedConn, error) {
+		creating.Add(1)
+		started <- struct{}{}
+		<-block
+		return newMockConn(), nil
+	})
+
+	go func() { _, _ = pool.get(context.Background()) }()
+	<-started
+	go func() { _, _ = pool.get(context.Background()) }()
+	time.Sleep(20 * time.Millisecond)
+	equal(t, int32(1), creating.Load())
+	close(block)
+	noError(t, pool.close())
 }
 
 func Test_connPool_discard(t *testing.T) {

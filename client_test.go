@@ -10,9 +10,15 @@ import (
 
 func setupLiveClient(t *testing.T) *Client {
 	t.Helper()
-	c, err := New("localhost:11211")
+	c, err := New("localhost:11211", WithDialTimeout(200*time.Millisecond))
 	if err != nil {
-		t.Fatal(err)
+		t.Skip("no memcached on localhost:11211")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := c.Ping(ctx); err != nil {
+		_ = c.Close()
+		t.Skip("no memcached on localhost:11211")
 	}
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
@@ -129,7 +135,16 @@ func Test_concurrent(t *testing.T) {
 		}
 	})
 
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("Test_concurrent timed out (live memcached hung or never stored the key)")
+	}
 
 	t.Log("Test_concurrent finished")
 }
@@ -196,37 +211,33 @@ func Test_metaReadRoundTrip(t *testing.T) {
 }
 
 func Test_udp(t *testing.T) {
-	t.Skipf("skip test_udp, since it could not run in CI")
-
-	addrs := "udp://localhost:11211"
-	c, err := New(addrs, WithUDPEnabled())
+	c, err := New("udp://localhost:11211", WithDialTimeout(200*time.Millisecond))
 	if err != nil {
-		t.Fatalf("Failed to create client: %+v", err)
+		t.Skip("no UDP memcached on localhost:11211")
 	}
-	noError(t, err)
-	notNil(t, c)
-
-	ver, err := c.Version(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	ver, err := c.Version(ctx)
+	_ = c.Close()
 	if err != nil {
-		t.Fatalf("Failed to get version: %+v", err)
+		t.Skip("no UDP memcached on localhost:11211")
 	}
-	noError(t, err)
 	notEmpty(t, ver)
-
-	t.Logf("version: %s", ver)
 }
 
 func Test_unix(t *testing.T) {
-	t.Skipf("skip test_unix, since it could not run in CI")
-
-	addrs := "unix:///tmp/memcached.sock"
-	c, err := New(addrs)
-	noError(t, err)
-	notNil(t, c)
-
-	ver, err := c.Version(context.Background())
+	c, err := New("unix:///tmp/memcached.sock", WithDialTimeout(200*time.Millisecond))
+	if err != nil {
+		t.Skip("no unix memcached at /tmp/memcached.sock")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := c.Ping(ctx); err != nil {
+		_ = c.Close()
+		t.Skip("no unix memcached at /tmp/memcached.sock")
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	ver, err := c.Version(ctx)
 	noError(t, err)
 	notEmpty(t, ver)
-
-	t.Logf("version: %s", ver)
 }

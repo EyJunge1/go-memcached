@@ -5,6 +5,8 @@ import (
 	"hash/crc32"
 	"math"
 	"net"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -14,10 +16,12 @@ var (
 	_ Builder = crc32HashPickBuilder{}
 	_ Builder = murmur3HashPickBuilder{}
 	_ Builder = rendezvousHashPickBuilder{}
+	_ Builder = ketamaPickBuilder{}
 
 	_ Picker = &crc32HashPicker{}
 	_ Picker = &murmur3HashPicker{}
 	_ Picker = &rendezvousHashPicker{}
+	_ Picker = &ketamaPicker{}
 )
 
 // Resolver is responsible for resolving a given address
@@ -62,12 +66,17 @@ func (r defaultResolver) Resolve(addr string) ([]*Addr, error) {
 			continue
 		}
 
-		network, resolvedAddr, err := r.resolveAddr(address)
+		raw, weight, err := splitAddrWeight(address)
 		if err != nil {
 			return nil, err
 		}
 
-		result = append(result, NewAddr(network, resolvedAddr, idx))
+		network, resolvedAddr, err := r.resolveAddr(raw)
+		if err != nil {
+			return nil, err
+		}
+
+		result = append(result, NewAddrWeighted(network, resolvedAddr, idx, weight))
 	}
 
 	if len(result) == 0 {
@@ -75,6 +84,37 @@ func (r defaultResolver) Resolve(addr string) ([]*Addr, error) {
 	}
 
 	return result, nil
+}
+
+// splitAddrWeight strips an optional ?weight=N query. Unknown query keys are rejected.
+func splitAddrWeight(address string) (raw string, weight uint32, err error) {
+	q := strings.Index(address, "?")
+	if q < 0 {
+		return address, 0, nil
+	}
+	raw, query := address[:q], address[q+1:]
+	// libmemcached --SERVER=host:port/?weight; accept the extra slash.
+	raw = strings.TrimSuffix(raw, "/")
+	if raw == "" {
+		return "", 0, fmt.Errorf("empty address: %w", ErrInvalidAddress)
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid address: %s: %w", address, ErrInvalidAddress)
+	}
+	for k := range values {
+		if k != "weight" {
+			return "", 0, fmt.Errorf("invalid address query %q: %w", k, ErrInvalidAddress)
+		}
+	}
+	if !values.Has("weight") {
+		return raw, 0, nil
+	}
+	n, err := strconv.ParseUint(values.Get("weight"), 10, 32)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid address weight: %s: %w", address, ErrInvalidAddress)
+	}
+	return raw, uint32(n), nil
 }
 
 // resolveAddr resolves single network address, supports tcp, udp and unix socket format.

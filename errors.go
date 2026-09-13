@@ -37,4 +37,20 @@ var (
 	ErrInvalidValue = errors.New("invalid value too long(over than 2^32)")
 	// ErrInvalidNetworkProtocol represents an invalid network protocol error.
 	ErrInvalidNetworkProtocol = errors.New("invalid network protocol")
+	// ErrFlushAllNotAllowed is returned when FlushAll is called without WithAllowFlushAll.
+	ErrFlushAllNotAllowed = errors.New("flush_all not allowed: enable with WithAllowFlushAll")
+	// ErrAdminNotEnabled is returned when Admin() is called without WithAdminCommands.
+	ErrAdminNotEnabled = errors.New("admin commands not enabled: enable with WithAdminCommands")
+	// ErrBusy is the server BUSY reply (slabs reassign / crawler).
+	ErrBusy = errors.New("busy")
+	// ErrBadClass is the server BADCLASS reply.
+	ErrBadClass = errors.New("bad class")
+	// ErrNoSpare is the server NOSPARE reply.
+	ErrNoSpare = errors.New("no spare")
+	// ErrNotFull is the server NOTFULL reply.
+	ErrNotFull = errors.New("not full")
+	// ErrUnsafe is the server UNSAFE reply.
+	ErrUnsafe = errors.New("unsafe")
+	// ErrSame is the server SAME reply (slabs reassign src == dest).
+	ErrSame = errors.New("same")
 )

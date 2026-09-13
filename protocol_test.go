@@ -126,6 +126,19 @@ func Test_parseValueItems(t *testing.T) {
 			want:    nil,
 			wantErr: true, // missing data block
 		},
+		{
+			name: "rejects non-VALUE protocol line",
+			args: args{
+				lines: [][]byte{
+					[]byte("HD\r\n"),
+					[]byte("ignored\r\n"),
+					[]byte("END\r\n"),
+				},
+				withoutEndLine: false,
+			},
+			want:    nil,
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -346,16 +359,13 @@ func Test_parseValueLine(t *testing.T) {
 			wantErrMsg: "invalid VALUE line",
 		},
 		{
-			name:    "empty line",
-			line:    []byte("VALUE "),
-			withCas: false,
-			wantItem: &Item{
-				Key:   "",
-				Flags: 0,
-				CAS:   0,
-			},
-			wantLen: 0,
-			wantErr: false,
+			name:       "empty line",
+			line:       []byte("VALUE "),
+			withCas:    false,
+			wantItem:   &Item{},
+			wantLen:    0,
+			wantErr:    true,
+			wantErrMsg: "empty VALUE key",
 		},
 	}
 
@@ -427,6 +437,13 @@ func Test_parseStats(t *testing.T) {
 			},
 		},
 		{
+			name: "END only",
+			args: args{
+				lines: [][]byte{[]byte("END\r\n")},
+			},
+			want: &Statistic{},
+		},
+		{
 			name: "unparseable known key goes to Extra",
 			args: args{
 				lines: [][]byte{
@@ -463,5 +480,126 @@ func Test_validateKeyAndValue(t *testing.T) {
 	isErrorIs(t, validateKeyAndValue([]byte("has\ttab"), nil), ErrInvalidKey)
 	isErrorIs(t, validateKeyAndValue([]byte{0x7f}, nil), ErrInvalidKey)
 	noError(t, validateKeyAndValueFlags([]byte("has space"), nil, true))
+	isErrorIs(t, validateKeyAndValueFlags(bytes.Repeat([]byte("a"), 188), nil, true), ErrInvalidKey)
+	noError(t, validateKeyAndValueFlags(bytes.Repeat([]byte("a"), 186), nil, true))
 	equal(t, 250, maxKeySize)
+}
+
+func Test_buildFlushAllCommand_delay(t *testing.T) {
+	req, resp := buildFlushAllCommand(0, false)
+	defer releaseReqAndResp(req, resp)
+	equal(t, []byte("flush_all\r\n"), req.raw)
+
+	req, resp = buildFlushAllCommand(10*time.Second, false)
+	defer releaseReqAndResp(req, resp)
+	equal(t, []byte("flush_all 10\r\n"), req.raw)
+}
+
+func Test_parseStatsMap(t *testing.T) {
+	got, err := parseStatsMap([][]byte{
+		[]byte("STAT items:1:number 2\r\n"),
+		[]byte("END\r\n"),
+	})
+	noError(t, err)
+	equal(t, "2", got["items:1:number"])
+}
+
+func Test_expiryToken(t *testing.T) {
+	equal(t, int64(0), expiryToken(0))
+	equal(t, int64(-1), expiryToken(-time.Second))
+	equal(t, int64(1), expiryToken(500*time.Millisecond))
+	equal(t, int64(1), expiryToken(time.Second))
+	equal(t, int64(60), expiryToken(60*time.Second))
+
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	prev := nowFunc
+	nowFunc = func() time.Time { return fixed }
+	t.Cleanup(func() { nowFunc = prev })
+	want := fixed.Add(31 * 24 * time.Hour).Unix()
+	equal(t, want, expiryToken(31*24*time.Hour))
+}
+
+func Test_buildStorageCommand_expiryWire(t *testing.T) {
+	req, resp := buildStorageCommand("set", "k", []byte("v"), 0, 500*time.Millisecond, false)
+	defer releaseReqAndResp(req, resp)
+	equal(t, []byte("set k 0 1 1\r\nv\r\n"), req.raw)
+
+	req, resp = buildStorageCommand("set", "k", []byte("v"), 0, -time.Second, false)
+	defer releaseReqAndResp(req, resp)
+	equal(t, []byte("set k 0 -1 1\r\nv\r\n"), req.raw)
+}
+
+func Test_buildGetsCommand_setsPickKey(t *testing.T) {
+	req, resp := buildGetsCommand("get", "only")
+	defer releaseReqAndResp(req, resp)
+	equal(t, []byte("only"), req.key)
+
+	req, resp = buildGetsCommand("get", "a", "b")
+	defer releaseReqAndResp(req, resp)
+	isNil(t, req.key)
+}
+
+func Test_buildGetAndTouchesCommand_setsPickKey(t *testing.T) {
+	req, resp := buildGetAndTouchesCommand("gat", time.Second, "only")
+	defer releaseReqAndResp(req, resp)
+	equal(t, []byte("only"), req.key)
+
+	req, resp = buildGetAndTouchesCommand("gat", time.Second, "a", "b")
+	defer releaseReqAndResp(req, resp)
+	isNil(t, req.key)
+}
+
+func Test_mapStorageReply(t *testing.T) {
+	stored := &response{endIndicator: endIndicatorLimitedLines, rawLines: [][]byte{_StoredCRLFBytes}}
+	noError(t, mapStorageReply(stored))
+
+	notStored := &response{endIndicator: endIndicatorLimitedLines, rawLines: [][]byte{[]byte("NOT_STORED\r\n")}}
+	isErrorIs(t, mapStorageReply(notStored), ErrNotStored)
+	isFalse(t, shouldDiscardConn(wrapRecvError(mapStorageReply(notStored))))
+
+	exists := &response{endIndicator: endIndicatorLimitedLines, rawLines: [][]byte{[]byte("EXISTS\r\n")}}
+	isErrorIs(t, mapStorageReply(exists), ErrExists)
+	isFalse(t, shouldDiscardConn(wrapRecvError(mapStorageReply(exists))))
+
+	notFound := &response{endIndicator: endIndicatorLimitedLines, rawLines: [][]byte{[]byte("NOT_FOUND\r\n")}}
+	isErrorIs(t, mapStorageReply(notFound), ErrNotFound)
+
+	junk := &response{endIndicator: endIndicatorLimitedLines, rawLines: [][]byte{[]byte("WHATEVER\r\n")}}
+	isErrorIs(t, mapStorageReply(junk), ErrMalformedResponse)
+	isTrue(t, shouldDiscardConn(wrapRecvError(mapStorageReply(junk))))
+
+	quiet := &response{endIndicator: endIndicatorNoReply}
+	noError(t, mapStorageReply(quiet))
+}
+
+func Test_dataBlockValueUsesDeclaredLength(t *testing.T) {
+	// Value that itself ends in CRLF must not be trimmed down to empty.
+	raw := []byte("ab\r\n")
+	got, err := dataBlockValue(raw, 2)
+	noError(t, err)
+	equal(t, []byte("ab"), got)
+
+	valueCRLF := []byte("\r\n\r\n")
+	got, err = dataBlockValue(valueCRLF, 2)
+	noError(t, err)
+	equal(t, []byte("\r\n"), got)
+}
+
+func Test_forecastCommonFaultLine(t *testing.T) {
+	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_FOUND\r\n")), ErrNotFound)
+	isErrorIs(t, forecastCommonFaultLine([]byte("EXISTS\r\n")), ErrExists)
+	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_STORED\r\n")), ErrNotStored)
+	isErrorIs(t, forecastCommonFaultLine([]byte("EN\r\n")), ErrNotFound)
+	isErrorIs(t, forecastCommonFaultLine([]byte("EN kfoo\r\n")), ErrNotFound)
+	isErrorIs(t, forecastCommonFaultLine([]byte("ERROR\r\n")), ErrNonexistentCommand)
+	equal(t, error(nil), forecastCommonFaultLine([]byte("END\r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("ENTRY\r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("VALUE k 0 3\r\n")))
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR bad flags\r\n")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR\r\n")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("CLIENT_ERROR\n")), ErrClientError)
+	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_STORED\n")), ErrNotStored)
+	isErrorIs(t, forecastCommonFaultLine([]byte("SERVER_ERROR oom")), ErrServerError)
+	equal(t, error(nil), forecastCommonFaultLine([]byte("CLIENT_ERRORFOO\r\n")))
 }

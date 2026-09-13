@@ -13,6 +13,24 @@ func TestWrappedErrorChainPreservesSentinel(t *testing.T) {
 	contains(t, err.Error(), "send failed")
 }
 
+func TestWrapRecvErrorKeepsProtocolSentinels(t *testing.T) {
+	err := wrapRecvError(fmt.Errorf("recv failed: %w", ErrNotFound))
+	isErrorIs(t, err, ErrNotFound)
+	isFalse(t, isTransportError(err))
+	isFalse(t, shouldDiscardConn(err))
+
+	ioErr := wrapRecvError(fmt.Errorf("recv failed: %w", ioTimeoutError{}))
+	isTrue(t, isTransportError(ioErr))
+	isTrue(t, shouldDiscardConn(ioErr))
+
+	malformed := wrapRecvError(fmt.Errorf("bad frame: %w", ErrMalformedResponse))
+	isTrue(t, shouldDiscardConn(malformed))
+}
+
+type ioTimeoutError struct{}
+
+func (ioTimeoutError) Error() string { return "i/o timeout" }
+
 func TestErrorsJoinPreservesJoinedSentinels(t *testing.T) {
 	joined := errors.Join(
 		fmt.Errorf("node-a: %w", ErrNotFound),

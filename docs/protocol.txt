@@ -10,7 +10,7 @@ the server, read responses, and eventually close the connection.
 There is no need to send any command to end the session. A client may
 just close the connection at any moment it no longer needs it. Note,
 however, that clients are encouraged to cache their connections rather
-than reopen them every time they need to store or retrieve data.  This
+than reopen them every time they need to store or retrieve data. This
 is because memcached is especially designed to work very efficiently
 with a very large number (many hundreds, more than a thousand if
 necessary) of open connections. Caching connections will eliminate the
@@ -19,7 +19,7 @@ of preparing for a new connection on the server side is insignificant
 compared to this).
 
 There are two kinds of data sent in the memcache protocol: text lines
-and unstructured data.  Text lines are used for commands from clients
+and unstructured data. Text lines are used for commands from clients
 and responses from servers. Unstructured data is sent when a client
 wants to store or retrieve data. The server will transmit back
 unstructured data in exactly the same way it received it, as a byte
@@ -43,7 +43,7 @@ Keys
 
 Data stored by memcached is identified with the help of a key. A key
 is a text string which should uniquely identify the data for clients
-that are interested in storing and retrieving it.  Currently the
+that are interested in storing and retrieving it. Currently the
 length limit of a key is set at 250 characters (of course, normally
 clients wouldn't need to use such long keys); the key must not include
 control characters or whitespace.
@@ -97,19 +97,19 @@ noted in the 'Commands' section above.
 
 All meta commands follow a basic syntax:
 
-<cm> <key> <datalen*> <flag1> <flag2> <...>\r\n
+ <datalen*> <...>\r\n
 
-Where <cm> is a 2 character command code.
-<datalen> is only for commands with payloads, like set.
+Where is a 2 character command code.
+ is only for commands with payloads, like set.
 
 Responses look like:
 
-<RC> <datalen*> <flag1> <flag2> <...>\r\n
+ <datalen*> <...>\r\n
 
-Where <RC> is a 2 character return code. The number of flags returned are
+Where is a 2 character return code. The number of flags returned are
 based off of the flags supplied.
 
-<datalen> is only for responses with payloads, with the return code 'VA'.
+ is only for responses with payloads, with the return code 'VA'.
 
 Flags are single character codes, ie 'q' or 'k' or 'I', which adjust the
 behavior of the command. If a flag requests a response flag (ie 't' for TTL
@@ -161,23 +161,22 @@ from the server. These error strings come in three types:
 
 - "ERROR\r\n"
 
-  means the client sent a nonexistent command name.
+ means the client sent a nonexistent command name.
 
-- "CLIENT_ERROR <error>\r\n"
+- "CLIENT_ERROR \r\n"
 
-  means some sort of client error in the input line, i.e. the input
-  doesn't conform to the protocol in some way. <error> is a
-  human-readable error string.
+ means some sort of client error in the input line, i.e. the input
+ doesn't conform to the protocol in some way. is a
+ human-readable error string.
 
-- "SERVER_ERROR <error>\r\n"
+- "SERVER_ERROR \r\n"
 
-  means some sort of server error prevents the server from carrying
-  out the command. <error> is a human-readable error string. In cases
-  of severe server errors, which make it impossible to continue
-  serving the client (this shouldn't normally happen), the server will
-  close the connection after sending the error line. This is the only
-  case in which the server closes a connection to a client.
-
+ means some sort of server error prevents the server from carrying
+ out the command. is a human-readable error string. In cases
+ of severe server errors, which make it impossible to continue
+ serving the client (this shouldn't normally happen), the server will
+ close the connection after sending the error line. This is the only
+ case in which the server closes a connection to a client.
 
 In the descriptions of individual commands below, these error lines
 are not again specifically mentioned, but clients must allow for their
@@ -189,85 +188,85 @@ Authentication
 Optional username/password token authentication (see -Y option). Used by
 sending a fake "set" command with any key:
 
-set <key> <flags> <exptime> <bytes>\r\n
+set \r\n
 username password\r\n
 
 key, flags, and exptime are ignored for authentication. Bytes is the length
 of the username/password payload.
 
 - "STORED\r\n" indicates success. After this point any command should work
-  normally.
+ normally.
 
 - "CLIENT_ERROR [message]\r\n" will be returned if authentication fails for
-  any reason.
+ any reason.
 
 Storage commands
 ----------------
 
 First, the client sends a command line which looks like this:
 
-<command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
-cas <key> <flags> <exptime> <bytes> <cas unique> [noreply]\r\n
+ [noreply]\r\n
+cas [noreply]\r\n
 
-- <command name> is "set", "add", "replace", "append" or "prepend"
+- is "set", "add", "replace", "append" or "prepend"
 
-  "set" means "store this data".
+ "set" means "store this data".
 
-  "add" means "store this data, but only if the server *doesn't* already
-  hold data for this key".
+ "add" means "store this data, but only if the server *doesn't* already
+ hold data for this key".
 
-  "replace" means "store this data, but only if the server *does*
-  already hold data for this key".
+ "replace" means "store this data, but only if the server *does*
+ already hold data for this key".
 
-  "append" means "add this data to an existing key after existing data".
+ "append" means "add this data to an existing key after existing data".
 
-  "prepend" means "add this data to an existing key before existing data".
+ "prepend" means "add this data to an existing key before existing data".
 
-  The append and prepend commands do not accept flags or exptime.
-  They update existing data portions, and ignore new flag and exptime
-  settings.
+ The append and prepend commands do not accept flags or exptime.
+ They update existing data portions, and ignore new flag and exptime
+ settings.
 
-  "cas" is a check and set operation which means "store this data but
-  only if no one else has updated since I last fetched it."
+ "cas" is a check and set operation which means "store this data but
+ only if no one else has updated since I last fetched it."
 
-- <key> is the key under which the client asks to store the data
+- is the key under which the client asks to store the data
 
-- <flags> is an arbitrary 16-bit unsigned integer (written out in
-  decimal) that the server stores along with the data and sends back
-  when the item is retrieved. Clients may use this as a bit field to
-  store data-specific information; this field is opaque to the server.
-  Note that in memcached 1.2.1 and higher, flags may be 32-bits, instead
-  of 16, but you might want to restrict yourself to 16 bits for
-  compatibility with older versions.
+- is an arbitrary 16-bit unsigned integer (written out in
+ decimal) that the server stores along with the data and sends back
+ when the item is retrieved. Clients may use this as a bit field to
+ store data-specific information; this field is opaque to the server.
+ Note that in memcached 1.2.1 and higher, flags may be 32-bits, instead
+ of 16, but you might want to restrict yourself to 16 bits for
+ compatibility with older versions.
 
-- <exptime> is expiration time. If it's 0, the item never expires
-  (although it may be deleted from the cache to make place for other
-  items). If it's non-zero (either Unix time or offset in seconds from
-  current time), it is guaranteed that clients will not be able to
-  retrieve this item after the expiration time arrives (measured by
-  server time). If a negative value is given the item is immediately
-  expired.
+- is expiration time. If it's 0, the item never expires
+ (although it may be deleted from the cache to make place for other
+ items). If it's non-zero (either Unix time or offset in seconds from
+ current time), it is guaranteed that clients will not be able to
+ retrieve this item after the expiration time arrives (measured by
+ server time). If a negative value is given the item is immediately
+ expired.
 
-- <bytes> is the number of bytes in the data block to follow, *not*
-  including the delimiting \r\n. <bytes> may be zero (in which case
-  it's followed by an empty data block).
+- is the number of bytes in the data block to follow, *not*
+ including the delimiting \r\n. may be zero (in which case
+ it's followed by an empty data block).
 
-- <cas unique> is a unique 64-bit value of an existing entry.
-  Clients should use the value returned from the "gets" command
-  when issuing "cas" updates.
+- is a unique 64-bit value of an existing entry.
+ Clients should use the value returned from the "gets" command
+ when issuing "cas" updates.
 
 - "noreply" optional parameter instructs the server to not send the
-  reply.  NOTE: if the request line is malformed, the server can't
-  parse "noreply" option reliably.  In this case it may send the error
-  to the client, and not reading it on the client side will break
-  things.  Client should construct only valid requests.
+ reply. NOTE: if the request line is malformed, the server can't
+ parse "noreply" option reliably. In this case it may send the error
+ to the client, and not reading it on the client side will break
+ things. Client should construct only valid requests.
 
 After this line, the client sends the data block:
 
-<data block>\r\n
+ \r\n
 
-- <data block> is a chunk of arbitrary 8-bit data of length <bytes>
-  from the previous line.
+- is a chunk of arbitrary 8-bit data of length 
+ from the previous line.
 
 After sending the command line and the data block the client awaits
 the reply, which may be:
@@ -284,16 +283,15 @@ a "cas" command has been modified since you last fetched it.
 - "NOT_FOUND\r\n" to indicate that the item you are trying to store
 with a "cas" command did not exist.
 
-
 Retrieval command:
 ------------------
 
 The retrieval commands "get" and "gets" operate like this:
 
-get <key>*\r\n
-gets <key>*\r\n
+get *\r\n
+gets *\r\n
 
-- <key>* means one or more key strings separated by whitespace.
+- * means one or more key strings separated by whitespace.
 
 After this command, the client expects zero or more items, each of
 which is received as a text line followed by a data block. After all
@@ -305,20 +303,20 @@ to indicate the end of response.
 
 Each item sent by the server looks like this:
 
-VALUE <key> <flags> <bytes> [<cas unique>]\r\n
-<data block>\r\n
+VALUE []\r\n
+ \r\n
 
-- <key> is the key for the item being sent
+- is the key for the item being sent
 
-- <flags> is the flags value set by the storage command
+- is the flags value set by the storage command
 
-- <bytes> is the length of the data block to follow, *not* including
-  its delimiting \r\n
+- is the length of the data block to follow, *not* including
+ its delimiting \r\n
 
-- <cas unique> is a unique 64-bit integer that uniquely identifies
-  this specific item.
+- is a unique 64-bit integer that uniquely identifies
+ this specific item.
 
-- <data block> is the data for this item.
+- is the data for this item.
 
 If some of the keys appearing in a retrieval request are not sent back
 by the server in the item list this means that the server does not
@@ -326,37 +324,35 @@ hold items with such keys (because they were never stored, or stored
 but deleted to make space for more items, or expired, or explicitly
 deleted by a client).
 
-
 Deletion
 --------
 
 The command "delete" allows for explicit deletion of items:
 
-delete <key> [noreply]\r\n
+delete [noreply]\r\n
 
-- <key> is the key of the item the client wishes the server to delete
+- is the key of the item the client wishes the server to delete
 
 - "noreply" optional parameter instructs the server to not send the
-  reply.  See the note in Storage commands regarding malformed
-  requests.
+ reply. See the note in Storage commands regarding malformed
+ requests.
 
 The response line to this command can be one of:
 
 - "DELETED\r\n" to indicate success
 
 - "NOT_FOUND\r\n" to indicate that the item with this key was not
-  found.
+ found.
 
 See the "flush_all" command below for immediate invalidation
 of all existing items.
-
 
 Increment/Decrement
 -------------------
 
 Commands "incr" and "decr" are used to change data for some item
 in-place, incrementing or decrementing it. The data for the item is
-treated as decimal representation of a 64-bit unsigned integer.  If
+treated as decimal representation of a 64-bit unsigned integer. If
 the current data value does not conform to such a representation, the
 incr/decr commands return an error (memcached <= 1.2.6 treated the
 bogus value as if it were 0, leading to confusion). Also, the item
@@ -365,34 +361,34 @@ that a non-existent key exists with value 0; instead, they will fail.
 
 The client sends the command line:
 
-incr <key> <value> [noreply]\r\n
+incr [noreply]\r\n
 
 or
 
-decr <key> <value> [noreply]\r\n
+decr [noreply]\r\n
 
-- <key> is the key of the item the client wishes to change
+- is the key of the item the client wishes to change
 
-- <value> is the amount by which the client wants to increase/decrease
+- is the amount by which the client wants to increase/decrease
 the item. It is a decimal representation of a 64-bit unsigned integer.
 
 - "noreply" optional parameter instructs the server to not send the
-  reply.  See the note in Storage commands regarding malformed
-  requests.
+ reply. See the note in Storage commands regarding malformed
+ requests.
 
 The response will be one of:
 
 - "NOT_FOUND\r\n" to indicate the item with this value was not found
 
-- <value>\r\n , where <value> is the new value of the item's data,
-  after the increment/decrement operation was carried out.
+- \r\n , where is the new value of the item's data,
+ after the increment/decrement operation was carried out.
 
 Note that underflow in the "decr" command is caught: if a client tries
-to decrease the value below 0, the new value will be 0.  Overflow in
+to decrease the value below 0, the new value will be 0. Overflow in
 the "incr" command will wrap around the 64 bit mark.
 
 Note also that decrementing a number such that it loses length isn't
-guaranteed to decrement its returned length.  The number MAY be
+guaranteed to decrement its returned length. The number MAY be
 space-padded at the end, but this is purely an implementation
 optimization, so you also shouldn't rely on that.
 
@@ -402,25 +398,25 @@ Touch
 The "touch" command is used to update the expiration time of an existing item
 without fetching it.
 
-touch <key> <exptime> [noreply]\r\n
+touch [noreply]\r\n
 
-- <key> is the key of the item the client wishes the server to touch
+- is the key of the item the client wishes the server to touch
 
-- <exptime> is expiration time. Works the same as with the update commands
-  (set/add/etc). This replaces the existing expiration time. If an existing
-  item were to expire in 10 seconds, but then was touched with an
-  expiration time of "20", the item would then expire in 20 seconds.
+- is expiration time. Works the same as with the update commands
+ (set/add/etc). This replaces the existing expiration time. If an existing
+ item were to expire in 10 seconds, but then was touched with an
+ expiration time of "20", the item would then expire in 20 seconds.
 
 - "noreply" optional parameter instructs the server to not send the
-  reply.  See the note in Storage commands regarding malformed
-  requests.
+ reply. See the note in Storage commands regarding malformed
+ requests.
 
 The response line to this command can be one of:
 
 - "TOUCHED\r\n" to indicate success
 
 - "NOT_FOUND\r\n" to indicate that the item with this key was not
-  found.
+ found.
 
 Get And Touch
 -------------
@@ -428,12 +424,12 @@ Get And Touch
 The "gat" and "gats" commands are used to fetch items and update the
 expiration time of an existing items.
 
-gat <exptime> <key>*\r\n
-gats <exptime> <key>*\r\n
+gat *\r\n
+gats *\r\n
 
-- <exptime> is expiration time.
+- is expiration time.
 
-- <key>* means one or more key strings separated by whitespace.
+- * means one or more key strings separated by whitespace.
 
 After this command, the client expects zero or more items, each of
 which is received as a text line followed by a data block. After all
@@ -445,20 +441,20 @@ to indicate the end of response.
 
 Each item sent by the server looks like this:
 
-VALUE <key> <flags> <bytes> [<cas unique>]\r\n
-<data block>\r\n
+VALUE []\r\n
+ \r\n
 
-- <key> is the key for the item being sent
+- is the key for the item being sent
 
-- <flags> is the flags value set by the storage command
+- is the flags value set by the storage command
 
-- <bytes> is the length of the data block to follow, *not* including
-  its delimiting \r\n
+- is the length of the data block to follow, *not* including
+ its delimiting \r\n
 
-- <cas unique> is a unique 64-bit integer that uniquely identifies
-  this specific item.
+- is a unique 64-bit integer that uniquely identifies
+ this specific item.
 
-- <data block> is the data for this item.
+- is the data for this item.
 
 Meta Debug
 ----------
@@ -466,15 +462,15 @@ Meta Debug
 The meta debug command is a human readable dump of all available internal
 metadata of an item, minus the value.
 
-me <key> <flag>\r\n
+me \r\n
 
-- <key> means one key string.
-- if <flag> is 'b', then <key> is a base64 encoded binary value. the response
-  key will also be base64 encoded.
+- means one key string.
+- if is 'b', then is a base64 encoded binary value. the response
+ key will also be base64 encoded.
 
 The response looks like:
 
-ME <key> <k>=<v>*\r\n
+ME = *\r\n
 
 A miss looks like:
 
@@ -482,12 +478,12 @@ EN\r\n
 
 Each of the keys and values are the internal data for the item.
 
-exp   = expiration time
-la    = time in seconds since last access
-cas   = CAS ID
+exp = expiration time
+la = time in seconds since last access
+cas = CAS ID
 fetch = whether an item has been fetched before
-cls   = slab class id
-size  = total size in bytes
+cls = slab class id
+size = total size in bytes
 
 Others may be added.
 
@@ -498,12 +494,12 @@ The meta get command is the generic command for retrieving key data from
 memcached. Based on the flags supplied, it can replace all of the commands:
 "get", "gets", "gat", "gats", "touch", as well as adding new options.
 
-mg <key> <flags>*\r\n
+mg *\r\n
 
-- <key> means one key string. Unlike "get" metaget can only take a single key.
+- means one key string. Unlike "get" metaget can only take a single key.
 
-- <flags> are a set of single character codes ended with a space or newline.
-  flags may have token strings after the initial character.
+- are a set of single character codes ended with a space or newline.
+ flags may have token strings after the initial character.
 
 After this command, the client expects an item to be returned, received as a
 text line followed by an optional data block.
@@ -516,21 +512,21 @@ deleted by a client).
 
 An item sent by the server looks like:
 
-VA <size> <flags>*\r\n
-<data block>\r\n
+VA *\r\n
+ \r\n
 
-- <size> is the size of <data block> in bytes, minus the \r\n
+- is the size of in bytes, minus the \r\n
 
-- <flags>* are flags returned by the server, based on the command flags.
-  They are added in order specified by the flags sent.
+- * are flags returned by the server, based on the command flags.
+ They are added in order specified by the flags sent.
 
-- <data block> is the data for this item. Note that the data block is
-  optional, requiring the 'v' flag to be supplied.
+- is the data for this item. Note that the data block is
+ optional, requiring the 'v' flag to be supplied.
 
 If the request did not ask for a value in the response (v) flag, the server
 response looks like:
 
-HD <flags>*\r\n
+HD *\r\n
 
 If the request resulted in a miss, the response looks like:
 
@@ -542,6 +538,7 @@ The flags used by the 'mg' command are:
 
 - b: interpret key as base64 encoded binary value
 - c: return item cas token
+- C(token): check CAS, do not send value if matches
 - f: return client flags token
 - h: return whether item has been hit before as a 0 or 1
 - k: return key as a token
@@ -551,7 +548,7 @@ The flags used by the 'mg' command are:
 - s: return item size token
 - t: return item TTL remaining in seconds (-1 for unlimited)
 - u: don't bump the item in the LRU
-- v: return item value in <data block>
+- v: return item value in 
 
 These flags can modify the item:
 - E(token): use token as new CAS value if item is modified
@@ -568,12 +565,22 @@ The flags are now repeated with detailed information where useful:
 
 - b: interpret key as base64 encoded binary value
 
-This flag instructs memcached to run a base64 decoder on <key> before looking
+This flag instructs memcached to run a base64 decoder on before looking
 it up. This allows storing and fetching of binary packed keys, so long as they
 are sent to memcached in base64 encoding.
 
 If 'b' flag is sent in the response, and a key is returned via 'k', this
 signals to the client that the key is base64 encoded binary.
+
+- C(token): check CAS value against item, remove 'v' flag if matches
+
+If a CAS token is supplied with C, and a 'v' flag is supplied, only return the
+value if the CAS flag does NOT match. The response code will be "HD" if the
+CAS does match, else "VA " if the CAS does not match. This allows
+conditionally fetching the value of an item only if it has changed.
+
+All other flags behave as normal, example: T(token) will update the TTL
+regardless of if the CAS matches.
 
 - h: return whether item has been hit before as a 0 or 1
 - l: return time since item was last accessed in seconds
@@ -614,10 +621,10 @@ It is possible to access an item without causing it to be "bumped" to the head
 of the LRU. This also avoids marking an item as being hit or updating its last
 access time.
 
-- v: return item value in <data block>
+- v: return item value in 
 
 The data block for a metaget response is optional, requiring this flag to be
-passed in. The response code also changes from "HD" to "VA <size>"
+passed in. The response code also changes from "HD" to "VA "
 
 These flags can modify the item:
 - E(token): use token as new CAS value if item is modified
@@ -689,27 +696,26 @@ The meta set command a generic command for storing data to memcached. Based
 on the flags supplied, it can replace all storage commands (see token M) as
 well as adds new options.
 
-ms <key> <datalen> <flags>*\r\n
+ms *\r\n
 
-- <key> means one key string.
+- means one key string.
 
-- <datalen> is the length of the payload data.
+- is the length of the payload data.
 
-- <flags> are a set of single character codes ended with a space or newline.
-  flags may have strings after the initial character.
+- are a set of single character codes ended with a space or newline.
+ flags may have strings after the initial character.
 
 After this line, the client sends the data block:
 
-<data block>\r\n
+ \r\n
 
-- <data block> is a chunk of arbitrary 8-bit data of length supplied by an 'S'
-  flag and token from the request line. If no 'S' flag is supplied the data
-  is assumed to be 0 length.
+- is a chunk of arbitrary 8-bit data of length 
+ from the previous line.
 
 After sending the command line and the data block the client awaits
 the reply, which is of the format:
 
-<CD> <flags>*\r\n
+ *\r\n
 
 Where CD is one of:
 
@@ -743,7 +749,7 @@ The flags used by the 'ms' command are:
 The flags are now repeated with detailed information where useful:
 
 - c: returns the CAS value on successful storage. Will return 0 on error, but
-  clients must not depend on the return value being zero. In future versions
+ clients must not depend on the return value being zero. In future versions
 this may return the current CAS value for "EX" return code conditions.
 
 - C(token): compare CAS value when storing item
@@ -800,16 +806,16 @@ Meta Delete
 The meta delete command allows for explicit deletion of items, as well as
 marking items as "stale" to allow serving items as stale during revalidation.
 
-md <key> <flags>*\r\n
+md *\r\n
 
-- <key> means one key string.
+- means one key string.
 
-- <flags> are a set of single character codes ended with a space or newline.
-  flags may have strings after the initial character.
+- are a set of single character codes ended with a space or newline.
+ flags may have strings after the initial character.
 
 The response is in the format:
 
-<CD> <flags> <tokens>*\r\n
+ *\r\n
 
 Where CD is one of:
 
@@ -818,7 +824,7 @@ Where CD is one of:
 - "NF" (NOT_FOUND), to indicate that the item with this key was not found.
 
 - "EX" (EXISTS), to indicate that the supplied CAS token does not match the
-  stored item.
+ stored item.
 
 The flags used by the 'md' command are:
 
@@ -873,16 +879,16 @@ values. This replaces the "incr" and "decr" commands. Values are unsigned
 64bit integers. Decrementing will reach 0 rather than underflow. Incrementing
 can overflow.
 
-ma <key> <flags>*\r\n
+ma *\r\n
 
-- <key> means one key string.
+- means one key string.
 
-- <flags> are a set of single character codes ended with a space or newline.
-  flags may have strings after the initial character.
+- are a set of single character codes ended with a space or newline.
+ flags may have strings after the initial character.
 
 The response is in the format:
 
-<CD> <flags> <tokens>*\r\n
+ *\r\n
 
 Where CD is one of:
 
@@ -891,15 +897,15 @@ Where CD is one of:
 - "NF" (NOT_FOUND), to indicate that the item with this key was not found.
 
 - "NS" (NOT_STORED), to indicate that the item was not created as requested
-  after a miss.
+ after a miss.
 
 - "EX" (EXISTS), to indicate that the supplied CAS token does not match the
-  stored item.
+ stored item.
 
 If the 'v' flag is supplied, the response is formatted as:
 
-VA <size> <flags>*\r\n
-<number>\r\n
+VA *\r\n
+ \r\n
 
 The flags used by the 'ma' command are:
 
@@ -980,20 +986,20 @@ The slabs reassign command is used to redistribute memory once a running
 instance has hit its limit. It might be desirable to have memory laid out
 differently than was automatically assigned after the server started.
 
-slabs reassign <source class> <dest class>\r\n
+slabs reassign \r\n
 
-- <source class> is an id number for the slab class to steal a page from
+- is an id number for the slab class to steal a page from
 
 A source class id of -1 means "pick from any valid class"
 
-- <dest class> is an id number for the slab class to move a page to
+- is an id number for the slab class to move a page to
 
 The response line could be one of:
 
 - "OK" to indicate the page has been scheduled to move
 
 - "BUSY [message]" to indicate a page is already being processed, try again
-  later.
+ later.
 
 - "BADCLASS [message]" a bad class id was specified
 
@@ -1026,12 +1032,12 @@ The response should always be "OK\r\n"
 - <0> means to set the thread on standby
 
 - <1> means to return pages to a global pool when there are more than 2 pages
-  worth of free chunks in a slab class. Pages are then re-assigned back into
-  other classes as-needed.
+ worth of free chunks in a slab class. Pages are then re-assigned back into
+ other classes as-needed.
 
 - <2> is a highly aggressive mode which causes pages to be moved every time
-  there is an eviction. It is not recommended to run for very long in this
-  mode unless your access patterns are very well understood.
+ there is an eviction. It is not recommended to run for very long in this
+ mode unless your access patterns are very well understood.
 
 LRU Tuning
 ----------
@@ -1044,23 +1050,23 @@ The traditional model is "flat" mode, which is a single LRU chain per slab
 class. The newer (with `-o modern` or `-o lru_maintainer`) is segmented into
 HOT, WARM, COLD. There is also a TEMP LRU. See doc/new_lru.txt for details.
 
-lru <tune|mode|temp_ttl> <option list>
+lru <tune|mode|temp_ttl> 
 
 - "tune" takes numeric arguments "percent hot", "percent warm",
-  "max hot factor", "max warm age factor". IE: "lru tune 10 25 0.1 2.0".
-  This would cap HOT_LRU at 10% of the cache, or tail is idle longer than
-  10% of COLD_LRU. WARM_LRU is up to 25% of cache, or tail is idle longer
-  than 2x COLD_LRU.
+ "max hot factor", "max warm age factor". IE: "lru tune 10 25 0.1 2.0".
+ This would cap HOT_LRU at 10% of the cache, or tail is idle longer than
+ 10% of COLD_LRU. WARM_LRU is up to 25% of cache, or tail is idle longer
+ than 2x COLD_LRU.
 
 - "mode" <flat|segmented>: "flat" is traditional mode. "segmented" uses
-  HOT|WARM|COLD split. "segmented" mode requires `-o lru_maintainer` at start
-  time. If switching from segmented to flat mode, the background thread will
-  pull items from HOT|WARM into COLD queue.
+ HOT|WARM|COLD split. "segmented" mode requires `-o lru_maintainer` at start
+ time. If switching from segmented to flat mode, the background thread will
+ pull items from HOT|WARM into COLD queue.
 
-- "temp_ttl" <ttl>: If TTL is less than zero, disable usage of TEMP_LRU. If
-  zero or above, items set with a TTL lower than this will go into TEMP_LRU
-  and be unevictable until they naturally expire or are otherwise deleted or
-  replaced.
+- "temp_ttl": If TTL is less than zero, disable usage of TEMP_LRU. If
+ zero or above, items set with a TTL lower than this will go into TEMP_LRU
+ and be unevictable until they naturally expire or are otherwise deleted or
+ replaced.
 
 The response line could be one of:
 
@@ -1090,11 +1096,11 @@ The response line could be one of:
 
 - "ERROR [message]" something went wrong while enabling or disabling.
 
-lru_crawler sleep <microseconds>
+lru_crawler sleep 
 
 - The number of microseconds to sleep in between each item checked for
-  expiration. Smaller numbers will obviously impact the system more.
-  A value of "0" disables the sleep, "1000000" (one second) is the max.
+ expiration. Smaller numbers will obviously impact the system more.
+ A value of "0" disables the sleep, "1000000" (one second) is the max.
 
 The response line could be one of:
 
@@ -1105,8 +1111,8 @@ The response line could be one of:
 lru_crawler tocrawl <32u>
 
 - The maximum number of items to inspect in a slab class per run request. This
-  allows you to avoid scanning all of very large slabs when it is unlikely to
-  find items to expire.
+ allows you to avoid scanning all of very large slabs when it is unlikely to
+ find items to expire.
 
 The response line could be one of:
 
@@ -1117,12 +1123,12 @@ The response line could be one of:
 lru_crawler crawl <classid,classid,classid|all>
 
 - Takes a single, or a list of, numeric classids (ie: 1,3,10). This instructs
-  the crawler to start at the tail of each of these classids and run to the
-  head. The crawler cannot be stopped or restarted until it completes the
-  previous request.
+ the crawler to start at the tail of each of these classids and run to the
+ head. The crawler cannot be stopped or restarted until it completes the
+ previous request.
 
-  The special keyword "all" instructs it to crawl all slabs with items in
-  them.
+ The special keyword "all" instructs it to crawl all slabs with items in
+ them.
 
 The response line could be one of:
 
@@ -1135,22 +1141,22 @@ The response line could be one of:
 lru_crawler metadump <classid,classid,classid|all|hash>
 
 - Similar in function to the above "lru_crawler crawl" command, this function
-  outputs one line for every valid item found in the matching slab classes.
-  Similar to "cachedump", but does not lock the cache and can return all
-  items, not just 1MB worth.
+ outputs one line for every valid item found in the matching slab classes.
+ Similar to "cachedump", but does not lock the cache and can return all
+ items, not just 1MB worth.
 
-  if "hash" is specified instead of a classid or "all", the crawler will dump
-  items by directly walking the hash table instead of the LRU's. This makes it
-  more likely all items will be visited once as LRU reordering and locking can
-  cause frequently accessed items to be missed.
+ if "hash" is specified instead of a classid or "all", the crawler will dump
+ items by directly walking the hash table instead of the LRU's. This makes it
+ more likely all items will be visited once as LRU reordering and locking can
+ cause frequently accessed items to be missed.
 
-  Lines are in "key=value key2=value2" format, with value being URI encoded
-  (ie: %20 for a space).
+ Lines are in "key=value key2=value2" format, with value being URI encoded
+ (ie: %20 for a space).
 
-  The exact keys available are subject to change, but will include at least:
+ The exact keys available are subject to change, but will include at least:
 
-  "key", "exp" (expiration time), "la", (last access time), "cas",
-  "fetch" (if item has been fetched before).
+ "key", "exp" (expiration time), "la", (last access time), "cas",
+ "fetch" (if item has been fetched before).
 
 The response line could be one of:
 
@@ -1163,17 +1169,17 @@ The response line could be one of:
 lru_crawler mgdump <classid,classid,classid|all|hash>
 
 - Similar in function to the above "lru_crawler crawl" command, this function
-  outputs one line for every valid item found in the matching slab classes.
+ outputs one line for every valid item found in the matching slab classes.
 
-  If "hash" is specified instead of a classid or "all", the crawler will dump
-  items by directly walking the hash table instead of the LRU's. This makes it
-  more likely all items will be visited once as LRU reordering and locking can
-  cause frequently accessed items to be missed.
+ If "hash" is specified instead of a classid or "all", the crawler will dump
+ items by directly walking the hash table instead of the LRU's. This makes it
+ more likely all items will be visited once as LRU reordering and locking can
+ cause frequently accessed items to be missed.
 
-  Lines are in a basic metaget format, like: "mg key\r\n". If a key is in
-  binary format: "mg base64encodedkey b\r\n"
-  A user may then take each line, append any flags they want, and run those
-  commands against the server to fetch exactly what they want to know.
+ Lines are in a basic metaget format, like: "mg key\r\n". If a key is in
+ binary format: "mg base64encodedkey b\r\n"
+ A user may then take each line, append any flags they want, and run those
+ commands against the server to fetch exactly what they want to know.
 
 The response line could be one of:
 
@@ -1183,8 +1189,6 @@ The response line could be one of:
 
 - "BADCLASS [message]" to indicate an invalid class was specified.
 
-
-
 Watchers
 --------
 
@@ -1192,7 +1196,7 @@ Watchers are a way to connect to memcached and inspect what's going on
 internally. This is an evolving feature so new endpoints should show up over
 time.
 
-watch <arg1> <arg2> <arg3>
+watch 
 
 possible arguments:
 fetchers
@@ -1205,7 +1209,7 @@ proxyuser
 deletions
 
 - Turn connection into a watcher. Options can be stacked and are
-  space-separated. Logs will be sent to the watcher until it disconnects.
+ space-separated. Logs will be sent to the watcher until it disconnects.
 
 The response line could be one of:
 
@@ -1227,33 +1231,33 @@ byte, ie: "n%2Cfoo" for "n,foo".
 The arguments are:
 
 - "fetchers": Currently emits logs every time an item is fetched internally.
-  This means a "set" command would also emit an item_get log, as it checks for
-  an item before replacing it. Multigets should also emit multiple lines.
+ This means a "set" command would also emit an item_get log, as it checks for
+ an item before replacing it. Multigets should also emit multiple lines.
 
 - "mutations": Currently emits logs when an item is stored in most cases.
-  Shows errors for most cases when items cannot be stored.
+ Shows errors for most cases when items cannot be stored.
 
 - "evictions": Shows some information about items as they are evicted from the
-  cache. Useful in seeing if items being evicted were actually used, and which
-  keys are getting removed.
+ cache. Useful in seeing if items being evicted were actually used, and which
+ keys are getting removed.
 
 - "connevents": Emits logs when connections are opened and closed, i.e. when
-  clients connect or disconnect. For TCP transports, logs indicate the remote
-  address IP and port. Connection close events additionally supply a reason for
-  closing the connection. If TLS is enabled, this stream also contains
-  detailed TLS protocol errors.
+ clients connect or disconnect. For TCP transports, logs indicate the remote
+ address IP and port. Connection close events additionally supply a reason for
+ closing the connection. If TLS is enabled, this stream also contains
+ detailed TLS protocol errors.
 
 - "proxyreqs": Emits detailed timing logs about requests/responses being
-  returned to a client while in proxy mode. The conditions which logs are
-  written here may be influenced by configuration.
+ returned to a client while in proxy mode. The conditions which logs are
+ written here may be influenced by configuration.
 
 - "proxyevents": Emits internal proxy errors and system events, such as
-  configuration reloads.
+ configuration reloads.
 
 - "proxyuser": Emits log entries created from lua configuration files.
 
 - "deletions": Emits logs when an item is successfully deleted from the
-  cache using `delete` or `md` commands. delete misses wouldn't be logged
+ cache using `delete` or `md` commands. delete misses wouldn't be logged
 
 Statistics
 ----------
@@ -1265,15 +1269,14 @@ arguments:
 stats\r\n
 
 it causes the server to output general-purpose statistics and
-settings, documented below.  In the other form it has some arguments:
+settings, documented below. In the other form it has some arguments:
 
-stats <args>\r\n
+stats \r\n
 
-Depending on <args>, various internal data is sent by the server. The
+Depending on, various internal data is sent by the server. The
 kinds of arguments and the data sent are not documented in this version
 of the protocol, and are subject to change for the convenience of
 memcache developers.
-
 
 General-purpose statistics
 --------------------------
@@ -1281,14 +1284,14 @@ General-purpose statistics
 Upon receiving the "stats" command without arguments, the server sends
 a number of lines which look like this:
 
-STAT <name> <value>\r\n
+STAT \r\n
 
 The server terminates this list with the line
 
 END\r\n
 
-In each line of statistics, <name> is the name of this statistic, and
-<value> is the data.  The following is the list of all names sent in
+In each line of statistics, is the name of this statistic, and
+ is the data. The following is the list of all names sent in
 response to the "stats" command, together with the type of the value
 sent for this name, and the meaning of the value.
 
@@ -1297,157 +1300,159 @@ means a 64-bit unsigned integer. '32u.32u' means two 32-bit unsigned
 integers separated by a colon (treat this as a floating point number).
 
 |-----------------------+---------+-------------------------------------------|
-| Name                  | Type    | Meaning                                   |
+| Name | Type | Meaning |
 |-----------------------+---------+-------------------------------------------|
-| pid                   | 32u     | Process id of this server process         |
-| uptime                | 32u     | Number of secs since the server started   |
-| time                  | 32u     | current UNIX time according to the server |
-| version               | string  | Version string of this server             |
-| pointer_size          | 32      | Default size of pointers on the host OS   |
-|                       |         | (generally 32 or 64)                      |
-| rusage_user           | 32u.32u | Accumulated user time for this process    |
-|                       |         | (seconds:microseconds)                    |
-| rusage_system         | 32u.32u | Accumulated system time for this process  |
-|                       |         | (seconds:microseconds)                    |
-| curr_items            | 64u     | Current number of items stored            |
-| total_items           | 64u     | Total number of items stored since        |
-|                       |         | the server started                        |
-| bytes                 | 64u     | Current number of bytes used              |
-|                       |         | to store items                            |
-| max_connections       | 32u     | Max number of simultaneous connections    |
-| curr_connections      | 32u     | Number of open connections                |
-| total_connections     | 32u     | Total number of connections opened since  |
-|                       |         | the server started running                |
-| rejected_connections  | 64u     | Conns rejected in maxconns_fast mode      |
-| connection_structures | 32u     | Number of connection structures allocated |
-|                       |         | by the server                             |
-| response_obj_oom      | 64u     | Connections closed by lack of memory      |
-| response_obj_count    | 64u     | Total response objects in use             |
-| response_obj_bytes    | 64u     | Total bytes used for resp. objects. is a  |
-|                       |         | subset of bytes from read_buf_bytes.      |
-| read_buf_count        | 64u     | Total read/resp buffers allocated         |
-| read_buf_bytes        | 64u     | Total read/resp buffer bytes allocated    |
-| read_buf_bytes_free   | 64u     | Total read/resp buffer bytes cached       |
-| read_buf_oom          | 64u     | Connections closed by lack of memory      |
-| reserved_fds          | 32u     | Number of misc fds used internally        |
-| proxy_conn_requests   | 64u     | Number of requests received by the proxy  |
-| proxy_conn_errors     | 64u     | Number of internal errors from proxy      |
-| proxy_conn_oom        | 64u     | Number of out of memory errors while      |
-|                       |         | serving proxy requests                    |
-| proxy_req_active      | 64u     | Number of in-flight proxy requests        |
-| proxy_req_await       | 64u     | Number of in-flight proxy async requests  |
-| cmd_get               | 64u     | Cumulative number of retrieval reqs       |
-| cmd_set               | 64u     | Cumulative number of storage reqs         |
-| cmd_flush             | 64u     | Cumulative number of flush reqs           |
-| cmd_touch             | 64u     | Cumulative number of touch reqs           |
-| get_hits              | 64u     | Number of keys that have been requested   |
-|                       |         | and found present                         |
-| get_misses            | 64u     | Number of items that have been requested  |
-|                       |         | and not found                             |
-| get_expired           | 64u     | Number of items that have been requested  |
-|                       |         | but had already expired.                  |
-| get_flushed           | 64u     | Number of items that have been requested  |
-|                       |         | but have been flushed via flush_all       |
-| delete_misses         | 64u     | Number of deletions reqs for missing keys |
-| delete_hits           | 64u     | Number of deletion reqs resulting in      |
-|                       |         | an item being removed.                    |
-| incr_misses           | 64u     | Number of incr reqs against missing keys. |
-| incr_hits             | 64u     | Number of successful incr reqs.           |
-| decr_misses           | 64u     | Number of decr reqs against missing keys. |
-| decr_hits             | 64u     | Number of successful decr reqs.           |
-| cas_misses            | 64u     | Number of CAS reqs against missing keys.  |
-| cas_hits              | 64u     | Number of successful CAS reqs.            |
-| cas_badval            | 64u     | Number of CAS reqs for which a key was    |
-|                       |         | found, but the CAS value did not match.   |
-| touch_hits            | 64u     | Number of keys that have been touched     |
-|                       |         | with a new expiration time                |
-| touch_misses          | 64u     | Number of items that have been touched    |
-|                       |         | and not found                             |
-| store_too_large       | 64u     | Number of rejected storage requests       |
-|                       |         | caused by attempting to write a value     |
-|                       |         | larger than the -I limit                  |
-| store_no_memory       | 64u     | Number of rejected storage requests       |
-|                       |         | caused by exhaustion of the -m memory     |
-|                       |         | limit (relevant when -M is used)          |
-| auth_cmds             | 64u     | Number of authentication commands         |
-|                       |         | handled, success or failure.              |
-| auth_errors           | 64u     | Number of failed authentications.         |
-| idle_kicks            | 64u     | Number of connections closed due to       |
-|                       |         | reaching their idle timeout.              |
-| evictions             | 64u     | Number of valid items removed from cache  |
-|                       |         | to free memory for new items              |
-| reclaimed             | 64u     | Number of times an entry was stored using |
-|                       |         | memory from an expired entry              |
-| bytes_read            | 64u     | Total number of bytes read by this server |
-|                       |         | from network                              |
-| bytes_written         | 64u     | Total number of bytes sent by this server |
-|                       |         | to network                                |
-| limit_maxbytes        | size_t  | Number of bytes this server is allowed to |
-|                       |         | use for storage.                          |
-| accepting_conns       | bool    | Whether or not server is accepting conns  |
-| listen_disabled_num   | 64u     | Number of times server has stopped        |
-|                       |         | accepting new connections (maxconns).     |
-| time_in_listen_disabled_us                                                  |
-|                       | 64u     | Number of microseconds in maxconns.       |
-| threads               | 32u     | Number of worker threads requested.       |
-|                       |         | (see doc/threads.txt)                     |
-| conn_yields           | 64u     | Number of times any connection yielded to |
-|                       |         | another due to hitting the -R limit.      |
-| hash_power_level      | 32u     | Current size multiplier for hash table    |
-| hash_bytes            | 64u     | Bytes currently used by hash tables       |
-| hash_is_expanding     | bool    | Indicates if the hash table is being      |
-|                       |         | grown to a new size                       |
-| expired_unfetched     | 64u     | Items pulled from LRU that were never     |
-|                       |         | touched by get/incr/append/etc before     |
-|                       |         | expiring                                  |
-| evicted_unfetched     | 64u     | Items evicted from LRU that were never    |
-|                       |         | touched by get/incr/append/etc.           |
-| evicted_active        | 64u     | Items evicted from LRU that had been hit  |
-|                       |         | recently but did not jump to top of LRU   |
-| slab_reassign_running | bool    | If a slab page is being moved             |
-| slabs_moved           | 64u     | Total slab pages moved                    |
-| crawler_reclaimed     | 64u     | Total items freed by LRU Crawler          |
-| crawler_items_checked | 64u     | Total items examined by LRU Crawler       |
-| lrutail_reflocked     | 64u     | Times LRU tail was found with active ref. |
-|                       |         | Items can be evicted to avoid OOM errors. |
-| moves_to_cold         | 64u     | Items moved from HOT/WARM to COLD LRU's   |
-| moves_to_warm         | 64u     | Items moved from COLD to WARM LRU         |
-| moves_within_lru      | 64u     | Items reshuffled within HOT or WARM LRU's |
-| direct_reclaims       | 64u     | Times worker threads had to directly      |
-|                       |         | reclaim or evict items.                   |
-| lru_crawler_starts    | 64u     | Times an LRU crawler was started          |
-| lru_maintainer_juggles                                                      |
-|                       | 64u     | Number of times the LRU bg thread woke up |
-| slab_global_page_pool | 32u     | Slab pages returned to global pool for    |
-|                       |         | reassignment to other slab classes.       |
-| slab_reassign_rescues | 64u     | Items rescued from eviction in page move  |
-| slab_reassign_chunk_rescues                                                 |
-|                       | 64u     | Individual sections of an item rescued    |
-|                       |         | during a page move.                       |
-| slab_reassign_inline_reclaim                                                |
-|                       | 64u     | Internal stat counter for when the page   |
-|                       |         | mover clears memory from the chunk        |
-|                       |         | freelist when it wasn't expecting to.     |
-| slab_reassign_busy_items                                                    |
-|                       | 64u     | Items busy during page move, requiring a  |
-|                       |         | retry before page can be moved.           |
-| slab_reassign_busy_nomem                                                    |
-|                       | 64u     | Times waiting for free slab memory before |
-|                       |         | being able to rescue valid items during   |
-                        |         | a page move.                              |
-| slab_reassign_busy_deletes                                                  |
-|                       | 64u     | Items busy during page move, requiring    |
-|                       |         | deletion before page can be moved.        |
-| log_worker_dropped    | 64u     | Logs a worker never wrote due to full buf |
-| log_worker_written    | 64u     | Logs written by a worker, to be picked up |
-| log_watcher_skipped   | 64u     | Logs not sent to slow watchers.           |
-| log_watcher_sent      | 64u     | Logs written to watchers.                 |
-| log_watchers          | 64u     | Number of currently active watchers.      |
-| unexpected_napi_ids   | 64u     | Number of times an unexpected napi id is  |
-|                       |         | is received. See doc/napi_ids.txt         |
-| round_robin_fallback  | 64u     | Number of times napi id of 0 is received  |
-|                       |         | resulting in fallback to round robin      |
-|                       |         | thread selection. See doc/napi_ids.txt    |
+| pid | 32u | Process id of this server process |
+| uptime | 32u | Number of secs since the server started |
+| time | 32u | current UNIX time according to the server |
+| version | string | Version string of this server |
+| pointer_size | 32 | Default size of pointers on the host OS |
+| | | (generally 32 or 64) |
+| rusage_user | 32u.32u | Accumulated user time for this process |
+| | | (seconds:microseconds) |
+| rusage_system | 32u.32u | Accumulated system time for this process |
+| | | (seconds:microseconds) |
+| curr_items | 64u | Current number of items stored |
+| total_items | 64u | Total number of items stored since |
+| | | the server started |
+| bytes | 64u | Current number of bytes used |
+| | | to store items |
+| max_connections | 32u | Max number of simultaneous connections |
+| curr_connections | 32u | Number of open connections |
+| total_connections | 32u | Total number of connections opened since |
+| | | the server started running |
+| rejected_connections | 64u | Conns rejected in maxconns_fast mode |
+| connection_structures | 32u | Number of connection structures allocated |
+| | | by the server |
+| response_obj_oom | 64u | Connections closed by lack of memory |
+| response_obj_count | 64u | Total response objects in use |
+| response_obj_bytes | 64u | Total bytes used for resp. objects. is a |
+| | | subset of bytes from read_buf_bytes. |
+| read_buf_count | 64u | Total read/resp buffers allocated |
+| read_buf_bytes | 64u | Total read/resp buffer bytes allocated |
+| read_buf_bytes_free | 64u | Total read/resp buffer bytes cached |
+| read_buf_oom | 64u | Connections closed by lack of memory |
+| reserved_fds | 32u | Number of misc fds used internally |
+| proxy_conn_requests | 64u | Number of requests received by the proxy |
+| proxy_conn_errors | 64u | Number of internal errors from proxy |
+| proxy_conn_oom | 64u | Number of out of memory errors while |
+| | | serving proxy requests |
+| proxy_req_active | 64u | Number of in-flight proxy requests |
+| cmd_get | 64u | Cumulative number of retrieval reqs |
+| cmd_set | 64u | Cumulative number of storage reqs |
+| cmd_flush | 64u | Cumulative number of flush reqs |
+| cmd_touch | 64u | Cumulative number of touch reqs |
+| get_hits | 64u | Number of keys that have been requested |
+| | | and found present |
+| get_misses | 64u | Number of items that have been requested |
+| | | and not found |
+| get_expired | 64u | Number of items that have been requested |
+| | | but had already expired. |
+| get_flushed | 64u | Number of items that have been requested |
+| | | but have been flushed via flush_all |
+| delete_misses | 64u | Number of deletions reqs for missing keys |
+| delete_hits | 64u | Number of deletion reqs resulting in |
+| | | an item being removed. |
+| incr_misses | 64u | Number of incr reqs against missing keys. |
+| incr_hits | 64u | Number of successful incr reqs. |
+| decr_misses | 64u | Number of decr reqs against missing keys. |
+| decr_hits | 64u | Number of successful decr reqs. |
+| cas_misses | 64u | Number of CAS reqs against missing keys. |
+| cas_hits | 64u | Number of successful CAS reqs. |
+| cas_badval | 64u | Number of CAS reqs for which a key was |
+| | | found, but the CAS value did not match. |
+| touch_hits | 64u | Number of keys that have been touched |
+| | | with a new expiration time |
+| touch_misses | 64u | Number of items that have been touched |
+| | | and not found |
+| store_too_large | 64u | Number of rejected storage requests |
+| | | caused by attempting to write a value |
+| | | larger than the -I limit |
+| store_no_memory | 64u | Number of rejected storage requests |
+| | | caused by exhaustion of the -m memory |
+| | | limit (relevant when -M is used) |
+| auth_cmds | 64u | Number of authentication commands |
+| | | handled, success or failure. |
+| auth_errors | 64u | Number of failed authentications. |
+| idle_kicks | 64u | Number of connections closed due to |
+| | | reaching their idle timeout. |
+| evictions | 64u | Number of valid items removed from cache |
+| | | to free memory for new items |
+| reclaimed | 64u | Number of times an entry was stored using |
+| | | memory from an expired entry |
+| bytes_read | 64u | Total number of bytes read by this server |
+| | | from network |
+| bytes_written | 64u | Total number of bytes sent by this server |
+| | | to network |
+| limit_maxbytes | size_t | Number of bytes this server is allowed to |
+| | | use for storage. |
+| accepting_conns | bool | Whether or not server is accepting conns |
+| listen_disabled_num | 64u | Number of times server has stopped |
+| | | accepting new connections (maxconns). |
+| time_in_listen_disabled_us |
+| | 64u | Number of microseconds in maxconns. |
+| threads | 32u | Number of worker threads requested. |
+| | | (see doc/threads.txt) |
+| conn_yields | 64u | Number of times any connection yielded to |
+| | | another due to hitting the -R limit. |
+| hash_power_level | 32u | Current size multiplier for hash table |
+| hash_bytes | 64u | Bytes currently used by hash tables |
+| hash_is_expanding | bool | Indicates if the hash table is being |
+| | | grown to a new size |
+| expired_unfetched | 64u | Items pulled from LRU that were never |
+| | | touched by get/incr/append/etc before |
+| | | expiring |
+| evicted_unfetched | 64u | Items evicted from LRU that were never |
+| | | touched by get/incr/append/etc. |
+| evicted_active | 64u | Items evicted from LRU that had been hit |
+| | | recently but did not jump to top of LRU |
+| slab_reassign_running | bool | If a slab page is being moved |
+| slabs_moved | 64u | Total slab pages moved |
+| crawler_reclaimed | 64u | Total items freed by LRU Crawler |
+| crawler_items_checked | 64u | Total items examined by LRU Crawler |
+| lrutail_reflocked | 64u | Times LRU tail was found with active ref. |
+| | | Items can be evicted to avoid OOM errors. |
+| moves_to_cold | 64u | Items moved from HOT/WARM to COLD LRU's |
+| moves_to_warm | 64u | Items moved from COLD to WARM LRU |
+| moves_within_lru | 64u | Items reshuffled within HOT or WARM LRU's |
+| direct_reclaims | 64u | Times worker threads had to directly |
+| | | reclaim or evict items. |
+| lru_crawler_starts | 64u | Times an LRU crawler was started |
+| lru_maintainer_juggles |
+| | 64u | Number of times the LRU bg thread woke up |
+| slab_global_page_pool | 32u | Slab pages returned to global pool for |
+| | | reassignment to other slab classes. |
+| slab_reassign_rescues | 64u | Items rescued from eviction in page move |
+| slab_reassign_chunk_rescues |
+| | 64u | Individual sections of an item rescued |
+| | | during a page move. |
+| slab_reassign_inline_reclaim |
+| | 64u | Internal stat counter for when the page |
+| | | mover clears memory from the chunk |
+| | | freelist when it wasn't expecting to. |
+| slab_reassign_busy_items |
+| | 64u | Items busy during page move, requiring a |
+| | | retry before page can be moved. |
+| slab_reassign_busy_nomem |
+| | 64u | Times waiting for free slab memory before |
+| | | being able to rescue valid items during |
+| | | a page move. |
+| slab_reassign_last_busy_status |
+| | string | Reason why an item was busy, causing the |
+| | | page mover to wait and retry later |
+| slab_reassign_busy_deletes |
+| | 64u | Items busy during page move, requiring |
+| | | deletion before page can be moved. |
+| log_worker_dropped | 64u | Logs a worker never wrote due to full buf |
+| log_worker_written | 64u | Logs written by a worker, to be picked up |
+| log_watcher_skipped | 64u | Logs not sent to slow watchers. |
+| log_watcher_sent | 64u | Logs written to watchers. |
+| log_watchers | 64u | Number of currently active watchers. |
+| unexpected_napi_ids | 64u | Number of times an unexpected napi id is |
+| | | is received. See doc/napi_ids.txt |
+| round_robin_fallback | 64u | Number of times napi id of 0 is received |
+| | | resulting in fallback to round robin |
+| | | thread selection. See doc/napi_ids.txt |
 |-----------------------+---------+-------------------------------------------|
 
 Settings statistics
@@ -1456,81 +1461,80 @@ CAVEAT: This section describes statistics which are subject to change in the
 future.
 
 The "stats" command with the argument of "settings" returns details of
-the settings of the running memcached.  This is primarily made up of
+the settings of the running memcached. This is primarily made up of
 the results of processing commandline options.
 
 Note that these are not guaranteed to return in any specific order and
-this list may not be exhaustive.  Otherwise, this returns like any
+this list may not be exhaustive. Otherwise, this returns like any
 other stats command.
 
 |-------------------+----------+----------------------------------------------|
-| Name              | Type     | Meaning                                      |
+| Name | Type | Meaning |
 |-------------------+----------+----------------------------------------------|
-| maxbytes          | size_t   | Maximum number of bytes allowed in the cache |
-| maxconns          | 32       | Maximum number of clients allowed.           |
-| tcpport           | 32       | TCP listen port.                             |
-| udpport           | 32       | UDP listen port.                             |
-| inter             | string   | Listen interface.                            |
-| verbosity         | 32       | 0 = none, 1 = some, 2 = lots                 |
-| oldest            | 32u      | Age of the oldest honored object.            |
-| evictions         | on/off   | When off, LRU evictions are disabled.        |
-| domain_socket     | string   | Path to the domain socket (if any).          |
-| umask             | 32 (oct) | umask for the creation of the domain socket. |
-| shutdown_command  | yes/no   | If shutdown admin command is enabled.        |
-| growth_factor     | float    | Chunk size growth factor.                    |
-| chunk_size        | 32       | Minimum space allocated for key+value+flags. |
-| num_threads       | 32       | Number of threads (including dispatch).      |
-| stat_key_prefix   | char     | Stats prefix separator character.            |
-| detail_enabled    | bool     | If yes, stats detail is enabled.             |
-| reqs_per_event    | 32       | Max num IO ops processed within an event.    |
-| cas_enabled       | bool     | When no, CAS is not enabled for this server. |
-| tcp_backlog       | 32       | TCP listen backlog.                          |
-| auth_enabled_sasl | yes/no   | SASL auth requested and enabled.             |
-| item_size_max     | size_t   | maximum item size                            |
-| maxconns_fast     | bool     | If fast disconnects are enabled              |
-| hashpower_init    | 32       | Starting size multiplier for hash table      |
-| slab_reassign     | bool     | Whether slab page reassignment is allowed    |
-| slab_automove     | bool     | Whether slab page automover is enabled       |
-| slab_automove_ratio                                                         |
-|                   | float    | Ratio limit between young/old slab classes   |
-| slab_automove_window                                                        |
-|                   | 32u      | Internal algo tunable for automove           |
-| slab_chunk_max    | 32       | Max slab class size (avoid unless necessary) |
-| hash_algorithm    | char     | Hash table algorithm in use                  |
-| lru_crawler       | bool     | Whether the LRU crawler is enabled           |
-| lru_crawler_sleep | 32       | Microseconds to sleep between LRU crawls     |
-| lru_crawler_tocrawl                                                         |
-|                   | 32u      | Max items to crawl per slab per run          |
-| lru_maintainer_thread                                                       |
-|                   | bool     | Split LRU mode and background threads        |
-| hot_lru_pct       | 32       | Pct of slab memory reserved for HOT LRU      |
-| warm_lru_pct      | 32       | Pct of slab memory reserved for WARM LRU     |
-| hot_max_factor    | float    | Set idle age of HOT LRU to COLD age * this   |
-| warm_max_factor   | float    | Set idle age of WARM LRU to COLD age * this  |
-| temp_lru          | bool     | If yes, items < temporary_ttl use TEMP_LRU   |
-| temporary_ttl     | 32u      | Items with TTL < this are marked  temporary  |
-| idle_time         | 0        | Drop connections that are idle this many     |
-|                   |          | seconds (0 disables)                         |
-| watcher_logbuf_size                                                         |
-|                   | 32u      | Size of internal (not socket) write buffer   |
-|                   |          | per active watcher connected.                |
-| worker_logbuf_size| 32u      | Size of internal per-worker-thread buffer    |
-|                   |          | which the background thread reads from.      |
-| read_obj_mem_limit| 32u      | Megabyte limit for conn. read/resp buffers.  |
-| track_sizes       | bool     | If yes, a "stats sizes" histogram is being   |
-|                   |          | dynamically tracked.                         |
-| inline_ascii_response                                                       |
-|                   | bool     | Does nothing as of 1.5.15                    |
-| drop_privileges   | bool     | If yes, and available, drop unused syscalls  |
-|                   |          | (see seccomp on Linux, pledge on OpenBSD)    |
-| proxy_enabled     | bool     | If proxy has been configured at start        |
-| proxy_uring_enabled                                                         |
-                    | bool     | If proxy is configured to use IO_URING.      |
-                    |          | NOTE: uring may be used if kernel too old    |
-| memory_file       | char     | Warm restart memory file path, if enabled    |
-| client_flags_size | 32u      | Size in bytes of client flags                |
+| maxbytes | size_t | Maximum number of bytes allowed in the cache |
+| maxconns | 32 | Maximum number of clients allowed. |
+| tcpport | 32 | TCP listen port. |
+| udpport | 32 | UDP listen port. |
+| inter | string | Listen interface. |
+| verbosity | 32 | 0 = none, 1 = some, 2 = lots |
+| oldest | 32u | Age of the oldest honored object. |
+| evictions | on/off | When off, LRU evictions are disabled. |
+| domain_socket | string | Path to the domain socket (if any). |
+| umask | 32 (oct) | umask for the creation of the domain socket. |
+| shutdown_command | yes/no | If shutdown admin command is enabled. |
+| growth_factor | float | Chunk size growth factor. |
+| chunk_size | 32 | Minimum space allocated for key+value+flags. |
+| num_threads | 32 | Number of threads (including dispatch). |
+| stat_key_prefix | char | Stats prefix separator character. |
+| detail_enabled | bool | If yes, stats detail is enabled. |
+| reqs_per_event | 32 | Max num IO ops processed within an event. |
+| cas_enabled | bool | When no, CAS is not enabled for this server. |
+| tcp_backlog | 32 | TCP listen backlog. |
+| auth_enabled_sasl | yes/no | SASL auth requested and enabled. |
+| item_size_max | size_t | maximum item size |
+| maxconns_fast | bool | If fast disconnects are enabled |
+| hashpower_init | 32 | Starting size multiplier for hash table |
+| slab_reassign | bool | Whether slab page reassignment is allowed |
+| slab_automove | bool | Whether slab page automover is enabled |
+| slab_automove_ratio |
+| | float | Ratio limit between young/old slab classes |
+| slab_automove_window |
+| | 32u | Internal algo tunable for automove |
+| slab_chunk_max | 32 | Max slab class size (avoid unless necessary) |
+| hash_algorithm | char | Hash table algorithm in use |
+| lru_crawler | bool | Whether the LRU crawler is enabled |
+| lru_crawler_sleep | 32 | Microseconds to sleep between LRU crawls |
+| lru_crawler_tocrawl |
+| | 32u | Max items to crawl per slab per run |
+| lru_maintainer_thread |
+| | bool | Split LRU mode and background threads |
+| hot_lru_pct | 32 | Pct of slab memory reserved for HOT LRU |
+| warm_lru_pct | 32 | Pct of slab memory reserved for WARM LRU |
+| hot_max_factor | float | Set idle age of HOT LRU to COLD age * this |
+| warm_max_factor | float | Set idle age of WARM LRU to COLD age * this |
+| temp_lru | bool | If yes, items < temporary_ttl use TEMP_LRU |
+| temporary_ttl | 32u | Items with TTL < this are marked temporary |
+| idle_time | 0 | Drop connections that are idle this many |
+| | | seconds (0 disables) |
+| watcher_logbuf_size |
+| | 32u | Size of internal (not socket) write buffer |
+| | | per active watcher connected. |
+| worker_logbuf_size| 32u | Size of internal per-worker-thread buffer |
+| | | which the background thread reads from. |
+| read_obj_mem_limit| 32u | Megabyte limit for conn. read/resp buffers. |
+| track_sizes | bool | If yes, a "stats sizes" histogram is being |
+| | | dynamically tracked. |
+| inline_ascii_response |
+| | bool | Does nothing as of 1.5.15 |
+| drop_privileges | bool | If yes, and available, drop unused syscalls |
+| | | (see seccomp on Linux, pledge on OpenBSD) |
+| proxy_enabled | bool | If proxy has been configured at start |
+| proxy_uring_enabled |
+ | bool | If proxy is configured to use IO_URING. |
+ | | NOTE: uring may be used if kernel too old |
+| memory_file | char | Warm restart memory file path, if enabled |
+| client_flags_size | 32u | Size in bytes of client flags |
 |-------------------+----------+----------------------------------------------|
-
 
 Item statistics
 ---------------
@@ -1540,7 +1544,7 @@ future.
 The "stats" command with the argument of "items" returns information about
 item storage per slab class. The data is returned in the format:
 
-STAT items:<slabclass>:<stat> <value>\r\n
+STAT items:: \r\n
 
 The server terminates this list with the line
 
@@ -1552,64 +1556,63 @@ level information.
 
 The following item values are defined as of writing.
 
-Name                   Meaning
+Name Meaning
 ------------------------------
-number                 Number of items presently stored in this class. Expired
-                       items are not automatically excluded.
-number_hot             Number of items presently stored in the HOT LRU.
-number_warm            Number of items presently stored in the WARM LRU.
-number_cold            Number of items presently stored in the COLD LRU.
-number_temp            Number of items presently stored in the TEMPORARY LRU.
-age_hot                Age of the oldest item in HOT LRU.
-age_warm               Age of the oldest item in WARM LRU.
-age                    Age of the oldest item in the LRU.
-mem_requested          Number of bytes requested to be stored in this LRU[*]
-evicted                Number of times an item had to be evicted from the LRU
-                       before it expired.
-evicted_nonzero        Number of times an item which had an explicit expire
-                       time set had to be evicted from the LRU before it
-                       expired.
-evicted_time           Seconds since the last access for the most recent item
-                       evicted from this class. Use this to judge how
-                       recently active your evicted data is.
-outofmemory            Number of times the underlying slab class was unable to
-                       store a new item. This means you are running with -M or
-                       an eviction failed.
-tailrepairs            Number of times we self-healed a slab with a refcount
-                       leak. If this counter is increasing a lot, please
-                       report your situation to the developers.
-reclaimed              Number of times an entry was stored using memory from
-                       an expired entry.
-expired_unfetched      Number of expired items reclaimed from the LRU which
-                       were never touched after being set.
-evicted_unfetched      Number of valid items evicted from the LRU which were
-                       never touched after being set.
-evicted_active         Number of valid items evicted from the LRU which were
-                       recently touched but were evicted before being moved to
-                       the top of the LRU again.
-crawler_reclaimed      Number of items freed by the LRU Crawler.
-lrutail_reflocked      Number of items found to be refcount locked in the
-                       LRU tail.
-moves_to_cold          Number of items moved from HOT or WARM into COLD.
-moves_to_warm          Number of items moved from COLD to WARM.
-moves_within_lru       Number of times active items were bumped within
-                       HOT or WARM.
-direct_reclaims        Number of times worker threads had to directly pull LRU
-                       tails to find memory for a new item.
+number Number of items presently stored in this class. Expired
+ items are not automatically excluded.
+number_hot Number of items presently stored in the HOT LRU.
+number_warm Number of items presently stored in the WARM LRU.
+number_cold Number of items presently stored in the COLD LRU.
+number_temp Number of items presently stored in the TEMPORARY LRU.
+age_hot Age of the oldest item in HOT LRU.
+age_warm Age of the oldest item in WARM LRU.
+age Age of the oldest item in the LRU.
+mem_requested Number of bytes requested to be stored in this LRU[*]
+evicted Number of times an item had to be evicted from the LRU
+ before it expired.
+evicted_nonzero Number of times an item which had an explicit expire
+ time set had to be evicted from the LRU before it
+ expired.
+evicted_time Seconds since the last access for the most recent item
+ evicted from this class. Use this to judge how
+ recently active your evicted data is.
+outofmemory Number of times the underlying slab class was unable to
+ store a new item. This means you are running with -M or
+ an eviction failed.
+tailrepairs Number of times we self-healed a slab with a refcount
+ leak. If this counter is increasing a lot, please
+ report your situation to the developers.
+reclaimed Number of times an entry was stored using memory from
+ an expired entry.
+expired_unfetched Number of expired items reclaimed from the LRU which
+ were never touched after being set.
+evicted_unfetched Number of valid items evicted from the LRU which were
+ never touched after being set.
+evicted_active Number of valid items evicted from the LRU which were
+ recently touched but were evicted before being moved to
+ the top of the LRU again.
+crawler_reclaimed Number of items freed by the LRU Crawler.
+lrutail_reflocked Number of items found to be refcount locked in the
+ LRU tail.
+moves_to_cold Number of items moved from HOT or WARM into COLD.
+moves_to_warm Number of items moved from COLD to WARM.
+moves_within_lru Number of times active items were bumped within
+ HOT or WARM.
+direct_reclaims Number of times worker threads had to directly pull LRU
+ tails to find memory for a new item.
 hits_to_hot
 hits_to_warm
 hits_to_cold
-hits_to_temp           Number of get_hits to each sub-LRU.
+hits_to_temp Number of get_hits to each sub-LRU.
 
 Note this will only display information about slabs which exist, so an empty
 cache will return an empty set.
 
 * Items are stored in a slab that is the same size or larger than the
-  item.  mem_requested shows the size of all items within a
-  slab. (total_chunks * chunk_size) - mem_requested shows memory
-  wasted in a slab class.  If you see a lot of waste, consider tuning
-  the slab factor.
-
+ item. mem_requested shows the size of all items within a
+ slab. (total_chunks * chunk_size) - mem_requested shows memory
+ wasted in a slab class. If you see a lot of waste, consider tuning
+ the slab factor.
 
 Item size statistics
 --------------------
@@ -1623,7 +1626,7 @@ lock while it iterates the items. 1.4.27 and greater are safe.
 
 The data is returned in the following format:
 
-STAT <size> <count>\r\n
+STAT \r\n
 
 The server terminates this list with the line
 
@@ -1673,40 +1676,39 @@ The "stats" command with the argument of "slabs" returns information about
 each of the slabs created by memcached during runtime. This includes per-slab
 information along with some totals. The data is returned in the format:
 
-STAT <slabclass>:<stat> <value>\r\n
-STAT <stat> <value>\r\n
+STAT: \r\n
+STAT \r\n
 
 The server terminates this list with the line
 
 END\r\n
 
 |-----------------+----------------------------------------------------------|
-| Name            | Meaning                                                  |
+| Name | Meaning |
 |-----------------+----------------------------------------------------------|
-| chunk_size      | The amount of space each chunk uses. One item will use   |
-|                 | one chunk of the appropriate size.                       |
-| chunks_per_page | How many chunks exist within one page. A page by         |
-|                 | default is less than or equal to one megabyte in size.   |
-|                 | Slabs are allocated by page, then broken into chunks.    |
-| total_pages     | Total number of pages allocated to the slab class.       |
-| total_chunks    | Total number of chunks allocated to the slab class.      |
-| get_hits        | Total number of get requests serviced by this class.     |
-| cmd_set         | Total number of set requests storing data in this class. |
-| delete_hits     | Total number of successful deletes from this class.      |
-| incr_hits       | Total number of incrs modifying this class.              |
-| decr_hits       | Total number of decrs modifying this class.              |
-| cas_hits        | Total number of CAS commands modifying this class.       |
-| cas_badval      | Total number of CAS commands that failed to modify a     |
-|                 | value due to a bad CAS id.                               |
-| touch_hits      | Total number of touches serviced by this class.          |
-| used_chunks     | How many chunks have been allocated to items.            |
-| free_chunks     | Chunks not yet allocated to items, or freed via delete.  |
-| free_chunks_end | Number of free chunks at the end of the last allocated   |
-|                 | page.                                                    |
-| active_slabs    | Total number of slab classes allocated.                  |
-| total_malloced  | Total amount of memory allocated to slab pages.          |
+| chunk_size | The amount of space each chunk uses. One item will use |
+| | one chunk of the appropriate size. |
+| chunks_per_page | How many chunks exist within one page. A page by |
+| | default is less than or equal to one megabyte in size. |
+| | Slabs are allocated by page, then broken into chunks. |
+| total_pages | Total number of pages allocated to the slab class. |
+| total_chunks | Total number of chunks allocated to the slab class. |
+| get_hits | Total number of get requests serviced by this class. |
+| cmd_set | Total number of set requests storing data in this class. |
+| delete_hits | Total number of successful deletes from this class. |
+| incr_hits | Total number of incrs modifying this class. |
+| decr_hits | Total number of decrs modifying this class. |
+| cas_hits | Total number of CAS commands modifying this class. |
+| cas_badval | Total number of CAS commands that failed to modify a |
+| | value due to a bad CAS id. |
+| touch_hits | Total number of touches serviced by this class. |
+| used_chunks | How many chunks have been allocated to items. |
+| free_chunks | Chunks not yet allocated to items, or freed via delete. |
+| free_chunks_end | Number of free chunks at the end of the last allocated |
+| | page. |
+| active_slabs | Total number of slab classes allocated. |
+| total_malloced | Total amount of memory allocated to slab pages. |
 |-----------------+----------------------------------------------------------|
-
 
 Connection statistics
 ---------------------
@@ -1714,7 +1716,7 @@ The "stats" command with the argument of "conns" returns information
 about currently active connections and about sockets that are listening
 for new connections. The data is returned in the format:
 
-STAT <file descriptor>:<stat> <value>\r\n
+STAT: \r\n
 
 The server terminates this list with the line
 
@@ -1723,44 +1725,44 @@ END\r\n
 The following "stat" keywords may be present:
 
 |---------------------+------------------------------------------------------|
-| Name                | Meaning                                              |
+| Name | Meaning |
 |---------------------+------------------------------------------------------|
-| addr                | The address of the remote side. For listening        |
-|                     | sockets this is the listen address. Note that some   |
-|                     | socket types (such as UNIX-domain) don't have        |
-|                     | meaningful remote addresses.                         |
-| listen_addr         | The address of the server. This field is absent      |
-|                     | for listening sockets.                               |
-| state               | The current state of the connection. See below.      |
-| secs_since_last_cmd | The number of seconds since the most recently        |
-|                     | issued command on the connection. This measures      |
-|                     | the time since the start of the command, so if       |
-|                     | "state" indicates a command is currently executing,  |
-|                     | this will be the number of seconds the current       |
-|                     | command has been running.                            |
+| addr | The address of the remote side. For listening |
+| | sockets this is the listen address. Note that some |
+| | socket types (such as UNIX-domain) don't have |
+| | meaningful remote addresses. |
+| listen_addr | The address of the server. This field is absent |
+| | for listening sockets. |
+| state | The current state of the connection. See below. |
+| secs_since_last_cmd | The number of seconds since the most recently |
+| | issued command on the connection. This measures |
+| | the time since the start of the command, so if |
+| | "state" indicates a command is currently executing, |
+| | this will be the number of seconds the current |
+| | command has been running. |
 |---------------------+------------------------------------------------------|
 
 The value of the "state" stat may be one of the following:
 
 |----------------+-----------------------------------------------------------|
-| Name           | Meaning                                                   |
+| Name | Meaning |
 |----------------+-----------------------------------------------------------|
-| conn_closing   | Shutting down the connection.                             |
-| conn_listening | Listening for new connections or a new UDP request.       |
-| conn_mwrite    | Writing a complex response, e.g., to a "get" command.     |
-| conn_new_cmd   | Connection is being prepared to accept a new command.     |
-| conn_nread     | Reading extended data, typically for a command such as    |
-|                | "set" or "put".                                           |
-| conn_parse_cmd | The server has received a command and is in the middle    |
-|                | of parsing it or executing it.                            |
-| conn_read      | Reading newly-arrived command data.                       |
-| conn_swallow   | Discarding excess input, e.g., after an error has         |
-|                | occurred.                                                 |
-| conn_waiting   | A partial command has been received and the server is     |
-|                | waiting for the rest of it to arrive (note the difference |
-|                | between this and conn_nread).                             |
-| conn_write     | Writing a simple response (anything that doesn't involve  |
-|                | sending back multiple lines of response data).            |
+| conn_closing | Shutting down the connection. |
+| conn_listening | Listening for new connections or a new UDP request. |
+| conn_mwrite | Writing a complex response, e.g., to a "get" command. |
+| conn_new_cmd | Connection is being prepared to accept a new command. |
+| conn_nread | Reading extended data, typically for a command such as |
+| | "set" or "put". |
+| conn_parse_cmd | The server has received a command and is in the middle |
+| | of parsing it or executing it. |
+| conn_read | Reading newly-arrived command data. |
+| conn_swallow | Discarding excess input, e.g., after an error has |
+| | occurred. |
+| conn_waiting | A partial command has been received and the server is |
+| | waiting for the rest of it to arrive (note the difference |
+| | between this and conn_nread). |
+| conn_write | Writing a simple response (anything that doesn't involve |
+| | sending back multiple lines of response data). |
 |----------------+-----------------------------------------------------------|
 
 TLS statistics
@@ -1771,25 +1773,24 @@ When compiled with TLS support and TLS termination is enabled at runtime, the
 following additional statistics are available via the "stats" command.
 
 |--------------------------------+----------+--------------------------------|
-| Name                           | Type     | Meaning                        |
+| Name | Type | Meaning |
 |--------------------------------+----------+--------------------------------|
-| ssl_handshake_errors           | 64u      | Number of times the server has |
-|                                |          | encountered an OpenSSL error   |
-|                                |          | during handshake (SSL_accept). |
-| ssl_proto_errors               | 64u      | Number of times a client has   |
-|                                |          | seen a fatal TLS protocol error|
-| ssl_min_version                | char     | Minimum supported TLS version  |
-|                                |          | for client handshakes.         |
-| ssl_new_sessions               | 64u      | When SSL session caching is    |
-|                                |          | enabled, the number of newly   |
-|                                |          | created server-side sessions.  |
-|                                |          | Available only when compiled   |
-|                                |          | with OpenSSL 1.1.1 or newer.   |
-| time_since_server_cert_refresh | 32u      | Number of seconds that have    |
-|                                |          | elapsed since the last time    |
-|                                |          | certs were reloaded from disk. |
+| ssl_handshake_errors | 64u | Number of times the server has |
+| | | encountered an OpenSSL error |
+| | | during handshake (SSL_accept). |
+| ssl_proto_errors | 64u | Number of times a client has |
+| | | seen a fatal TLS protocol error|
+| ssl_min_version | char | Minimum supported TLS version |
+| | | for client handshakes. |
+| ssl_new_sessions | 64u | When SSL session caching is |
+| | | enabled, the number of newly |
+| | | created server-side sessions. |
+| | | Available only when compiled |
+| | | with OpenSSL 1.1.1 or newer. |
+| time_since_server_cert_refresh | 32u | Number of seconds that have |
+| | | elapsed since the last time |
+| | | certs were reloaded from disk. |
 |--------------------------------+----------+--------------------------------|
-
 
 Other commands
 --------------
@@ -1798,7 +1799,7 @@ Other commands
 succeeds, and the server sends "OK\r\n" in response (unless "noreply"
 is given as the last parameter). Its effect is to invalidate all
 existing items immediately (by default) or after the expiration
-specified.  After invalidation none of the items will be returned in
+specified. After invalidation none of the items will be returned in
 response to a retrieval command (unless it's stored again under the
 same key *after* flush_all has invalidated the items). flush_all
 doesn't actually free all the memory taken up by existing items; that
@@ -1840,7 +1841,7 @@ version\r\n
 
 In response, the server sends
 
-"VERSION <version>\r\n", where <version> is the version string for the
+"VERSION \r\n", where is the version string for the
 server.
 
 "verbosity" is a command with a numeric argument. It always succeeds,
@@ -1870,7 +1871,6 @@ This command causes the worker thread to attempt a) opening a new socket, and
 b) executing a shell command. If either one is successful, an error is
 returned. Otherwise memcached returns OK.
 The check is available only in Linux builds with seccomp enabled.
-
 
 UDP protocol
 ------------

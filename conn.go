@@ -33,17 +33,34 @@ type Addr struct {
 	// is unique.
 	Priority int
 
+	// Weight is used by Ketama consistent hashing. Zero means 1.
+	// Priority is not a weight.
+	Weight uint32
+
 	metadata map[string]any
 }
 
 // NewAddr creates a new Addr with the given network, address and priority.
 func NewAddr(network, address string, priority int) *Addr {
+	return NewAddrWeighted(network, address, priority, 0)
+}
+
+// NewAddrWeighted creates a new Addr with an optional Ketama weight (0 means 1).
+func NewAddrWeighted(network, address string, priority int, weight uint32) *Addr {
 	return &Addr{
 		Network:  network,
 		Address:  address,
 		Priority: priority,
+		Weight:   weight,
 		metadata: make(map[string]any, 2),
 	}
+}
+
+func (a *Addr) ketamaWeight() uint32 {
+	if a == nil || a.Weight == 0 {
+		return 1
+	}
+	return a.Weight
 }
 
 func (a *Addr) shortcut() []byte {
@@ -64,7 +81,7 @@ func (a *Addr) id() string {
 	return a.Network + "\x00" + a.Address
 }
 
-func (a *Addr) dial(ctx context.Context, dialTimeout time.Duration, dialFn DialContextFunc) (net.Conn, error) {
+func (a *Addr) dial(ctx context.Context, dialTimeout, keepAlive time.Duration, dialFn DialContextFunc) (net.Conn, error) {
 	if dialFn != nil {
 		if dialTimeout > 0 {
 			var cancel context.CancelFunc
@@ -73,7 +90,7 @@ func (a *Addr) dial(ctx context.Context, dialTimeout time.Duration, dialFn DialC
 		}
 		return dialFn(ctx, a.Network, a.Address)
 	}
-	return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, a.Network, a.Address)
+	return (&net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}).DialContext(ctx, a.Network, a.Address)
 }
 
 // memcachedConn wraps a net.Conn and provides a way to read and write data
@@ -85,6 +102,10 @@ type memcachedConn interface {
 
 	// readLine reads a line from the connection using the given delimiter.
 	readLine(delim byte) ([]byte, error)
+	// readExact reads exactly n bytes from the connection.
+	readExact(n int) ([]byte, error)
+	// readDatagram reads one UDP datagram, preserving packet boundaries.
+	readDatagram() ([]byte, error)
 	// expired returns true if the connection is expired.
 	// it always returns the duration of time since the connection is created.
 	expired(since time.Time) (time.Duration, bool)
@@ -124,8 +145,8 @@ type conn struct {
 }
 
 // newConnWithContext dials a TCP connection
-func newConnContext(ctx context.Context, addr *Addr, dialTimeout time.Duration, dialFn DialContextFunc) (*conn, error) {
-	rawConn, err := addr.dial(ctx, dialTimeout, dialFn)
+func newConnContext(ctx context.Context, addr *Addr, dialTimeout, keepAlive time.Duration, dialFn DialContextFunc) (*conn, error) {
+	rawConn, err := addr.dial(ctx, dialTimeout, keepAlive, dialFn)
 	if err != nil {
 		return nil, fmt.Errorf("dialContext: %w", err)
 	}
@@ -168,17 +189,47 @@ func (c *conn) setWriteDeadline(d time.Time) error {
 	return c.raw.SetWriteDeadline(d)
 }
 
+func (c *conn) isClosed() bool {
+	c.Lock()
+	defer c.Unlock()
+	return c.closed
+}
+
 func (c *conn) readLine(delim byte) ([]byte, error) {
-	if c.closed {
+	if c.isClosed() {
 		return nil, errors.New("connection is closed")
 	}
 
 	return c.rr.ReadBytes(delim)
 }
 
+func (c *conn) readExact(n int) ([]byte, error) {
+	if c.isClosed() {
+		return nil, errors.New("connection is closed")
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
+	}
+	buf := make([]byte, n)
+	_, err := io.ReadFull(c.rr, buf)
+	return buf, err
+}
+
+func (c *conn) readDatagram() ([]byte, error) {
+	if c.isClosed() {
+		return nil, errors.New("connection is closed")
+	}
+	buf := make([]byte, 65535)
+	n, err := c.raw.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
 // Read reads data from the connection
 func (c *conn) Read(p []byte) (n int, err error) {
-	if c.closed {
+	if c.isClosed() {
 		return 0, errors.New("connection is closed")
 	}
 
@@ -187,7 +238,7 @@ func (c *conn) Read(p []byte) (n int, err error) {
 
 // Write writes data to the connection
 func (c *conn) Write(p []byte) (n int, err error) {
-	if c.closed {
+	if c.isClosed() {
 		return 0, errors.New("connection is closed")
 	}
 
@@ -281,6 +332,8 @@ type connPool struct {
 	maxIdleClosed     int64 // the number of connections closed due to maxIdle
 	maxIdleTimeClosed int64 // the number of connections closed due to maxIdleTime
 	maxLifeTimeClosed int64 // the number of connections closed due to maxLifeTime
+
+	minIdle int
 }
 
 func newConnPool(
@@ -335,13 +388,38 @@ drained:
 	return nil
 }
 
+func (p *connPool) connReusable(cn memcachedConn) bool {
+	now := nowFunc()
+	if p.maxLifeTime > 0 {
+		if _, expired := cn.expired(now.Add(-p.maxLifeTime)); expired {
+			return false
+		}
+	}
+	if p.maxIdleTime > 0 {
+		if _, idle := cn.idle(now.Add(-p.maxIdleTime)); idle {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *connPool) closeIdle(cn memcachedConn) {
+	_ = cn.Close()
+	p.numOpen.Add(-1)
+}
+
 func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
-	// Try to get an idle connection first if there is any,
-	// otherwise create a new connection.
-	select {
-	case cn := <-p.conns:
-		return cn, nil
-	default:
+	for {
+		select {
+		case cn := <-p.conns:
+			if p.connReusable(cn) {
+				return cn, nil
+			}
+			p.closeIdle(cn)
+			continue
+		default:
+		}
+		break
 	}
 
 	p.mu.Lock()
@@ -349,23 +427,27 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 		p.mu.Unlock()
 		return nil, errPoolClosed
 	}
-	// No available connection, check if we can create a new one.
 	if int(p.numOpen.Load()) >= p.maxConns {
 		p.mu.Unlock()
-		// The pool is full, wait for a connection to be returned or for close.
 		select {
 		case cn := <-p.conns:
-			return cn, nil
+			if p.connReusable(cn) {
+				return cn, nil
+			}
+			p.closeIdle(cn)
+			return p.get(ctx)
 		case <-p.closedCh:
 			return nil, errPoolClosed
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
+	p.numOpen.Add(1)
 	p.mu.Unlock()
 
 	cn, err := p.createConn(ctx)
 	if err != nil {
+		p.numOpen.Add(-1)
 		return nil, err
 	}
 	cn.setConnPool(p)
@@ -373,9 +455,9 @@ func (p *connPool) get(ctx context.Context) (memcachedConn, error) {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
+		p.numOpen.Add(-1)
 		return nil, errors.Join(errPoolClosed, cn.Close())
 	}
-	p.numOpen.Add(1)
 	p.mu.Unlock()
 	return cn, nil
 }
@@ -539,6 +621,18 @@ func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, [
 		}
 
 		if shouldClose {
+			lifeExpired := checkLife && func() bool {
+				if !checkLife {
+					return false
+				}
+				_, ok := c.expired(expiredSince)
+				return ok
+			}()
+			if !lifeExpired && p.minIdle > 0 && len(kept) < p.minIdle {
+				shouldClose = false
+			}
+		}
+		if shouldClose {
 			closing = append(closing, c)
 		} else {
 			kept = append(kept, c)
@@ -579,4 +673,27 @@ func (p *connPool) stats() *connPoolStats {
 	}
 	p.mu.Unlock()
 	return s
+}
+
+func (p *connPool) warmup(ctx context.Context, n int) {
+	if n <= 0 {
+		return
+	}
+	if n > p.maxIdle && p.maxIdle > 0 {
+		n = p.maxIdle
+	}
+	for i := 0; i < n; i++ {
+		p.numOpen.Add(1)
+		cn, err := p.createConn(ctx)
+		if err != nil {
+			p.numOpen.Add(-1)
+			return
+		}
+		cn.setConnPool(p)
+		if err := p.put(cn); err != nil {
+			_ = cn.Close()
+			p.numOpen.Add(-1)
+			return
+		}
+	}
 }

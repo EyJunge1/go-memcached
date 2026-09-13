@@ -8,19 +8,27 @@ import (
 )
 
 type metaSetFlags struct {
-	b bool        // b: interpret key as base64 encoded binary value (see metaget)
-	c bool        // c: return CAS value if successfully stored.
-	C uint64      // C(token): compare CAS value when storing item
-	E uint64      // E(token): use token as new CAS value (see meta get for detail)
-	F uint32      // F(token): set client flags to token (32 bit unsigned numeric)
-	I bool        // I: invalidate. set-to-invalid if supplied CAS is older than item's CAS
-	k bool        // k: return key as a token
-	O uint64      // O(token): opaque value, consumes a token and copies back with response
-	q bool        // q: use noreply semantics for return codes
-	s bool        // s: return the size of the stored item on success (ie; new size on append)
-	T uint64      // T(token): Time-To-Live for item, see "Expiration" above.
-	M metaSetMode // M(token): mode switch to change behavior to: add, replace, append, prepend, set(default)
-	N uint64      // N(token): if in append mode, auto vivify on miss with supplied TTL
+	b      bool        // b: interpret key as base64 encoded binary value (see metaget)
+	c      bool        // c: return CAS value if successfully stored.
+	C      uint64      // C(token): compare CAS value when storing item
+	E      uint64      // E(token): use token as new CAS value (see meta get for detail)
+	F      uint32      // F(token): set client flags to token (32 bit unsigned numeric)
+	I      bool        // I: invalidate. set-to-invalid if supplied CAS is older than item's CAS
+	k      bool        // k: return key as a token
+	O      uint64      // O(token): opaque value, consumes a token and copies back with response
+	Otoken string      // string opaque (1–32 bytes), takes precedence over O
+	q      bool        // q: use noreply semantics for return codes
+	s      bool        // s: return the size of the stored item on success (ie; new size on append)
+	T      uint64      // T(token): Time-To-Live for item, see "Expiration" above.
+	M      metaSetMode // M(token): mode switch to change behavior to: add, replace, append, prepend, set(default)
+	N      uint64      // N(token): if in append mode, auto vivify on miss with supplied TTL
+
+	Cset      bool
+	Eset      bool
+	Oset      bool
+	OtokenSet bool
+	Tset      bool
+	Nset      bool
 }
 
 // MetaSetOption is the option to set flags for meta set command.
@@ -38,12 +46,12 @@ func MetaSetFlagReturnCAS() MetaSetOption {
 
 // MetaSetFlagCompareCAS sets the flag to compare CAS value when storing item.
 func MetaSetFlagCompareCAS(casUnique uint64) MetaSetOption {
-	return func(flags *metaSetFlags) { flags.C = casUnique }
+	return func(flags *metaSetFlags) { flags.C = casUnique; flags.Cset = true }
 }
 
 // MetaSetFlagNewCAS sets the flag to use token as new CAS value.
 func MetaSetFlagNewCAS(casUnique uint64) MetaSetOption {
-	return func(flags *metaSetFlags) { flags.E = casUnique }
+	return func(flags *metaSetFlags) { flags.E = casUnique; flags.Eset = true }
 }
 
 // MetaSetFlagClientFlags sets the flag to set client flags to token.
@@ -65,7 +73,12 @@ func MetaSetFlagReturnKey() MetaSetOption {
 
 // MetaSetFlagOpaque sets the flag to opaque value, consumes a token and copies back with response.
 func MetaSetFlagOpaque(token uint64) MetaSetOption {
-	return func(flags *metaSetFlags) { flags.O = token }
+	return func(flags *metaSetFlags) { flags.O = token; flags.Oset = true }
+}
+
+// MetaSetFlagOpaqueToken sets a string opaque token (1–32 bytes, no whitespace).
+func MetaSetFlagOpaqueToken(token string) MetaSetOption {
+	return func(flags *metaSetFlags) { flags.Otoken = token; flags.OtokenSet = true }
 }
 
 // MetaSetFlagNoReply sets the flag to use noreply semantics for return codes.
@@ -81,23 +94,32 @@ func MetaSetFlagReturnSize() MetaSetOption {
 // MetaSetFlagTTL sets the flag to Time-To-Live(seconds) for item.
 // If the value is 0, the item will never expire.
 func MetaSetFlagTTL(ttl uint64) MetaSetOption {
-	return func(flags *metaSetFlags) { flags.T = ttl }
+	return func(flags *metaSetFlags) { flags.T = ttl; flags.Tset = true }
 }
 
 type metaSetMode string
 
 const (
 	// MetaSetModeAdd means add the item only if it does not already exist.
-	MetaSetModeAdd metaSetMode = "add"
+	MetaSetModeAdd metaSetMode = "E"
 	// MetaSetModeReplace means replace the item only if it already exists.
-	MetaSetModeReplace metaSetMode = "replace"
+	MetaSetModeReplace metaSetMode = "R"
 	// MetaSetModeAppend means append the data to the existing item.
-	MetaSetModeAppend metaSetMode = "append"
+	MetaSetModeAppend metaSetMode = "A"
 	// MetaSetModePrepend means prepend the data to the existing item.
-	MetaSetModePrepend metaSetMode = "prepend"
+	MetaSetModePrepend metaSetMode = "P"
 	// MetaSetModeSet means set the item regardless of whether it already exists.
-	MetaSetModeSet metaSetMode = "set"
+	MetaSetModeSet metaSetMode = "S"
 )
+
+func validMetaSetMode(m metaSetMode) bool {
+	switch m {
+	case "", MetaSetModeAdd, MetaSetModeReplace, MetaSetModeAppend, MetaSetModePrepend, MetaSetModeSet:
+		return true
+	default:
+		return false
+	}
+}
 
 // MetaSetFlagModeSwitch sets the flag to mode switch to change behavior to: add, replace, append, prepend, set(default).
 func MetaSetFlagModeSwitch(mode metaSetMode) MetaSetOption {
@@ -106,7 +128,7 @@ func MetaSetFlagModeSwitch(mode metaSetMode) MetaSetOption {
 
 // MetaSetFlagAutoVivify sets the flag to auto vivify on miss with supplied TTL.
 func MetaSetFlagAutoVivify(ttl uint64) MetaSetOption {
-	return func(flags *metaSetFlags) { flags.N = ttl }
+	return func(flags *metaSetFlags) { flags.N = ttl; flags.Nset = true }
 }
 
 // ms <key> <datalen> <flags>*\r\n
@@ -124,17 +146,19 @@ func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *res
 
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagBool("c", flags.c)
-	b.AddFlagUint("C", flags.C)
-	b.AddFlagUint("E", flags.E)
-	b.AddFlagUint("F", uint64(flags.F))
+	b.AddFlagUintPresent("C", flags.C, flags.Cset)
+	b.AddFlagUintPresent("E", flags.E, flags.Eset)
+	b.AddFlagUintNonZero("F", uint64(flags.F))
 	b.AddFlagBool("I", flags.I)
 	b.AddFlagBool("k", flags.k)
-	b.AddFlagUint("O", flags.O)
+	b.AddOpaque(flags.Otoken, flags.O, flags.Oset || flags.OtokenSet)
 	b.AddFlagBool("q", flags.q)
 	b.AddFlagBool("s", flags.s)
-	b.AddFlagUint("T", flags.T)
-	b.AddFlagString("M", string(flags.M))
-	b.AddFlagUint("N", flags.N)
+	b.AddFlagUintPresent("T", flags.T, flags.Tset)
+	if validMetaSetMode(flags.M) {
+		b.AddFlagString("M", string(flags.M))
+	}
+	b.AddFlagUintPresent("N", flags.N, flags.Nset)
 
 	raw := b.AddCRLF().
 		AddBytes(value).
@@ -145,7 +169,8 @@ func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *res
 
 	var resp *response
 	if flags.q {
-		resp = buildNoReplyResponse()
+		req.raw = appendMetaQuietBarrier(req.raw)
+		resp = buildQuietBarrierResponse()
 	} else {
 		resp = buildLimitedLineResponse(1)
 	}
@@ -154,24 +179,34 @@ func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *res
 }
 
 type metaGetFlags struct {
-	b bool   // b: interpret key as base64 encoded binary value
-	c bool   // c: return item cas token
-	f bool   // f: return client flags token
-	h bool   // h: return whether item has been hit before as a 0 or 1
-	k bool   // k: return key as a token
-	l bool   // l: return time since item was last accessed in seconds
-	O uint64 // O(token): opaque value, consumes a token and copies back with response
-	q bool   // q: use noreply semantics for return codes.
-	s bool   // s: return item size token
-	t bool   // t: return item TTL remaining in seconds (-1 for unlimited)
-	u bool   // u: don't bump the item in the LRU
-	v bool   // v: return item value in <data block>
+	b      bool   // b: interpret key as base64 encoded binary value
+	c      bool   // c: return item cas token
+	f      bool   // f: return client flags token
+	h      bool   // h: return whether item has been hit before as a 0 or 1
+	k      bool   // k: return key as a token
+	l      bool   // l: return time since item was last accessed in seconds
+	O      uint64 // O(token): opaque value, consumes a token and copies back with response
+	Otoken string
+	q      bool // q: use noreply semantics for return codes.
+	s      bool // s: return item size token
+	t      bool // t: return item TTL remaining in seconds (-1 for unlimited)
+	u      bool // u: don't bump the item in the LRU
+	v      bool // v: return item value in <data block>
 
 	// These flags can modify the item:
 	E uint64 // E(token): use token as new CAS value if item is modified
 	N uint64 // N(token): vivify on miss, takes TTL as a argument
 	R uint64 // R(token): if remaining TTL is less than token, win for recache
 	T uint64 // T(token): update remaining TTL
+
+	Oset      bool
+	OtokenSet bool
+	Eset      bool
+	Nset      bool
+	Rset      bool
+	Tset      bool
+	C         uint64
+	Cset      bool
 
 	// These extra flags can be added to the response:
 	W bool // W: client has "won" the recache flag
@@ -214,7 +249,18 @@ func MetaGetFlagReturnLastAccessedTime() MetaGetOption {
 
 // MetaGetFlagOpaque sets the flag to opaque value, consumes a token and copies back with response.
 func MetaGetFlagOpaque(token uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.O = token }
+	return func(flags *metaGetFlags) { flags.O = token; flags.Oset = true }
+}
+
+// MetaGetFlagOpaqueToken sets a string opaque token (1–32 bytes, no whitespace).
+func MetaGetFlagOpaqueToken(token string) MetaGetOption {
+	return func(flags *metaGetFlags) { flags.Otoken = token; flags.OtokenSet = true }
+}
+
+// MetaGetFlagCheckCAS requests a value only when the item CAS differs from cas.
+// A match returns HD without a body (CASMatched on MetaItem).
+func MetaGetFlagCheckCAS(cas uint64) MetaGetOption {
+	return func(flags *metaGetFlags) { flags.C = cas; flags.Cset = true }
 }
 
 // MetaGetFlagNoReply sets the flag to use noreply semantics for return codes.
@@ -244,48 +290,54 @@ func MetaGetFlagReturnValue() MetaGetOption {
 
 // MetaGetFlagNewCAS sets the flag to use token as new CAS value if item is modified.
 func MetaGetFlagNewCAS(casUnique uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.E = casUnique }
+	return func(flags *metaGetFlags) { flags.E = casUnique; flags.Eset = true }
 }
 
 // MetaGetFlagVivifyOnMiss sets the flag to vivify on miss, takes TTL as an argument.
 func MetaGetFlagVivifyOnMiss(ttl uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.N = ttl }
+	return func(flags *metaGetFlags) { flags.N = ttl; flags.Nset = true }
 }
 
 // MetaGetFlagWinForRecache sets the flag to if remaining TTL is less than token, win for recache.
 func MetaGetFlagWinForRecache(ttl uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.R = ttl }
+	return func(flags *metaGetFlags) { flags.R = ttl; flags.Rset = true }
 }
 
 // MetaGetFlagUpdateRemainingTTL sets the flag to update remaining TTL.
 func MetaGetFlagUpdateRemainingTTL(ttl uint64) MetaGetOption {
-	return func(flags *metaGetFlags) { flags.T = ttl }
+	return func(flags *metaGetFlags) { flags.T = ttl; flags.Tset = true }
 }
 
-// MetaGetFlagClientHasWonRecache sets the flag to client has "won" the recache flag.
+// MetaGetFlagClientHasWonRecache is a no-op. W is a response-only flag.
+//
+// Deprecated: W is parsed onto MetaItem.Won; do not send it on requests.
 func MetaGetFlagClientHasWonRecache() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.W = true }
+	return func(*metaGetFlags) {}
 }
 
-// MetaGetFlagItemIsStale sets the flag to item is stale.
+// MetaGetFlagItemIsStale is a no-op. X is a response-only flag.
+//
+// Deprecated: X is parsed onto MetaItem.Stale; do not send it on requests.
 func MetaGetFlagItemIsStale() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.X = true }
+	return func(*metaGetFlags) {}
 }
 
-// MetaGetFlagItemHasSentWinningFlag sets the flag to item has already sent a winning flag.
+// MetaGetFlagItemHasSentWinningFlag is a no-op. Z is a response-only flag.
+//
+// Deprecated: Z is parsed onto MetaItem.RecacheBusy; do not send it on requests.
 func MetaGetFlagItemHasSentWinningFlag() MetaGetOption {
-	return func(flags *metaGetFlags) { flags.Z = true }
+	return func(*metaGetFlags) {}
 }
 
-// mg <key> <flags>*\r\n
-func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) {
+func encodeMetaGetLine(key []byte, flags *metaGetFlags) ([]byte, []byte) {
+	wireKey := key
 	if flags.b {
-		key = base64Encode(key)
+		wireKey = base64Encode(key)
 	}
 
 	b := newProtocolBuilder().
 		AddString("mg").
-		AddBytes(key)
+		AddBytes(wireKey)
 	defer b.release()
 
 	b.AddFlagBool("b", flags.b)
@@ -294,27 +346,31 @@ func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) 
 	b.AddFlagBool("h", flags.h)
 	b.AddFlagBool("k", flags.k)
 	b.AddFlagBool("l", flags.l)
-	b.AddFlagUint("O", flags.O)
+	b.AddOpaque(flags.Otoken, flags.O, flags.Oset || flags.OtokenSet)
 	b.AddFlagBool("q", flags.q)
 	b.AddFlagBool("s", flags.s)
 	b.AddFlagBool("t", flags.t)
 	b.AddFlagBool("u", flags.u)
 	b.AddFlagBool("v", flags.v)
 
-	b.AddFlagUint("E", flags.E)
-	b.AddFlagUint("N", flags.N)
-	b.AddFlagUint("R", flags.R)
-	b.AddFlagUint("T", flags.T)
+	b.AddFlagUintPresent("C", flags.C, flags.Cset)
+	b.AddFlagUintPresent("E", flags.E, flags.Eset)
+	b.AddFlagUintPresent("N", flags.N, flags.Nset)
+	b.AddFlagUintPresent("R", flags.R, flags.Rset)
+	b.AddFlagUintPresent("T", flags.T, flags.Tset)
 
-	raw := b.AddCRLF().
-		build()
-	req := buildRequest([]byte("mg"), key, raw)
+	return wireKey, b.AddCRLF().build()
+}
+
+// mg <key> <flags>*\r\n
+func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) {
+	wireKey, raw := encodeMetaGetLine(key, flags)
+	req := buildRequest([]byte("mg"), wireKey, raw)
 
 	var resp *response
 	if flags.q {
-		resp = buildNoReplyResponse()
-	} else if flags.v {
-		resp = buildLimitedLineResponse(2)
+		req.raw = appendMetaQuietBarrier(req.raw)
+		resp = buildQuietBarrierResponse()
 	} else {
 		resp = buildLimitedLineResponse(1)
 	}
@@ -335,15 +391,31 @@ func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) 
 //	VA(value).
 //
 // VA is specified as: VA <size> <flags>*\r\n<data block>\r\n.
-func parseMetaItem(lines [][]byte, item *MetaItem, noReply bool) error {
-	if noReply && len(lines) == 0 {
+func parseMetaItem(lines [][]byte, item *MetaItem, noReply, wantValue bool) error {
+	if err := forecastCollectedMeta(lines); err != nil {
+		return err
+	}
+
+	proto := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		if bytes.Equal(line, _MetaMNCRLFBytes) {
+			continue
+		}
+		proto = append(proto, line)
+	}
+
+	if noReply && len(proto) == 0 {
+		if wantValue {
+			return ErrNotFound
+		}
 		return nil
 	}
 
 	// figure out the <CD>
-	if len(lines) == 0 {
+	if len(proto) == 0 {
 		return fmt.Errorf("missing response: %w", ErrMalformedResponse)
 	}
+	lines = proto
 
 	// Normal CD handling
 	parts := bytes.Split(trimCRLF(lines[0]), _SpaceBytes)
@@ -368,6 +440,9 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply bool) error {
 	}
 
 	if !bytes.Equal(cd, []byte("VA")) {
+		if bytes.Equal(cd, []byte("HD")) {
+			item.gotHD = true
+		}
 		return parseFlags(parts, 1, item)
 	}
 
@@ -388,8 +463,29 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply bool) error {
 		return fmt.Errorf("missing value: %w", ErrMalformedResponse)
 	}
 
-	item.Value = trimCRLF(lines[1])
+	item.Value, err = dataBlockValue(lines[1], size)
+	if err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func forecastCollectedMeta(lines [][]byte) error {
+	for _, line := range lines {
+		if bytes.Equal(line, _MetaMNCRLFBytes) {
+			continue
+		}
+		trimmed := trimCRLF(line)
+		switch {
+		case bytes.Equal(trimmed, []byte("ERROR")):
+			return ErrNonexistentCommand
+		case bytes.HasPrefix(trimmed, []byte("CLIENT_ERROR")):
+			return forecastCommonFaultLine(line)
+		case bytes.HasPrefix(trimmed, []byte("SERVER_ERROR")):
+			return forecastCommonFaultLine(line)
+		}
+	}
 	return nil
 }
 
@@ -448,14 +544,20 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 		case 's':
 			item.Size, err = parseUint(flag, value)
 		case 'O':
-			item.Opaque, err = parseUint(flag, value)
+			item.OpaqueToken = string(value)
+			if v, perr := strconv.ParseUint(string(value), 10, 64); perr == nil {
+				item.Opaque = v
+			}
 		case 'h':
 			var hitBefore uint64
 			hitBefore, err = parseUint(flag, value)
 			item.HitBefore = hitBefore == 1
-			// NO need to parse key again in client.
-			// case 'k':
-			//	item.Key = string(parts[i][1:])
+		case 'W':
+			item.Won = true
+		case 'X':
+			item.Stale = true
+		case 'Z':
+			item.RecacheBusy = true
 		}
 		if err != nil {
 			return err
@@ -469,15 +571,22 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 type MetaDeleteOption func(*metaDeleteFlags)
 
 type metaDeleteFlags struct {
-	b bool   // b: interpret key as base64 encoded binary value
-	C uint64 // C(token): compare CAS value
-	E uint64 // E(token): use token as new CAS value
-	I bool   // I: invalidate. mark as stale, bumps CAS.
-	k bool   // k: return key
-	O uint64 // O(token): opaque to copy back.
-	q bool   // q: noreply
-	T uint64 // T(token): updates TTL, only when paired with the 'I' flag
-	x bool   // x: removes the item value, but leaves the item.
+	b      bool   // b: interpret key as base64 encoded binary value
+	C      uint64 // C(token): compare CAS value
+	E      uint64 // E(token): use token as new CAS value
+	I      bool   // I: invalidate. mark as stale, bumps CAS.
+	k      bool   // k: return key
+	O      uint64 // O(token): opaque to copy back.
+	Otoken string
+	q      bool   // q: noreply
+	T      uint64 // T(token): updates TTL, only when paired with the 'I' flag
+	x      bool   // x: removes the item value, but leaves the item.
+
+	Cset      bool
+	Eset      bool
+	Oset      bool
+	OtokenSet bool
+	Tset      bool
 }
 
 // MetaDeleteFlagBinaryKey sets the flag to interpret key as base64 encoded binary value.
@@ -487,12 +596,12 @@ func MetaDeleteFlagBinaryKey() MetaDeleteOption {
 
 // MetaDeleteFlagCompareCAS sets the flag to compare CAS value.
 func MetaDeleteFlagCompareCAS(casUnique uint64) MetaDeleteOption {
-	return func(flags *metaDeleteFlags) { flags.C = casUnique }
+	return func(flags *metaDeleteFlags) { flags.C = casUnique; flags.Cset = true }
 }
 
 // MetaDeleteFlagNewCAS sets the flag to use token as new CAS value.
 func MetaDeleteFlagNewCAS(casUnique uint64) MetaDeleteOption {
-	return func(flags *metaDeleteFlags) { flags.E = casUnique }
+	return func(flags *metaDeleteFlags) { flags.E = casUnique; flags.Eset = true }
 }
 
 // MetaDeleteFlagInvalidate sets the flag to invalidate. mark as stale, bumps CAS.
@@ -507,7 +616,12 @@ func MetaDeleteFlagReturnKey() MetaDeleteOption {
 
 // MetaDeleteFlagOpaque sets the flag to opaque to copy back.
 func MetaDeleteFlagOpaque(token uint64) MetaDeleteOption {
-	return func(flags *metaDeleteFlags) { flags.O = token }
+	return func(flags *metaDeleteFlags) { flags.O = token; flags.Oset = true }
+}
+
+// MetaDeleteFlagOpaqueToken sets a string opaque token (1–32 bytes, no whitespace).
+func MetaDeleteFlagOpaqueToken(token string) MetaDeleteOption {
+	return func(flags *metaDeleteFlags) { flags.Otoken = token; flags.OtokenSet = true }
 }
 
 // MetaDeleteFlagNoReply sets the flag to noreply.
@@ -518,7 +632,7 @@ func MetaDeleteFlagNoReply() MetaDeleteOption {
 // MetaDeleteFlagUpdateTTL sets the flag to updates TTL,
 // only when paired with the 'I' flag (MetaDeleteFlagInvalidate).
 func MetaDeleteFlagUpdateTTL(ttl uint64) MetaDeleteOption {
-	return func(flags *metaDeleteFlags) { flags.T = ttl }
+	return func(flags *metaDeleteFlags) { flags.T = ttl; flags.Tset = true }
 }
 
 // MetaDeleteFlagRemoveValueOnly sets the flag to
@@ -539,13 +653,13 @@ func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *resp
 	defer b.release()
 
 	b.AddFlagBool("b", flags.b)
-	b.AddFlagUint("C", flags.C)
-	b.AddFlagUint("E", flags.E)
+	b.AddFlagUintPresent("C", flags.C, flags.Cset)
+	b.AddFlagUintPresent("E", flags.E, flags.Eset)
 	b.AddFlagBool("I", flags.I)
 	b.AddFlagBool("k", flags.k)
-	b.AddFlagUint("O", flags.O)
+	b.AddOpaque(flags.Otoken, flags.O, flags.Oset || flags.OtokenSet)
 	b.AddFlagBool("q", flags.q)
-	b.AddFlagUint("T", flags.T)
+	b.AddFlagUintPresent("T", flags.T, flags.Tset)
 	b.AddFlagBool("x", flags.x)
 
 	raw := b.AddCRLF().
@@ -555,7 +669,8 @@ func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *resp
 
 	var resp *response
 	if flags.q {
-		resp = buildNoReplyResponse()
+		req.raw = appendMetaQuietBarrier(req.raw)
+		resp = buildQuietBarrierResponse()
 	} else {
 		resp = buildLimitedLineResponse(1)
 	}
@@ -567,20 +682,29 @@ func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *resp
 type MetaArithmeticOption func(*metaArithmeticFlags)
 
 type metaArithmeticFlags struct {
-	b bool               // b: interpret key as base64 encoded binary value
-	C uint64             // C(token): compare CAS value
-	E uint64             // E(token): use token as new CAS value
-	N uint64             // N(token): auto create item on miss with supplied TTL
-	J uint64             // J(token): initial value to use if auto created after miss (default 0)
-	D uint64             // D(token): delta to apply (decimal unsigned 64-bit number, default 1)
-	T uint64             // T(token): update TTL on success
-	M metaArithmeticMode // M(token): mode switch to change between incr and decr modes.
-	O uint64             // O(token): opaque value, consumes a token and copies back with response
-	q bool               // q: use noreply semantics for return codes
-	t bool               // t: return current TTL
-	c bool               // c: return current CAS value if successful.
-	v bool               // v: return new value
-	k bool               // k: return key as a token
+	b      bool               // b: interpret key as base64 encoded binary value
+	C      uint64             // C(token): compare CAS value
+	E      uint64             // E(token): use token as new CAS value
+	N      uint64             // N(token): auto create item on miss with supplied TTL
+	J      uint64             // J(token): initial value to use if auto created after miss (default 0)
+	D      uint64             // D(token): delta to apply (decimal unsigned 64-bit number, default 1)
+	T      uint64             // T(token): update TTL on success
+	M      metaArithmeticMode // M(token): mode switch to change between incr and decr modes.
+	O      uint64             // O(token): opaque value, consumes a token and copies back with response
+	Otoken string
+	q      bool // q: use noreply semantics for return codes
+	t      bool // t: return current TTL
+	c      bool // c: return current CAS value if successful.
+	v      bool // v: return new value
+	k      bool // k: return key as a token
+
+	Cset      bool
+	Eset      bool
+	Nset      bool
+	Jset      bool
+	Tset      bool
+	Oset      bool
+	OtokenSet bool
 }
 
 // MetaArithmeticFlagBinaryKey sets the flag to interpret key as base64 encoded binary value.
@@ -590,27 +714,27 @@ func MetaArithmeticFlagBinaryKey() MetaArithmeticOption {
 
 // MetaArithmeticFlagCompareCAS sets the flag to compare CAS value.
 func MetaArithmeticFlagCompareCAS(casUnique uint64) MetaArithmeticOption {
-	return func(flags *metaArithmeticFlags) { flags.C = casUnique }
+	return func(flags *metaArithmeticFlags) { flags.C = casUnique; flags.Cset = true }
 }
 
 // MetaArithmeticFlagNewCAS sets the flag to use token as new CAS value.
 func MetaArithmeticFlagNewCAS(casUnique uint64) MetaArithmeticOption {
-	return func(flags *metaArithmeticFlags) { flags.E = casUnique }
+	return func(flags *metaArithmeticFlags) { flags.E = casUnique; flags.Eset = true }
 }
 
 // MetaArithmeticFlagAutoCreate sets the flag to auto create item on miss with supplied TTL.
 func MetaArithmeticFlagAutoCreate(ttl uint64) MetaArithmeticOption {
-	return func(flags *metaArithmeticFlags) { flags.N = ttl }
+	return func(flags *metaArithmeticFlags) { flags.N = ttl; flags.Nset = true }
 }
 
 // MetaArithmeticFlagInitialValue sets the flag to initial value to use if auto created after miss (default 0).
 func MetaArithmeticFlagInitialValue(v uint64) MetaArithmeticOption {
-	return func(flags *metaArithmeticFlags) { flags.J = v }
+	return func(flags *metaArithmeticFlags) { flags.J = v; flags.Jset = true }
 }
 
 // MetaArithmeticFlagUpdateTTL sets the flag to update TTL on success.
 func MetaArithmeticFlagUpdateTTL(ttl uint64) MetaArithmeticOption {
-	return func(flags *metaArithmeticFlags) { flags.T = ttl }
+	return func(flags *metaArithmeticFlags) { flags.T = ttl; flags.Tset = true }
 }
 
 type metaArithmeticMode string
@@ -622,6 +746,15 @@ const (
 	MetaArithmeticModeDecr metaArithmeticMode = "D"
 )
 
+func validMetaArithmeticMode(m metaArithmeticMode) bool {
+	switch m {
+	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr, "+", "-":
+		return true
+	default:
+		return false
+	}
+}
+
 // MetaArithmeticFlagModeSwitch sets the flag to mode switch to change between incr and decr modes.
 func MetaArithmeticFlagModeSwitch(mode metaArithmeticMode) MetaArithmeticOption {
 	return func(flags *metaArithmeticFlags) { flags.M = mode }
@@ -629,7 +762,12 @@ func MetaArithmeticFlagModeSwitch(mode metaArithmeticMode) MetaArithmeticOption 
 
 // MetaArithmeticFlagOpaque sets the flag to opaque value, consumes a token and copies back with response.
 func MetaArithmeticFlagOpaque(token uint64) MetaArithmeticOption {
-	return func(flags *metaArithmeticFlags) { flags.O = token }
+	return func(flags *metaArithmeticFlags) { flags.O = token; flags.Oset = true }
+}
+
+// MetaArithmeticFlagOpaqueToken sets a string opaque token (1–32 bytes, no whitespace).
+func MetaArithmeticFlagOpaqueToken(token string) MetaArithmeticOption {
+	return func(flags *metaArithmeticFlags) { flags.Otoken = token; flags.OtokenSet = true }
 }
 
 // MetaArithmeticFlagNoReply sets the flag to use noreply semantics for return codes.
@@ -669,14 +807,16 @@ func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticF
 	defer b.release()
 
 	b.AddFlagBool("b", flags.b)
-	b.AddFlagUint("C", flags.C)
-	b.AddFlagUint("E", flags.E)
-	b.AddFlagUint("N", flags.N)
-	b.AddFlagUint("J", flags.J)
+	b.AddFlagUintPresent("C", flags.C, flags.Cset)
+	b.AddFlagUintPresent("E", flags.E, flags.Eset)
+	b.AddFlagUintPresent("N", flags.N, flags.Nset)
+	b.AddFlagUintPresent("J", flags.J, flags.Jset)
 	b.AddFlagUint("D", flags.D)
-	b.AddFlagUint("T", flags.T)
-	b.AddFlagString("M", string(flags.M))
-	b.AddFlagUint("O", flags.O)
+	b.AddFlagUintPresent("T", flags.T, flags.Tset)
+	if validMetaArithmeticMode(flags.M) {
+		b.AddFlagString("M", string(flags.M))
+	}
+	b.AddOpaque(flags.Otoken, flags.O, flags.Oset || flags.OtokenSet)
 	b.AddFlagBool("q", flags.q)
 	b.AddFlagBool("t", flags.t)
 	b.AddFlagBool("c", flags.c)
@@ -688,9 +828,8 @@ func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticF
 
 	var resp *response
 	if flags.q {
-		resp = buildNoReplyResponse()
-	} else if flags.v {
-		resp = buildLimitedLineResponse(2)
+		req.raw = appendMetaQuietBarrier(req.raw)
+		resp = buildQuietBarrierResponse()
 	} else {
 		resp = buildLimitedLineResponse(1)
 	}
@@ -785,7 +924,75 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 }
 
 func buildMetaNoopCommand() (*request, *response) {
-	req := buildRequest([]byte("mn"), nil, []byte("noop\r\n"))
+	req := buildRequest([]byte("mn"), nil, []byte("mn\r\n"))
 	resp := buildLimitedLineResponse(1)
 	return req, resp
+}
+
+const maxOpaqueTokenBytes = 32
+
+func validOpaqueToken(token string) error {
+	if token == "" {
+		return fmt.Errorf("opaque token empty: %w", ErrInvalidArgument)
+	}
+	if len(token) > maxOpaqueTokenBytes {
+		return fmt.Errorf("opaque token too long: %w", ErrInvalidArgument)
+	}
+	for i := 0; i < len(token); i++ {
+		if token[i] <= ' ' || token[i] == 0x7f {
+			return fmt.Errorf("opaque token invalid: %w", ErrInvalidArgument)
+		}
+	}
+	return nil
+}
+
+func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
+	if err := forecastCollectedMeta(lines); err != nil {
+		return nil, err
+	}
+	var items []*MetaItem
+	for i := 0; i < len(lines); {
+		if bytes.Equal(lines[i], _MetaMNCRLFBytes) {
+			i++
+			continue
+		}
+		trimmed := trimCRLF(lines[i])
+		parts := bytes.Split(trimmed, _SpaceBytes)
+		if len(parts) == 0 {
+			return nil, fmt.Errorf("empty meta line: %w", ErrMalformedResponse)
+		}
+		item := &MetaItem{}
+		if bytes.Equal(parts[0], []byte("VA")) {
+			if i+1 >= len(lines) {
+				return nil, fmt.Errorf("missing value: %w", ErrMalformedResponse)
+			}
+			header, body := lines[i], lines[i+1] //nolint:gosec // G602: i+1 is bounds-checked above
+			if err := parseMetaItem([][]byte{header, body}, item, false, false); err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+			i += 2
+			continue
+		}
+		flagStart := 1
+		if err := parseFlags(parts, flagStart, item); err != nil {
+			return nil, err
+		}
+		switch string(parts[0]) {
+		case "HD":
+			item.gotHD = true
+			items = append(items, item)
+			i++
+		case "NF", "EN", "NS", "EX":
+			items = append(items, item)
+			i++
+		default:
+			if err := parseMetaItem([][]byte{lines[i]}, item, false, false); err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+			i++
+		}
+	}
+	return items, nil
 }
