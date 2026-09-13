@@ -52,11 +52,20 @@ func (f *fakeMemcached) store(fields []string, r *bufio.Reader, w *bufio.Writer)
 
 	f.mu.Lock()
 	f.lastSet = strings.Join(fields, " ")
-	if cmd == "set" && key == "_" {
+	if cmd == "set" && key == string(authProbeKey) {
 		f.authSets++
 	}
-	if f.tokenAuth && cmd == "set" && key == "_" {
+	if f.tokenAuth && cmd == "set" && key == string(authProbeKey) {
+		wantUser, wantPass := f.authUser, f.authPass
 		f.mu.Unlock()
+		user, pass, ok := strings.Cut(string(value), " ")
+		if !ok || user != wantUser || pass != wantPass {
+			if !noReply {
+				_, _ = w.WriteString("CLIENT_ERROR authentication failure\r\n")
+				_ = w.Flush()
+			}
+			return true
+		}
 		if !noReply {
 			_, _ = w.WriteString("STORED\r\n")
 			_ = w.Flush()
@@ -170,6 +179,10 @@ func (f *fakeMemcached) touch(fields []string, w *bufio.Writer) {
 		item.exptime = fields[2]
 	}
 	f.mu.Unlock()
+	noReply := len(fields) > 3 && fields[3] == "noreply"
+	if noReply {
+		return
+	}
 	if ok {
 		_, _ = w.WriteString("TOUCHED\r\n")
 	} else {

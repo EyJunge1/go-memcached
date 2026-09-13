@@ -60,7 +60,7 @@ func TestFlushAllAfterAndStatsArgs(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
-	noError(t, mustAdmin(t, client).FlushAll(ctx, FlushOpts{Delay: Rel(time.Second)}))
+	noError(t, mustAdmin(t, client).FlushAll(ctx, FlushOpts{Delay: time.Second}))
 	_, err := client.GetOne(ctx, []byte("k"))
 	isErrorIs(t, err, ErrNotFound)
 	srv.mu.Lock()
@@ -91,7 +91,7 @@ func TestFlushAllAfterWritesDelayToken(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	noError(t, mustAdmin(t, client).FlushAll(context.Background(), FlushOpts{Delay: Rel(10 * time.Second)}))
+	noError(t, mustAdmin(t, client).FlushAll(context.Background(), FlushOpts{Delay: 10 * time.Second}))
 	srv.mu.Lock()
 	equal(t, "10", srv.lastFlushDelay)
 	srv.mu.Unlock()

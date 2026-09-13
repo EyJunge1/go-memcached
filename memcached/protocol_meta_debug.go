@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -42,6 +43,15 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
 	}
 
+	hit := MapWireLine(lines[0], WireMeta)
+	if hit.Class == WireFault {
+		if errors.Is(hit.Err, ErrNotFound) {
+			item.Status = MetaStatusEN
+			return ErrNotFound
+		}
+		return hit.Err
+	}
+
 	parts := bytes.Split(trimCRLF(lines[0]), _SpaceBytes)
 	if len(parts) < 1 {
 		return fmt.Errorf("invalid response: %w", ErrMalformedResponse)
@@ -53,6 +63,7 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug) error {
 	)
 
 	cd := parts[CDIndex]
+	item.Status = metaStatusFromCD(cd)
 	switch string(cd) {
 	case "EN":
 		return ErrNotFound

@@ -6,33 +6,32 @@ import (
 )
 
 // Incr increments the key and returns the new value.
-func (c *Client) Incr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
-	key = c.nsBytes(key)
-	if err := validateKeyAndValue(key, nil); err != nil {
-		return 0, err
-	}
-
-	req, resp := buildArithmeticCommand("incr", key, delta, false)
-	defer releaseReqAndResp(req, resp)
-
-	var value uint64
-	resp.afterRecv = parseArithmeticAfterRecv(&value)
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return 0, fmt.Errorf("request failed: %w", err)
-	}
-
-	return value, nil
+// Quiet sends noreply and returns (0, nil) without inventing a sum.
+func (c *Client) Incr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
+	return c.arithmetic(ctx, "incr", key, delta, opts)
 }
 
 // Decr decrements the key and returns the new value.
-func (c *Client) Decr(ctx context.Context, key []byte, delta uint64) (uint64, error) {
+// Quiet sends noreply and returns (0, nil) without inventing a difference.
+func (c *Client) Decr(ctx context.Context, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
+	return c.arithmetic(ctx, "decr", key, delta, opts)
+}
+
+func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64, opts MutateOpts) (uint64, error) {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return 0, err
 	}
 
-	req, resp := buildArithmeticCommand("decr", key, delta, false)
+	req, resp := buildArithmeticCommand(cmd, key, delta, opts.Quiet)
 	defer releaseReqAndResp(req, resp)
+
+	if opts.Quiet {
+		if err := c.dispatchQuiet(ctx, req, resp); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
 
 	var value uint64
 	resp.afterRecv = parseArithmeticAfterRecv(&value)

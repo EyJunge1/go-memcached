@@ -126,7 +126,7 @@ func TestPingClearsDeadServer(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, _ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
 	greater(t, len(client.DeadServers()), 0)
 	dead.Store(false)
 	noError(t, client.Ping(context.Background()))
@@ -189,7 +189,7 @@ func TestTouchNotFoundKeepsConnection(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	isErrorIs(t, client.Touch(context.Background(), []byte("missing"), Rel(time.Second)), ErrNotFound)
+	isErrorIs(t, client.Touch(context.Background(), []byte("missing"), Rel(time.Second), MutateOpts{}), ErrNotFound)
 	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
 	equal(t, int32(1), dials.Load())
 }
@@ -223,6 +223,8 @@ func TestMetaPipelineMissIsEmptyItem(t *testing.T) {
 	noError(t, err)
 	hasLen(t, items, 2)
 	equal(t, []byte("v"), items[0].Item.Value)
+	equal(t, MetaStatusEN, items[1].Status)
+	isErrorIs(t, items[1].Err(), ErrNotFound)
 	isNil(t, items[1].Item.Value)
 }
 

@@ -11,3 +11,10 @@ func Test_validOpaqueToken(t *testing.T) {
 	isErrorIs(t, validOpaqueToken(string(bytes.Repeat([]byte("a"), 33))), ErrInvalidArgument)
 	noError(t, validOpaqueToken("opaque"))
 }
+
+func Test_validMetaHints(t *testing.T) {
+	noError(t, validMetaHints("", ""))
+	noError(t, validMetaHints("hint", "/path"))
+	isErrorIs(t, validMetaHints("bad token", ""), ErrInvalidArgument)
+	isErrorIs(t, validMetaHints("", "x y"), ErrInvalidArgument)
+}

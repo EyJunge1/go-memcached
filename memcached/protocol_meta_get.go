@@ -104,7 +104,7 @@ func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) 
 //	VA(value).
 //
 // VA is specified as: VA <size> <flags>*\r\n<data block>\r\n.
-func parseMetaItem(lines [][]byte, item *MetaItem, noReply, wantValue bool) error {
+func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound bool) error {
 	if err := forecastCollectedMeta(lines); err != nil {
 		return err
 	}
@@ -118,9 +118,12 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, wantValue bool) erro
 	}
 
 	if noReply && len(proto) == 0 {
-		if wantValue {
+		if quietMissAsNotFound {
+			item.Status = MetaStatusEN
 			return ErrNotFound
 		}
+		item.Status = MetaStatusHD
+		item.gotHD = true
 		return nil
 	}
 
@@ -158,8 +161,12 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, wantValue bool) erro
 	}
 
 	if !bytes.Equal(cd, []byte("VA")) {
-		if bytes.Equal(cd, []byte("HD")) {
+		switch string(cd) {
+		case "HD":
 			item.gotHD = true
+		case "MN", "ME":
+		default:
+			return fmt.Errorf("unexpected meta cd %q: %w", cd, ErrMalformedResponse)
 		}
 		return parseFlags(parts, 1, item)
 	}
@@ -190,18 +197,16 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, wantValue bool) erro
 }
 
 func forecastCollectedMeta(lines [][]byte) error {
-	for _, line := range lines {
-		if bytes.Equal(line, _MetaMNCRLFBytes) {
+	for i := 0; i < len(lines); i++ {
+		if bytes.Equal(lines[i], _MetaMNCRLFBytes) {
 			continue
 		}
-		trimmed := trimCRLF(line)
-		switch {
-		case bytes.Equal(trimmed, []byte("ERROR")):
-			return ErrNonexistentCommand
-		case bytes.HasPrefix(trimmed, []byte("CLIENT_ERROR")):
-			return forecastCommonFaultLine(line)
-		case bytes.HasPrefix(trimmed, []byte("SERVER_ERROR")):
-			return forecastCommonFaultLine(line)
+		hit := MapWireLine(lines[i], WireMeta)
+		if hit.Class == WireFault && isChargeMetaFault(hit.Err) {
+			return hit.Err
+		}
+		if hit.Status == MetaStatusVA {
+			i++ // data block is not a status line
 		}
 	}
 	return nil

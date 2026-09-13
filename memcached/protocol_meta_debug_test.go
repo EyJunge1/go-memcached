@@ -11,7 +11,13 @@ func Test_parseMetaItemDebug(t *testing.T) {
 	equal(t, []byte("foo"), item.Key)
 	equal(t, int64(-1), item.TTL)
 	equal(t, uint64(18), item.CAS)
-	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("EN\r\n")}, &MetaItemDebug{}), ErrNotFound)
+	equal(t, MetaStatusME, item.Status)
+	miss := &MetaItemDebug{}
+	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("EN\r\n")}, miss), ErrNotFound)
+	equal(t, MetaStatusEN, miss.Status)
+	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("ERROR bad args\r\n")}, &MetaItemDebug{}), ErrCommandError)
+	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("CLIENT_ERROR bad me\r\n")}, &MetaItemDebug{}), ErrClientError)
+	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("XX\r\n")}, &MetaItemDebug{}), ErrMalformedResponse)
 }
 
 func Test_parseMetaItemDebug_unknownFields(t *testing.T) {

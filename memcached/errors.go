@@ -55,6 +55,16 @@ var (
 	ErrUnsafe = errors.New("unsafe")
 	// ErrSame is the server SAME reply (slabs reassign src == dest).
 	ErrSame = errors.New("same")
+	// ErrCommandError is the server "ERROR <message>" / "ERROR:…" reply.
+	ErrCommandError = errors.New("command error")
+	// ErrWatcherTooMany is the server WATCHER_TOO_MANY reply.
+	ErrWatcherTooMany = errors.New("watcher too many")
+	// ErrWatcherFailed is the server WATCHER_FAILED reply.
+	ErrWatcherFailed = errors.New("watcher failed")
+	// ErrMemlimit is MEMLIMIT_TOO_SMALL or MEMLIMIT_ADJUST_FAILED.
+	ErrMemlimit = errors.New("memlimit")
+	// ErrNotStarted is the server NOTSTARTED reply (crawler).
+	ErrNotStarted = errors.New("not started")
 	// ErrMixedTransport is returned when a client mixes UDP with TCP/Unix.
 	ErrMixedTransport = errors.New("mixed UDP and stream transports")
 	// ErrInsecureTLS is returned when InsecureSkipVerify is set without AllowInsecureTLS.

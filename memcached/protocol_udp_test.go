@@ -93,6 +93,29 @@ func Test_nextUDPRequestIDSkipsZero(t *testing.T) {
 	}
 }
 
+func Test_assembleUDPAcceptsNineFragments(t *testing.T) {
+	makeDgram := func(id, seq, total uint16, payload []byte) []byte {
+		h := make([]byte, 8+len(payload))
+		binary.BigEndian.PutUint16(h[0:2], id)
+		binary.BigEndian.PutUint16(h[2:4], seq)
+		binary.BigEndian.PutUint16(h[4:6], total)
+		copy(h[8:], payload)
+		return h
+	}
+	const total uint16 = 9
+	datagrams := make([][]byte, 0, total)
+	var want []byte
+	for i := uint16(0); i < total; i++ {
+		p := []byte{byte('A' + i)}
+		want = append(want, p...)
+		datagrams = append(datagrams, makeDgram(3, i, total, p))
+	}
+	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: datagrams}
+	got, err := assembleUDP(cn, 3)
+	noError(t, err)
+	equal(t, want, got)
+}
+
 func Test_assembleUDPRejectsReserved(t *testing.T) {
 	h := make([]byte, 10)
 	binary.BigEndian.PutUint16(h[0:2], 3)

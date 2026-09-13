@@ -11,7 +11,7 @@ import (
 const (
 	udpHeaderSize   = 8
 	maxUDPDatagram  = 65507
-	maxUDPFragments = 8
+	maxUDPFragments = 64
 )
 
 var udpRequestID atomic.Uint32

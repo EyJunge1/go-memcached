@@ -11,7 +11,9 @@ func isRetryable(err error) bool {
 	}
 	if isKeepaliveProtocolError(err) ||
 		errors.Is(err, ErrMalformedResponse) ||
-		errors.Is(err, ErrUnknownIndicator) {
+		errors.Is(err, ErrUnknownIndicator) ||
+		errors.Is(err, ErrServerError) ||
+		errors.Is(err, ErrCommandError) {
 		return false
 	}
 	return isTransportError(err)

@@ -25,6 +25,18 @@ func TestWrapRecvErrorKeepsProtocolSentinels(t *testing.T) {
 
 	malformed := wrapRecvError(fmt.Errorf("bad frame: %w", ErrMalformedResponse))
 	isTrue(t, shouldDiscardConn(malformed))
+	isFalse(t, isTransportError(malformed))
+	isErrorIs(t, malformed, ErrMalformedResponse)
+
+	server := wrapRecvError(fmt.Errorf("recv failed: %w", ErrServerError))
+	isErrorIs(t, server, ErrServerError)
+	isFalse(t, isTransportError(server))
+	isTrue(t, shouldDiscardConn(server))
+
+	cmd := wrapRecvError(fmt.Errorf("recv failed: %w", ErrCommandError))
+	isErrorIs(t, cmd, ErrCommandError)
+	isFalse(t, isTransportError(cmd))
+	isFalse(t, shouldDiscardConn(cmd))
 }
 
 type ioTimeoutError struct{}
@@ -44,4 +56,8 @@ func TestErrorsJoinPreservesJoinedSentinels(t *testing.T) {
 	isError(t, joined)
 	isTrue(t, errors.Is(joined, ErrNotFound))
 	isTrue(t, errors.Is(joined, ErrServerError))
+
+	mix := errors.Join(ErrBusy, ErrServerError)
+	isTrue(t, errors.Is(mix, ErrBusy))
+	isTrue(t, errors.Is(mix, ErrServerError))
 }

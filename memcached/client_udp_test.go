@@ -23,7 +23,7 @@ func TestUDPGetRoundTrip(t *testing.T) {
 func TestUDPRejectsMutation(t *testing.T) {
 	srv := startFakeMemcachedUDP(t)
 	client := testClient(t, srv.Addr())
-	_, err := client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	err := client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.MetaGet(context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
 	isErrorIs(t, err, ErrNotSupported)
@@ -51,7 +51,7 @@ func TestUDPMetaGetAndPingAllowed(t *testing.T) {
 func TestUDPAdminBroadcastRejected(t *testing.T) {
 	srv := startFakeMemcachedUDP(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
-	err := mustAdmin(t, client).All().Verbosity(context.Background(), 1)
+	err := mustAdmin(t, client).All().Verbosity(context.Background(), 1, AdminOpts{})
 	isErrorIs(t, err, ErrNotSupported)
 }
 

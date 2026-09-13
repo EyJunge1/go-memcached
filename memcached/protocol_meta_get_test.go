@@ -317,11 +317,13 @@ func Test_buildMetaGetCommand_emitsT0(t *testing.T) {
 func Test_parseMetaItem_quietOnlyMN(t *testing.T) {
 	item := &MetaItem{}
 	noError(t, parseMetaItem([][]byte{_MetaMNCRLFBytes}, item, true, false))
+	equal(t, MetaStatusHD, item.Status)
 }
 
 func Test_parseMetaItem_quietWantValueMiss(t *testing.T) {
 	item := &MetaItem{}
 	isErrorIs(t, parseMetaItem([][]byte{_MetaMNCRLFBytes}, item, true, true), ErrNotFound)
+	equal(t, MetaStatusEN, item.Status)
 }
 
 func Test_buildMetaGetCommand_checkCASAndOpaqueToken(t *testing.T) {

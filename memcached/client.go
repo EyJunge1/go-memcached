@@ -89,9 +89,13 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 			return err
 		}
 	}
-	addrs, err := serversToAddrs(servers)
-	if err != nil {
-		return err
+	var addrs []*Addr
+	if len(servers) > 0 {
+		var err error
+		addrs, err = serversToAddrs(servers)
+		if err != nil {
+			return err
+		}
 	}
 
 	picker := c.options.pickBuilder.Build(addrs)

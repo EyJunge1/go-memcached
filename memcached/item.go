@@ -99,6 +99,7 @@ func (m *MetaItem) String() string {
 //	cls   = slab class id
 //	size  = total size in bytes
 type MetaItemDebug struct {
+	Status         MetaStatus
 	Key            []byte // key
 	TTL            int64  // exp, expiration time in seconds, -1 means never expire
 	LastAccessTime int64  // la, time in seconds since last access

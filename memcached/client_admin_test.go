@@ -21,8 +21,8 @@ func TestAdminSyncCommands(t *testing.T) {
 	admin := mustAdminOn(t, client)
 
 	ctx := context.Background()
-	noError(t, admin.Verbosity(ctx, 1))
-	noError(t, admin.CacheMemLimit(ctx, 64))
+	noError(t, admin.Verbosity(ctx, 1, AdminOpts{}))
+	noError(t, admin.CacheMemLimit(ctx, 64, AdminOpts{}))
 	noError(t, admin.SlabsAutomove(ctx, 1))
 	noError(t, admin.LRUMode(ctx, "segmented"))
 	noError(t, admin.LRUTune(ctx, 20, 40, 2, 2))
@@ -66,8 +66,8 @@ func TestAdminAllBroadcast(t *testing.T) {
 	})
 	all := mustAdmin(t, client).All()
 	ctx := context.Background()
-	noError(t, all.Verbosity(ctx, 1))
-	noError(t, all.CacheMemLimit(ctx, 32))
+	noError(t, all.Verbosity(ctx, 1, AdminOpts{}))
+	noError(t, all.CacheMemLimit(ctx, 32, AdminOpts{}))
 	stats, err := all.Stats(ctx)
 	noError(t, err)
 	equal(t, 2, len(stats))
@@ -96,14 +96,14 @@ func TestAdminWatchAndDumps(t *testing.T) {
 	meta, err := admin.LRUCrawlerMetaDump(ctx2, "all")
 	noError(t, err)
 	row := <-meta
-	equal(t, "foo", row["key"])
+	equal(t, "foo", row.Fields["key"])
 	_, ok := <-meta
 	isFalse(t, ok)
 
 	mg, err := admin.LRUCrawlerMgDump(ctx2, "all")
 	noError(t, err)
 	line := <-mg
-	equal(t, "mg foo", line)
+	equal(t, "mg foo", line.Line)
 }
 
 func TestAdminDumpWithoutLaunchOK(t *testing.T) {
@@ -115,14 +115,14 @@ func TestAdminDumpWithoutLaunchOK(t *testing.T) {
 	meta, err := admin.LRUCrawlerMetaDump(ctx, "all")
 	noError(t, err)
 	row := <-meta
-	equal(t, "foo", row["key"])
+	equal(t, "foo", row.Fields["key"])
 	_, ok := <-meta
 	isFalse(t, ok)
 
 	mg, err := admin.LRUCrawlerMgDump(ctx, "all")
 	noError(t, err)
 	line := <-mg
-	equal(t, "mg foo", line)
+	equal(t, "mg foo", line.Line)
 }
 
 func TestAdminDumpBusy(t *testing.T) {
@@ -193,8 +193,6 @@ func TestAdminWatchLineCap(t *testing.T) {
 	events, err := admin.Watch(ctx, WatchFetchers)
 	noError(t, err)
 	ev, ok := <-events
-	isFalse(t, ok)
-	if ev.Raw != nil {
-		t.Fatalf("oversized watch line must not be delivered, got %#v", ev)
-	}
+	isTrue(t, ok)
+	isErrorIs(t, ev.Err, ErrMalformedResponse)
 }

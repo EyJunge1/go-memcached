@@ -26,11 +26,19 @@ const (
 	WatchDeletions   WatchTopic = "deletions"
 )
 
-// WatchEvent is one watcher log line.
+// WatchEvent is one watcher log line. Err is set on a terminal stream error.
 type WatchEvent struct {
 	TS  time.Time
 	GID uint64
 	Raw map[string]string
+	Err error
+}
+
+// DumpEntry is one metadump or mgdump line. Err is set on a terminal stream error.
+type DumpEntry struct {
+	Fields map[string]string
+	Line   string
+	Err    error
 }
 
 func releaseDedicated(cn memcachedConn) {
@@ -136,9 +144,24 @@ func (a *AdminClient) readWatch(ctx context.Context, cn memcachedConn, out chan 
 		}
 		line, err := readAdminStreamLine(cn)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case out <- WatchEvent{Err: wrapRecvError(err)}:
+			case <-ctx.Done():
+			}
 			return
 		}
-		ev := parseWatchEvent(string(trimCRLF(line)))
+		s := string(trimCRLF(line))
+		if err = adminStreamLineError(s); err != nil {
+			select {
+			case out <- WatchEvent{Err: err}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		ev := parseWatchEvent(s)
 		select {
 		case out <- ev:
 		case <-ctx.Done():
@@ -176,18 +199,17 @@ func parseURIPairs(line string) map[string]string {
 	return out
 }
 
-// LRUCrawlerMetaDump streams URI-encoded item metadata until END.
-func (a *AdminClient) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-chan map[string]string, error) {
+// LRUCrawlerMetaDump streams URI-encoded item metadata until END or EN.
+func (a *AdminClient) LRUCrawlerMetaDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
 	}
-	ch := make(chan map[string]string, 16)
-	if err := a.startDumpStream(ctx, "metadump", selector, func(line string, last bool) {
-		if last {
-			return
-		}
+	ch := make(chan DumpEntry, 16)
+	if err := a.startDumpStream(ctx, "metadump", selector, func(line string) DumpEntry {
+		return DumpEntry{Fields: parseURIPairs(line)}
+	}, func(e DumpEntry) {
 		select {
-		case ch <- parseURIPairs(line):
+		case ch <- e:
 		case <-ctx.Done():
 		}
 	}, func() { close(ch) }); err != nil {
@@ -196,18 +218,17 @@ func (a *AdminClient) LRUCrawlerMetaDump(ctx context.Context, selector string) (
 	return ch, nil
 }
 
-// LRUCrawlerMgDump streams "mg …" lines until END for a later MetaGet.
-func (a *AdminClient) LRUCrawlerMgDump(ctx context.Context, selector string) (<-chan string, error) {
+// LRUCrawlerMgDump streams "mg …" lines until END or EN for a later MetaGet.
+func (a *AdminClient) LRUCrawlerMgDump(ctx context.Context, selector string) (<-chan DumpEntry, error) {
 	if err := validCrawlerSelector(selector); err != nil {
 		return nil, err
 	}
-	ch := make(chan string, 16)
-	if err := a.startDumpStream(ctx, "mgdump", selector, func(line string, last bool) {
-		if last {
-			return
-		}
+	ch := make(chan DumpEntry, 16)
+	if err := a.startDumpStream(ctx, "mgdump", selector, func(line string) DumpEntry {
+		return DumpEntry{Line: line}
+	}, func(e DumpEntry) {
 		select {
-		case ch <- line:
+		case ch <- e:
 		case <-ctx.Done():
 		}
 	}, func() { close(ch) }); err != nil {
@@ -216,7 +237,7 @@ func (a *AdminClient) LRUCrawlerMgDump(ctx context.Context, selector string) (<-
 	return ch, nil
 }
 
-func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string, onLine func(string, bool), done func()) error {
+func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string, parse func(string) DumpEntry, emit func(DumpEntry), done func()) error {
 	cn, err := a.acquireStream(ctx)
 	if err != nil {
 		return err
@@ -265,12 +286,9 @@ func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string
 		}
 		s = string(trimCRLF(line))
 	}
-	if s == "END" {
+	if isDumpEnd(s) {
 		releaseDedicated(cn)
-		go func() {
-			onLine(s, true)
-			done()
-		}()
+		go done()
 		return nil
 	}
 	if err = adminStreamLineError(s); err != nil {
@@ -283,7 +301,7 @@ func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string
 		defer releaseDedicated(cn)
 		stop := context.AfterFunc(ctx, func() { _ = cn.Close() })
 		defer stop()
-		onLine(s, false)
+		emit(parse(s))
 		for {
 			if err := ctx.Err(); err != nil {
 				return
@@ -294,17 +312,21 @@ func (a *AdminClient) startDumpStream(ctx context.Context, kind, selector string
 			}
 			line, err := readAdminStreamLine(cn)
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				emit(DumpEntry{Err: wrapRecvError(err)})
 				return
 			}
 			next := string(trimCRLF(line))
-			if next == "END" {
-				onLine(next, true)
+			if isDumpEnd(next) {
 				return
 			}
 			if err := adminStreamLineError(next); err != nil {
+				emit(DumpEntry{Err: err})
 				return
 			}
-			onLine(next, false)
+			emit(parse(next))
 		}
 	}()
 	return nil

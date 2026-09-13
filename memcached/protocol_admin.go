@@ -1,12 +1,13 @@
 package memcached
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"strconv"
-	"strings"
+	"syscall"
 )
 
 var crawlerClassSelector = regexp.MustCompile(`^\d+(,\d+)*$`)
@@ -36,41 +37,47 @@ func validCrawlerSelector(s string) error {
 	return fmt.Errorf("invalid crawler selector %q: %w", s, ErrInvalidArgument)
 }
 
-func buildAdminLine(cmd string, args ...string) (*request, *response) {
+func buildAdminLine(cmd string, noReply bool, args ...string) (*request, *response) {
 	b := newProtocolBuilder().AddString(cmd)
 	defer b.release()
 	for _, a := range args {
 		b.AddString(a)
 	}
+	if noReply {
+		b.AddBytes(_NoReplyBytes)
+	}
 	req := buildRequest([]byte(cmd), nil, b.AddCRLF().build())
+	if noReply {
+		return req, buildNoReplyResponse()
+	}
 	return req, buildLimitedLineResponse(1)
 }
 
-func buildVerbosityCommand(level int) (*request, *response) {
-	return buildAdminLine("verbosity", strconv.Itoa(level))
+func buildVerbosityCommand(level int, noReply bool) (*request, *response) {
+	return buildAdminLine("verbosity", noReply, strconv.Itoa(level))
 }
 
 func buildShutdownCommand(graceful bool) (*request, *response) {
 	if graceful {
-		return buildAdminLine("shutdown", "graceful")
+		return buildAdminLine("shutdown", false, "graceful")
 	}
-	return buildAdminLine("shutdown")
+	return buildAdminLine("shutdown", false)
 }
 
-func buildCacheMemLimitCommand(megabytes uint32) (*request, *response) {
-	return buildAdminLine("cache_memlimit", strconv.FormatUint(uint64(megabytes), 10))
+func buildCacheMemLimitCommand(megabytes uint32, noReply bool) (*request, *response) {
+	return buildAdminLine("cache_memlimit", noReply, strconv.FormatUint(uint64(megabytes), 10))
 }
 
 func buildSlabsReassignCommand(source, dest int) (*request, *response) {
-	return buildAdminLine("slabs", "reassign", strconv.Itoa(source), strconv.Itoa(dest))
+	return buildAdminLine("slabs", false, "reassign", strconv.Itoa(source), strconv.Itoa(dest))
 }
 
 func buildSlabsAutomoveCommand(mode int) (*request, *response) {
-	return buildAdminLine("slabs", "automove", strconv.Itoa(mode))
+	return buildAdminLine("slabs", false, "automove", strconv.Itoa(mode))
 }
 
 func buildLRUTuneCommand(hotPct, warmPct int, hotFactor, warmFactor float64) (*request, *response) {
-	return buildAdminLine("lru", "tune",
+	return buildAdminLine("lru", false, "tune",
 		strconv.Itoa(hotPct), strconv.Itoa(warmPct),
 		strconv.FormatFloat(hotFactor, 'f', -1, 64),
 		strconv.FormatFloat(warmFactor, 'f', -1, 64),
@@ -78,11 +85,11 @@ func buildLRUTuneCommand(hotPct, warmPct int, hotFactor, warmFactor float64) (*r
 }
 
 func buildLRUModeCommand(mode string) (*request, *response) {
-	return buildAdminLine("lru", "mode", mode)
+	return buildAdminLine("lru", false, "mode", mode)
 }
 
 func buildLRUTempTTLCommand(ttl int) (*request, *response) {
-	return buildAdminLine("lru", "temp_ttl", strconv.Itoa(ttl))
+	return buildAdminLine("lru", false, "temp_ttl", strconv.Itoa(ttl))
 }
 
 func allowedWatchTopic(t WatchTopic) bool {
@@ -123,36 +130,22 @@ func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 }
 
 func mapAdminKeyword(tok string) error {
-	switch {
-	case tok == "BUSY" || strings.HasPrefix(tok, "BUSY "):
-		return ErrBusy
-	case tok == "BADCLASS" || strings.HasPrefix(tok, "BADCLASS "):
-		return ErrBadClass
-	case tok == "NOSPARE" || strings.HasPrefix(tok, "NOSPARE "):
-		return ErrNoSpare
-	case tok == "NOTFULL" || strings.HasPrefix(tok, "NOTFULL "):
-		return ErrNotFull
-	case tok == "UNSAFE" || strings.HasPrefix(tok, "UNSAFE "):
-		return ErrUnsafe
-	case tok == "SAME" || strings.HasPrefix(tok, "SAME "):
-		return ErrSame
-	case tok == "ERROR":
-		return ErrNonexistentCommand
-	case strings.HasPrefix(tok, "ERROR "):
-		return fmt.Errorf("%s: %w", tok, ErrInvalidArgument)
-	default:
-		return nil
+	hit, ok := mapAdminKeywordHit(tok)
+	if ok {
+		return hit.Err
 	}
+	return nil
 }
 
 func adminStreamLineError(s string) error {
 	if s == "" {
 		return nil
 	}
-	if err := forecastCommonFaultLine([]byte(s + "\r\n")); err != nil {
-		return err
+	hit := MapWireLine([]byte(s), WireDump)
+	if hit.Class == WireFault {
+		return hit.Err
 	}
-	return mapAdminKeyword(s)
+	return nil
 }
 
 func parseAdminReply(resp *response) error {
@@ -163,32 +156,26 @@ func parseAdminReply(resp *response) error {
 }
 
 func mapAdminStatus(line []byte) error {
-	if err := forecastCommonFaultLine(line); err != nil {
-		return err
+	hit := MapWireLine(line, WireAdmin)
+	if hit.Class == WireFault {
+		return hit.Err
 	}
-	tok := string(trimCRLF(line))
-	if tok == "OK" {
+	if hit.Class == WireNominal {
 		return nil
 	}
-	if err := mapAdminKeyword(tok); err != nil {
-		return err
-	}
-	return fmt.Errorf("%s: %w", tok, ErrMalformedResponse)
+	return fmt.Errorf("%s: %w", trimCRLF(line), ErrMalformedResponse)
 }
 
 func isShutdownClosed(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errorsIsEOF(err) {
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	s := err.Error()
-	return strings.Contains(s, "connection reset") ||
-		strings.Contains(s, "broken pipe") ||
-		strings.Contains(s, "use of closed network connection")
-}
-
-func errorsIsEOF(err error) bool {
-	return err == io.EOF || bytes.Contains([]byte(err.Error()), []byte("EOF"))
+	var op *net.OpError
+	if errors.As(err, &op) {
+		return errors.Is(op.Err, syscall.ECONNRESET) || errors.Is(op.Err, syscall.EPIPE)
+	}
+	return false
 }

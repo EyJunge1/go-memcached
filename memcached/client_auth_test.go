@@ -33,12 +33,26 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 	line := srv.lastSet
 	n := srv.authSets
 	srv.mu.Unlock()
-	contains(t, line, "set _ 0 -1")
+	contains(t, line, "set __mc_auth 0 0")
 	greater(t, n, 0)
 
 	plain := testClient(t, srv.Addr())
-	_, err = plain.GetOne(context.Background(), []byte("_"))
+	_, err = plain.GetOne(context.Background(), authProbeKey)
 	isErrorIs(t, err, ErrNotFound)
+}
+
+func TestAuthLeavesUnrelatedProbeKey(t *testing.T) {
+	srv := startFakeMemcachedAuth(t)
+	srv.mu.Lock()
+	srv.items[string(authProbeKey)] = &fakeItem{value: []byte("app-data")}
+	srv.mu.Unlock()
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Auth = &Auth{User: "u", Pass: "p"}
+	})
+	noError(t, client.Ping(context.Background()))
+	item, err := client.GetOne(context.Background(), authProbeKey)
+	noError(t, err)
+	equal(t, []byte("app-data"), item.Value)
 }
 
 func TestAuthHitsEveryNode(t *testing.T) {
@@ -100,6 +114,8 @@ func TestNewRejectsPlaintextAuthRemote(t *testing.T) {
 func TestAuthAllowsUnix(t *testing.T) {
 	srv, path := startFakeMemcachedUnix(t)
 	srv.tokenAuth = true
+	srv.authUser = "u"
+	srv.authPass = "p"
 	client := testClient(t, "unix://"+path, func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})

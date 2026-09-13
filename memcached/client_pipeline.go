@@ -52,6 +52,7 @@ func (p *Pipeline) addStorage(mode StoreMode, item *Item) *Pipeline {
 	} else {
 		if mode == StoreAppend || mode == StorePrepend {
 			req.Flags = 0
+			req.Exp = 0
 		}
 		request, resp = buildStorageCommand(command, key, req.Value, req.Flags, req.Exp, false)
 	}
@@ -118,7 +119,7 @@ func (p *Pipeline) release() {
 }
 
 func shouldDiscardPipelineConn(err error) bool {
-	return shouldDiscardConn(err) || errors.Is(err, ErrClientError)
+	return shouldDiscardConn(err)
 }
 
 // Flush writes all queued frames, then reads all replies. Cluster nodes run in parallel.
@@ -136,7 +137,7 @@ func (p *Pipeline) Flush(ctx context.Context) error {
 
 	addrs, picker := p.c.snapshotCluster()
 	if picker == nil || len(addrs) == 0 {
-		return errors.New("no servers configured")
+		return fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = p.c.liveAddrs(addrs)
 

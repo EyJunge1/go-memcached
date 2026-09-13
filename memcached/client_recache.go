@@ -1,6 +1,9 @@
 package memcached
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // GetOrVivify is mg with N. won is true when the server returned W.
 func (c *Client) GetOrVivify(ctx context.Context, key []byte, ttl Exptime) (MetaResult, bool, error) {
@@ -12,9 +15,10 @@ func (c *Client) GetOrVivify(ctx context.Context, key []byte, ttl Exptime) (Meta
 }
 
 // GetEarlyRecache is mg with R. won is true when the server returned W.
-func (c *Client) GetEarlyRecache(ctx context.Context, key []byte, window Exptime) (MetaResult, bool, error) {
+// window is remaining TTL in seconds on the wire (not an item Exptime).
+func (c *Client) GetEarlyRecache(ctx context.Context, key []byte, window time.Duration) (MetaResult, bool, error) {
 	res, err := c.MetaGet(ctx, key, MetaGet{
-		Recache: &window,
+		Recache: window,
 		Return:  MetaGetReturn{Value: true},
 	})
 	return res, res.Item.Won, err

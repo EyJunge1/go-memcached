@@ -1,12 +1,15 @@
 package memcached
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 )
+
+var authProbeKey = []byte("__mc_auth")
 
 func validAuthSecret(s string) error {
 	if strings.IndexFunc(s, func(r rune) bool {
@@ -19,10 +22,11 @@ func validAuthSecret(s string) error {
 
 func buildAuthCommand(username, password string) (*request, *response) {
 	payload := []byte(username + " " + password)
-	return buildStorageCommand("set", []byte("_"), payload, 0, ExptimeImmediate, false)
+	return buildStorageCommand("set", authProbeKey, payload, 0, ExptimeNever, false)
 }
 
 func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, writeTimeout, readTimeout time.Duration) error {
+	payload := []byte(user + " " + pass)
 	req, resp := buildAuthCommand(user, pass)
 	defer releaseReqAndResp(req, resp)
 	resp.afterRecv = mapStorageReply
@@ -38,7 +42,7 @@ func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, wri
 		}
 	}
 
-	greq, gresp := buildGetsCommand("get", []byte("_"))
+	greq, gresp := buildGetsCommand("get", authProbeKey)
 	defer releaseReqAndResp(greq, gresp)
 	var leftover []*Item
 	gresp.afterRecv = func(r *response) error {
@@ -63,8 +67,12 @@ func authHandshake(ctx context.Context, cn memcachedConn, user, pass string, wri
 	if len(leftover) == 0 {
 		return nil
 	}
+	// A different body is a pre-existing key collision: -Y consumed our set.
+	if !bytes.Equal(leftover[0].Value, payload) {
+		return nil
+	}
 
-	dreq, dresp := buildDeleteCommand([]byte("_"), false)
+	dreq, dresp := buildDeleteCommand(authProbeKey, false)
 	defer releaseReqAndResp(dreq, dresp)
 	dresp.afterRecv = expectLine(_DeletedCRLFBytes)
 	_ = dreq.send(ctx, cn, writeTimeout)

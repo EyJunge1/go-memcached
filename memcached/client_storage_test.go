@@ -36,7 +36,7 @@ func TestAddNotStoredKeepsConnection(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
-	noError(t, expectStore(StoreNotStored)(client.Add(ctx, []byte("k"), []byte("other"), 0, 0)))
+	noError(t, expectStore(ErrNotStored)(client.Add(ctx, []byte("k"), []byte("other"), 0, 0)))
 	noError(t, storeOK(client.Set(ctx, []byte("k2"), []byte("v2"), 0, 0)))
 	equal(t, int32(1), dials.Load())
 }
@@ -53,8 +53,8 @@ func TestCasExistsKeepsConnection(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
-	noError(t, expectStore(StoreExists)(client.Cas(ctx, []byte("k"), []byte("other"), 0, 0, 99)))
-	noError(t, expectStore(StoreNotFound)(client.Cas(ctx, []byte("missing"), []byte("x"), 0, 0, 1)))
+	noError(t, expectStore(ErrExists)(client.Cas(ctx, []byte("k"), []byte("other"), 0, 0, 99)))
+	noError(t, expectStore(ErrNotFound)(client.Cas(ctx, []byte("missing"), []byte("x"), 0, 0, 1)))
 	noError(t, storeOK(client.Set(ctx, []byte("k2"), []byte("v2"), 0, 0)))
 	equal(t, int32(1), dials.Load())
 }
@@ -70,7 +70,7 @@ func TestDeleteNotFoundKeepsConnection(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	isErrorIs(t, client.Delete(ctx, []byte("missing")), ErrNotFound)
+	isErrorIs(t, client.Delete(ctx, []byte("missing"), MutateOpts{}), ErrNotFound)
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
 	equal(t, int32(1), dials.Load())
 }
@@ -84,7 +84,7 @@ func TestSetRejectsCRLFKey(t *testing.T) {
 			return net.Dial(network, address)
 		}
 	})
-	_, err := client.Set(context.Background(), []byte("a\r\nb"), []byte("v"), 0, 0)
+	err := client.Set(context.Background(), []byte("a\r\nb"), []byte("v"), 0, 0)
 	isErrorIs(t, err, ErrInvalidKey)
 	equal(t, int32(0), writes.Load())
 }

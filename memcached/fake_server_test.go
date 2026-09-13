@@ -33,14 +33,19 @@ type fakeMemcached struct {
 	dumpSel        string
 	dumpBusy       bool
 	tokenAuth      bool
+	authUser       string
+	authPass       string
 	lastFlushDelay string
 	dumpSendOK     bool
+	dumpEmpty      bool
 }
 
 func startFakeMemcachedAuth(t *testing.T) *fakeMemcached {
 	t.Helper()
 	f := startFakeMemcached(t)
 	f.tokenAuth = true
+	f.authUser = "u"
+	f.authPass = "p"
 	return f
 }
 
@@ -105,7 +110,9 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			continue
 		}
 		f.mu.Lock()
-		f.lastCmd = strings.Join(fields, " ")
+		if fields[0] != "quit" {
+			f.lastCmd = strings.Join(fields, " ")
+		}
 		f.mu.Unlock()
 		switch fields[0] {
 		case "quit":
@@ -115,6 +122,7 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			_ = w.Flush()
 		case "flush_all":
 			delay := ""
+			noReply := len(fields) > 0 && fields[len(fields)-1] == "noreply"
 			if len(fields) > 1 && fields[1] != "noreply" {
 				delay = fields[1]
 			}
@@ -122,8 +130,10 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			f.lastFlushDelay = delay
 			f.items = make(map[string]*fakeItem)
 			f.mu.Unlock()
-			_, _ = w.WriteString("OK\r\n")
-			_ = w.Flush()
+			if !noReply {
+				_, _ = w.WriteString("OK\r\n")
+				_ = w.Flush()
+			}
 		case "set", "add", "replace", "append", "prepend", "cas":
 			if !f.store(fields, r, w) {
 				return
@@ -143,13 +153,17 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 			f.metaGet(fields, w)
 		case "md":
 			f.metaDelete(fields, w)
+		case "ma":
+			f.metaArith(fields, w)
 		case "me":
 			f.metaDebug(fields, w)
 		case "stats":
 			f.stats(fields, w)
 		case "verbosity", "cache_memlimit":
-			_, _ = w.WriteString("OK\r\n")
-			_ = w.Flush()
+			if len(fields) == 0 || fields[len(fields)-1] != "noreply" {
+				_, _ = w.WriteString("OK\r\n")
+				_ = w.Flush()
+			}
 		case "shutdown":
 			_, _ = w.WriteString("OK\r\n")
 			_ = w.Flush()

@@ -2,38 +2,8 @@ package memcached
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
-
-// StoreResult is a text storage outcome. It is not a transport error.
-type StoreResult uint8
-
-const (
-	// StoreStored is the server STORED reply.
-	StoreStored StoreResult = iota + 1
-	// StoreNotStored is the server NOT_STORED reply.
-	StoreNotStored
-	// StoreExists is the server EXISTS reply.
-	StoreExists
-	// StoreNotFound is the server NOT_FOUND reply (cas/miss).
-	StoreNotFound
-)
-
-func (r StoreResult) String() string {
-	switch r {
-	case StoreStored:
-		return "STORED"
-	case StoreNotStored:
-		return "NOT_STORED"
-	case StoreExists:
-		return "EXISTS"
-	case StoreNotFound:
-		return "NOT_FOUND"
-	default:
-		return "UNKNOWN"
-	}
-}
 
 // StoreMode selects the text storage command.
 type StoreMode uint8
@@ -76,33 +46,18 @@ func storeCommand(mode StoreMode) (string, error) {
 	}
 }
 
-func storeResultFromErr(err error) (StoreResult, error) {
-	if err == nil {
-		return StoreStored, nil
-	}
-	switch {
-	case errors.Is(err, ErrNotStored):
-		return StoreNotStored, nil
-	case errors.Is(err, ErrExists):
-		return StoreExists, nil
-	case errors.Is(err, ErrNotFound):
-		return StoreNotFound, nil
-	default:
-		return 0, err
-	}
-}
-
 // Store issues one text storage command.
-// Outcomes (NOT_STORED/EXISTS/NOT_FOUND) are StoreResult with a nil error.
-// error is only transport, CLIENT_ERROR, or SERVER_ERROR.
-func (c *Client) Store(ctx context.Context, mode StoreMode, req StoreRequest) (StoreResult, error) {
+// NOT_STORED, EXISTS, and NOT_FOUND are returned as sentinels.
+// Quiet sends noreply: success means the write was sent, not that the
+// server accepted the item. The connection is discarded.
+func (c *Client) Store(ctx context.Context, mode StoreMode, req StoreRequest) error {
 	command, err := storeCommand(mode)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	key := c.nsBytes(req.Key)
 	if err := c.checkKeyValue(key, req.Value); err != nil {
-		return 0, err
+		return err
 	}
 	flags, exp := req.Flags, req.Exp
 	if mode == StoreAppend || mode == StorePrepend {
@@ -119,20 +74,13 @@ func (c *Client) Store(ctx context.Context, mode StoreMode, req StoreRequest) (S
 	defer releaseReqAndResp(request, resp)
 
 	if req.Quiet {
-		if err := c.dispatchQuiet(ctx, request, resp); err != nil {
-			return 0, err
-		}
-		return 0, nil
+		return c.dispatchQuiet(ctx, request, resp)
 	}
 	resp.afterRecv = mapStorageReply
 	if err := c.dispatchRequest(ctx, request, resp); err != nil {
-		res, outErr := storeResultFromErr(err)
-		if outErr != nil {
-			return 0, fmt.Errorf("request failed: %w", outErr)
-		}
-		return res, nil
+		return fmt.Errorf("request failed: %w", err)
 	}
-	return StoreStored, nil
+	return nil
 }
 
 func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response) error {
@@ -147,7 +95,16 @@ func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response
 	if err != nil {
 		return fmt.Errorf("pick node failed: %w", err)
 	}
-	if isUDPNetwork(addr.Network) {
+	return c.sendQuietToAddr(ctx, addr, req, resp)
+}
+
+func (c *Client) sendQuietToAddr(ctx context.Context, addr *Addr, req *request, resp *response) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if addr != nil && isUDPNetwork(addr.Network) {
 		return fmt.Errorf("udp %s: %w", req.cmd, ErrNotSupported)
 	}
 	cn, err := c.getConn(ctx, addr)
@@ -170,31 +127,31 @@ func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response
 }
 
 // Set stores the given key-value pair.
-func (c *Client) Set(ctx context.Context, key, value []byte, flag uint32, expiry Exptime) (StoreResult, error) {
+func (c *Client) Set(ctx context.Context, key, value []byte, flag uint32, expiry Exptime) error {
 	return c.Store(ctx, StoreSet, StoreRequest{Key: key, Value: value, Flags: flag, Exp: expiry})
 }
 
 // Add stores the pair only if the key does not exist.
-func (c *Client) Add(ctx context.Context, key, value []byte, flag uint32, expiry Exptime) (StoreResult, error) {
+func (c *Client) Add(ctx context.Context, key, value []byte, flag uint32, expiry Exptime) error {
 	return c.Store(ctx, StoreAdd, StoreRequest{Key: key, Value: value, Flags: flag, Exp: expiry})
 }
 
 // Replace updates an existing item.
-func (c *Client) Replace(ctx context.Context, key, value []byte, flag uint32, expiry Exptime) (StoreResult, error) {
+func (c *Client) Replace(ctx context.Context, key, value []byte, flag uint32, expiry Exptime) error {
 	return c.Store(ctx, StoreReplace, StoreRequest{Key: key, Value: value, Flags: flag, Exp: expiry})
 }
 
 // Append appends value to an existing item.
-func (c *Client) Append(ctx context.Context, key, value []byte) (StoreResult, error) {
+func (c *Client) Append(ctx context.Context, key, value []byte) error {
 	return c.Store(ctx, StoreAppend, StoreRequest{Key: key, Value: value})
 }
 
 // Prepend prepends value to an existing item.
-func (c *Client) Prepend(ctx context.Context, key, value []byte) (StoreResult, error) {
+func (c *Client) Prepend(ctx context.Context, key, value []byte) error {
 	return c.Store(ctx, StorePrepend, StoreRequest{Key: key, Value: value})
 }
 
 // Cas updates an existing item using check-and-set.
-func (c *Client) Cas(ctx context.Context, key, value []byte, flag uint32, expiry Exptime, cas uint64) (StoreResult, error) {
+func (c *Client) Cas(ctx context.Context, key, value []byte, flag uint32, expiry Exptime, cas uint64) error {
 	return c.Store(ctx, StoreCAS, StoreRequest{Key: key, Value: value, Flags: flag, Exp: expiry, CAS: cas})
 }

@@ -98,6 +98,7 @@ var _ memcachedConn = (*conn)(nil) // tcp socket
 type conn struct {
 	createdAt  time.Time
 	addr       net.Addr
+	network    string
 	returnedAt time.Time
 
 	sync.Mutex // guards following
@@ -124,11 +125,16 @@ func newConnContext(ctx context.Context, addr *Addr, o *clientOptions) (*conn, e
 	}
 	applyTCPNoDelay(rawConn, o.tcpNoDelay)
 
+	network := ""
+	if addr != nil {
+		network = addr.Network
+	}
 	cn := &conn{
 		createdAt:  nowFunc(),
 		returnedAt: nowFunc(),
 		raw:        rawConn,
 		addr:       rawConn.RemoteAddr(),
+		network:    network,
 		rr:         bufio.NewReader(rawConn),
 		wr:         bufio.NewWriterSize(rawConn, connWriteBufferSize),
 	}
@@ -240,9 +246,10 @@ func (c *conn) Close() error {
 
 	c.closed = true
 
-	// send quit command to the server
-	_ = c.raw.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-	_, _ = c.raw.Write(_QuitCRLFBytes)
+	if !isUDPNetwork(c.network) {
+		_ = c.raw.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+		_, _ = c.raw.Write(_QuitCRLFBytes)
+	}
 
 	return c.raw.Close()
 }

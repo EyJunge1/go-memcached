@@ -118,6 +118,13 @@ func parseStats(lines [][]byte) (*Statistic, error) {
 	stat := &Statistic{}
 	for _, line := range lines {
 		line = trimCRLF(line)
+		if bytes.Equal(line, []byte("END")) || bytes.Equal(line, []byte("RESET")) {
+			continue
+		}
+		hit := MapWireLine(line, WireStats)
+		if hit.Class == WireFault {
+			return nil, hit.Err
+		}
 		key, val, ok := cutStatLine(line)
 		if !ok {
 			continue
@@ -403,12 +410,13 @@ func parseStatsMap(lines [][]byte) (map[string]string, error) {
 		if bytes.Equal(trimmed, []byte("END")) || bytes.Equal(trimmed, []byte("RESET")) {
 			continue
 		}
-		if err := forecastCommonFaultLine(line); err != nil {
-			return nil, err
+		hit := MapWireLine(line, WireStats)
+		if hit.Class == WireFault {
+			return nil, hit.Err
 		}
 		key, val, ok := cutStatLine(trimmed)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("%s: %w", trimmed, ErrMalformedResponse)
 		}
 		out[key] = val
 	}

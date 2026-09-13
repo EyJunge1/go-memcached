@@ -5,15 +5,27 @@ import (
 	"fmt"
 )
 
+// MutateOpts selects optional tokens for delete, incr, decr, and touch.
+type MutateOpts struct {
+	Quiet bool
+}
+
 // Delete removes the key.
-func (c *Client) Delete(ctx context.Context, key []byte) error {
+func (c *Client) Delete(ctx context.Context, key []byte, opts MutateOpts) error {
 	key = c.nsBytes(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
 		return err
 	}
 
-	req, resp := buildDeleteCommand(key, false)
+	req, resp := buildDeleteCommand(key, opts.Quiet)
 	defer releaseReqAndResp(req, resp)
+
+	if opts.Quiet {
+		if err := c.dispatchQuiet(ctx, req, resp); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	resp.afterRecv = expectLine(_DeletedCRLFBytes)
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {

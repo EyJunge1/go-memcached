@@ -5,15 +5,24 @@ import (
 	"fmt"
 )
 
-// MetaNoop sends a meta no-op and expects MN.
-func (c *Client) MetaNoop(ctx context.Context) error {
-	req, resp := buildMetaNoopCommand()
+// MetaNoop sends a meta no-op and returns MN.
+func (c *Client) MetaNoop(ctx context.Context, f MetaNoop) (MetaResult, error) {
+	if err := f.validate(); err != nil {
+		return MetaResult{}, err
+	}
+	req, resp := buildMetaNoopCommand(f)
 	defer releaseReqAndResp(req, resp)
 
-	resp.afterRecv = expectLine(_MetaMNCRLFBytes)
-	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return fmt.Errorf("request failed: %w", err)
+	item := &MetaItem{}
+	resp.afterRecv = func(r *response) error {
+		if err := expectLine(_MetaMNCRLFBytes)(r); err != nil {
+			return err
+		}
+		item.Status = MetaStatusMN
+		return nil
 	}
-
-	return nil
+	if err := c.dispatchRequest(ctx, req, resp); err != nil {
+		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
+	}
+	return metaResultFrom(item, MetaStatusMN), nil
 }

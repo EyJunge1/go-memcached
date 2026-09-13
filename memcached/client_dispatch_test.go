@@ -48,7 +48,7 @@ func TestTransportErrorDiscardsConnection(t *testing.T) {
 		}
 	})
 
-	_, err = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	err = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
 	isError(t, err)
 	noError(t, storeOK(client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)))
 	equal(t, int32(2), dials.Load())
@@ -63,7 +63,7 @@ func TestDialContextHonorsDialTimeout(t *testing.T) {
 		}
 	})
 
-	_, err := client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	err := client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
 	isErrorIs(t, err, context.DeadlineExceeded)
 }
 
@@ -78,7 +78,7 @@ func TestRetrySkipsNotFound(t *testing.T) {
 		}
 	})
 
-	_, err := client.Incr(context.Background(), []byte("missing"), 1)
+	_, err := client.Incr(context.Background(), []byte("missing"), 1, MutateOpts{})
 	isErrorIs(t, err, ErrNotFound)
 	equal(t, int32(1), dials.Load())
 }
@@ -116,8 +116,8 @@ func TestFailoverEjectsDeadNode(t *testing.T) {
 		}
 	})
 
-	_, _ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
-	_, _ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
 	isTrue(t, len(client.DeadServers()) > 0 || n.Load() > 0)
 }
 
@@ -135,7 +135,7 @@ func TestSetServersDropsRemovedHealth(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, _ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	_ = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
 	greater(t, len(client.DeadServers()), 0)
 
 	onlyGood, err := ParseServers(good.Addr())
@@ -175,7 +175,7 @@ func TestDispatchHonorsCancelWithoutDeadline(t *testing.T) {
 		cancel()
 	}()
 	start := time.Now()
-	_, err = client.Set(ctx, []byte("k"), []byte("v"), 0, 0)
+	err = client.Set(ctx, []byte("k"), []byte("v"), 0, 0)
 	isError(t, err)
 	isTrue(t, time.Since(start) < 2*time.Second)
 }

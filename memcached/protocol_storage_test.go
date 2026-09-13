@@ -51,6 +51,24 @@ func Test_expiryToken(t *testing.T) {
 	equal(t, int64(60), expiryToken(60))
 }
 
+func Test_recacheToken(t *testing.T) {
+	_, ok := recacheToken(0)
+	isFalse(t, ok)
+	_, ok = recacheToken(-time.Second)
+	isFalse(t, ok)
+	_, ok = recacheToken(31 * 24 * time.Hour)
+	isFalse(t, ok)
+	tok, ok := recacheToken(5 * time.Second)
+	isTrue(t, ok)
+	equal(t, int64(5), tok)
+	tok, ok = recacheToken(500 * time.Millisecond)
+	isTrue(t, ok)
+	equal(t, int64(1), tok)
+	tok, ok = recacheToken(30 * 24 * time.Hour)
+	isTrue(t, ok)
+	equal(t, int64(2592000), tok)
+}
+
 func Test_buildStorageCommand_expiryWire(t *testing.T) {
 	req, resp := buildStorageCommand("set", []byte("k"), []byte("v"), 0, Rel(500*time.Millisecond), false)
 	defer releaseReqAndResp(req, resp)

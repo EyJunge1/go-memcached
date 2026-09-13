@@ -3,6 +3,7 @@ package memcached
 import (
 	"fmt"
 	"strconv"
+	"time"
 )
 
 // MetaStatus is a meta response code (HD, VA, EN, NF, NS, EX, MN, ME).
@@ -19,6 +20,23 @@ const (
 	MetaStatusMN
 	MetaStatusME
 )
+
+func (s MetaStatus) Err() error {
+	switch s {
+	case MetaStatusEN, MetaStatusNF:
+		return ErrNotFound
+	case MetaStatusNS:
+		return ErrNotStored
+	case MetaStatusEX:
+		return ErrExists
+	default:
+		return nil
+	}
+}
+
+func (r MetaResult) Err() error {
+	return r.Status.Err()
+}
 
 func (s MetaStatus) String() string {
 	switch s {
@@ -104,10 +122,18 @@ type MetaGet struct {
 	NoLRUBump bool
 	NewCAS    *uint64
 	Vivify    *Exptime
-	Recache   *Exptime
-	Touch     *Exptime
-	P         string // proxy hint (server ignores)
-	L         string // proxy path (server ignores)
+	// Recache is the remaining-TTL window for R (seconds on the wire).
+	// Zero omits the flag. Values above 30 days are rejected.
+	Recache time.Duration
+	Touch   *Exptime
+	P       string // proxy hint (server ignores)
+	L       string // proxy path (server ignores)
+}
+
+// MetaNoop is the mn flags struct. P/L are proxy hints; the daemon ignores them.
+type MetaNoop struct {
+	P string
+	L string
 }
 
 // MetaSet is the ms flags struct.
@@ -230,8 +256,8 @@ func (f MetaGet) toFlags() *metaGetFlags {
 		out.N = expiryToken(*f.Vivify)
 		out.Nset = true
 	}
-	if f.Recache != nil {
-		out.R = expiryToken(*f.Recache)
+	if tok, ok := recacheToken(f.Recache); ok {
+		out.R = tok
 		out.Rset = true
 	}
 	if f.Touch != nil {
@@ -342,7 +368,23 @@ func (f MetaDebug) toFlags() *metaDebugFlags {
 	return &metaDebugFlags{b: f.BinaryKey, P: f.P, L: f.L}
 }
 
+func (f MetaGet) validate() error {
+	if err := validMetaHints(f.P, f.L); err != nil {
+		return err
+	}
+	if f.Recache == 0 {
+		return nil
+	}
+	if _, ok := recacheToken(f.Recache); !ok {
+		return fmt.Errorf("recache window: %w", ErrInvalidArgument)
+	}
+	return nil
+}
+
 func (f MetaSet) validate() error {
+	if err := validMetaHints(f.P, f.L); err != nil {
+		return err
+	}
 	if f.AutoVivify != nil && f.Mode != MetaSetModeAppend && f.Mode != MetaSetModePrepend {
 		return fmt.Errorf("ms N requires append or prepend: %w", ErrInvalidArgument)
 	}
@@ -350,6 +392,9 @@ func (f MetaSet) validate() error {
 }
 
 func (f MetaDelete) validate() error {
+	if err := validMetaHints(f.P, f.L); err != nil {
+		return err
+	}
 	if f.TTL != nil && !f.Invalidate {
 		return fmt.Errorf("md T requires invalidate: %w", ErrInvalidArgument)
 	}
@@ -357,8 +402,19 @@ func (f MetaDelete) validate() error {
 }
 
 func (f MetaArithmetic) validate() error {
+	if err := validMetaHints(f.P, f.L); err != nil {
+		return err
+	}
 	if f.Initial != nil && f.AutoCreate == nil {
 		return fmt.Errorf("ma J requires auto-create: %w", ErrInvalidArgument)
 	}
 	return nil
+}
+
+func (f MetaDebug) validate() error {
+	return validMetaHints(f.P, f.L)
+}
+
+func (f MetaNoop) validate() error {
+	return validMetaHints(f.P, f.L)
 }

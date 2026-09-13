@@ -37,7 +37,7 @@ func Test_concurrent_dispatchRequest(t *testing.T) {
 	key := "Test_concurrent_dispatchRequest"
 	ctx := context.Background()
 
-	_, err := client.Set(ctx, []byte(key), []byte("Test_concurrent_dispatchRequest"), 0, 0)
+	err := client.Set(ctx, []byte(key), []byte("Test_concurrent_dispatchRequest"), 0, 0)
 	noError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -126,7 +126,7 @@ func Test_concurrent(t *testing.T) {
 		counter := 0
 
 		for counter <= 100 {
-			err := client.Touch(ctx, []byte(key), 3)
+			err := client.Touch(ctx, []byte(key), 3, MutateOpts{})
 			if !errors.Is(err, ErrNotFound) {
 				noError(t, err)
 			}

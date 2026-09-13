@@ -43,10 +43,22 @@ func (f *fakeMemcached) lruCrawler(fields []string, w *bufio.Writer) {
 		if sendOK {
 			_, _ = w.WriteString("OK\r\n")
 		}
+		f.mu.Lock()
+		empty := f.dumpEmpty
+		f.mu.Unlock()
+		if empty {
+			if fields[1] == "metadump" {
+				_, _ = w.WriteString("END\r\n")
+			} else {
+				_, _ = w.WriteString("EN\r\n")
+			}
+			_ = w.Flush()
+			return
+		}
 		if fields[1] == "metadump" {
 			_, _ = w.WriteString("key=foo exp=-1 la=0 cas=1 fetch=no cls=1 size=3\r\nEND\r\n")
 		} else {
-			_, _ = w.WriteString("mg foo\r\nEND\r\n")
+			_, _ = w.WriteString("mg foo\r\nEN\r\n")
 		}
 		_ = w.Flush()
 		return

@@ -97,19 +97,27 @@ func isKeepaliveProtocolError(err error) bool {
 		errors.Is(err, ErrNotStored) ||
 		errors.Is(err, ErrClientError) ||
 		errors.Is(err, ErrNonexistentCommand) ||
+		errors.Is(err, ErrCommandError) ||
 		errors.Is(err, ErrBusy) ||
 		errors.Is(err, ErrBadClass) ||
 		errors.Is(err, ErrNoSpare) ||
 		errors.Is(err, ErrNotFull) ||
 		errors.Is(err, ErrUnsafe) ||
-		errors.Is(err, ErrSame)
+		errors.Is(err, ErrSame) ||
+		errors.Is(err, ErrWatcherTooMany) ||
+		errors.Is(err, ErrWatcherFailed) ||
+		errors.Is(err, ErrMemlimit) ||
+		errors.Is(err, ErrNotStarted)
 }
 
 func wrapRecvError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if isKeepaliveProtocolError(err) {
+	if isKeepaliveProtocolError(err) ||
+		errors.Is(err, ErrServerError) ||
+		errors.Is(err, ErrMalformedResponse) ||
+		errors.Is(err, ErrUnknownIndicator) {
 		return err
 	}
 	return wrapTransport(err)

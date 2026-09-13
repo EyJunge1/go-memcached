@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -19,6 +20,11 @@ type AdminClient struct {
 // AdminBroadcast runs selected ops on every configured node.
 type AdminBroadcast struct {
 	c *Client
+}
+
+// AdminOpts selects optional tokens for verbosity and cache_memlimit.
+type AdminOpts struct {
+	Quiet bool
 }
 
 // Admin returns the admin API. Requires Config.AllowAdmin.
@@ -77,6 +83,17 @@ func (a *AdminClient) do(ctx context.Context, req *request, resp *response) erro
 	return nil
 }
 
+func (a *AdminClient) doQuiet(ctx context.Context, req *request, resp *response) error {
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return err
+	}
+	if err := a.c.sendQuietToAddr(ctx, addr, req, resp); err != nil {
+		return fmt.Errorf("admin: %w", err)
+	}
+	return nil
+}
+
 func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *response)) error {
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
@@ -91,22 +108,56 @@ func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *res
 	})
 }
 
+func (b *AdminBroadcast) doAllQuiet(ctx context.Context, build func() (*request, *response)) error {
+	if b == nil || b.c == nil {
+		return ErrAdminNotEnabled
+	}
+	addrs, _ := b.c.snapshotCluster()
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(addrs))
+	for _, addr := range addrs {
+		wg.Go(func() {
+			req, resp := build()
+			defer releaseReqAndResp(req, resp)
+			errCh <- b.c.sendQuietToAddr(ctx, addr, req, resp)
+		})
+	}
+	wg.Wait()
+	close(errCh)
+	var errs []error
+	for err := range errCh {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("admin: %w", errors.Join(errs...))
+	}
+	return nil
+}
+
 // Verbosity sets the server log level on the bound node.
-func (a *AdminClient) Verbosity(ctx context.Context, level int) error {
+func (a *AdminClient) Verbosity(ctx context.Context, level int, o AdminOpts) error {
 	if level < 0 {
 		return fmt.Errorf("verbosity: %w", ErrInvalidArgument)
 	}
-	req, resp := buildVerbosityCommand(level)
+	req, resp := buildVerbosityCommand(level, o.Quiet)
 	defer releaseReqAndResp(req, resp)
+	if o.Quiet {
+		return a.doQuiet(ctx, req, resp)
+	}
 	return a.do(ctx, req, resp)
 }
 
 // Verbosity sets the log level on every node.
-func (b *AdminBroadcast) Verbosity(ctx context.Context, level int) error {
+func (b *AdminBroadcast) Verbosity(ctx context.Context, level int, o AdminOpts) error {
 	if level < 0 {
 		return fmt.Errorf("verbosity: %w", ErrInvalidArgument)
 	}
-	return b.doAll(ctx, func() (*request, *response) { return buildVerbosityCommand(level) })
+	if o.Quiet {
+		return b.doAllQuiet(ctx, func() (*request, *response) { return buildVerbosityCommand(level, true) })
+	}
+	return b.doAll(ctx, func() (*request, *response) { return buildVerbosityCommand(level, false) })
 }
 
 // Shutdown asks the bound server to stop. Requires On().
@@ -131,15 +182,21 @@ func (a *AdminClient) Shutdown(ctx context.Context, graceful bool) error {
 }
 
 // CacheMemLimit sets the runtime cache limit in megabytes.
-func (a *AdminClient) CacheMemLimit(ctx context.Context, megabytes uint32) error {
-	req, resp := buildCacheMemLimitCommand(megabytes)
+func (a *AdminClient) CacheMemLimit(ctx context.Context, megabytes uint32, o AdminOpts) error {
+	req, resp := buildCacheMemLimitCommand(megabytes, o.Quiet)
 	defer releaseReqAndResp(req, resp)
+	if o.Quiet {
+		return a.doQuiet(ctx, req, resp)
+	}
 	return a.do(ctx, req, resp)
 }
 
 // CacheMemLimit sets the cache limit on every node.
-func (b *AdminBroadcast) CacheMemLimit(ctx context.Context, megabytes uint32) error {
-	return b.doAll(ctx, func() (*request, *response) { return buildCacheMemLimitCommand(megabytes) })
+func (b *AdminBroadcast) CacheMemLimit(ctx context.Context, megabytes uint32, o AdminOpts) error {
+	if o.Quiet {
+		return b.doAllQuiet(ctx, func() (*request, *response) { return buildCacheMemLimitCommand(megabytes, true) })
+	}
+	return b.doAll(ctx, func() (*request, *response) { return buildCacheMemLimitCommand(megabytes, false) })
 }
 
 // Stats returns STAT pairs from the bound node, including reset/sizes.

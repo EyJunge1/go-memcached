@@ -28,9 +28,9 @@ func TestReplaceAppendPrependNotStored(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	noError(t, expectStore(StoreNotStored)(client.Replace(ctx, []byte("missing"), []byte("x"), 0, 0)))
-	noError(t, expectStore(StoreNotStored)(client.Append(ctx, []byte("missing"), []byte("x"))))
-	noError(t, expectStore(StoreNotStored)(client.Prepend(ctx, []byte("missing"), []byte("x"))))
+	noError(t, expectStore(ErrNotStored)(client.Replace(ctx, []byte("missing"), []byte("x"), 0, 0)))
+	noError(t, expectStore(ErrNotStored)(client.Append(ctx, []byte("missing"), []byte("x"))))
+	noError(t, expectStore(ErrNotStored)(client.Prepend(ctx, []byte("missing"), []byte("x"))))
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("mid"), 0, 0)))
 	noError(t, storeOK(client.Append(ctx, []byte("k"), []byte("end"))))
 	noError(t, storeOK(client.Prepend(ctx, []byte("k"), []byte("pre"))))
@@ -46,16 +46,17 @@ func TestIncrNonNumericDecrUnderflowWrap(t *testing.T) {
 	ctx := context.Background()
 
 	noError(t, storeOK(client.Set(ctx, []byte("word"), []byte("abc"), 0, 0)))
-	_, err := client.Incr(ctx, []byte("word"), 1)
+	_, err := client.Incr(ctx, []byte("word"), 1, MutateOpts{})
 	isErrorIs(t, err, ErrClientError)
+	contains(t, err.Error(), "non-numeric")
 
 	noError(t, storeOK(client.Set(ctx, []byte("n"), []byte("2"), 0, 0)))
-	got, err := client.Decr(ctx, []byte("n"), 5)
+	got, err := client.Decr(ctx, []byte("n"), 5, MutateOpts{})
 	noError(t, err)
 	equal(t, uint64(0), got)
 
 	noError(t, storeOK(client.Set(ctx, []byte("w"), []byte("18446744073709551615"), 0, 0)))
-	got, err = client.Incr(ctx, []byte("w"), 1)
+	got, err = client.Incr(ctx, []byte("w"), 1, MutateOpts{})
 	noError(t, err)
 	equal(t, uint64(0), got)
 }
@@ -158,7 +159,7 @@ func TestStoreQuietDiscardsConn(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	_, err := client.Store(ctx, StoreSet, StoreRequest{Key: []byte("k"), Value: []byte("v"), Quiet: true})
+	err := client.Store(ctx, StoreSet, StoreRequest{Key: []byte("k"), Value: []byte("v"), Quiet: true})
 	noError(t, err)
 	noError(t, storeOK(client.Set(ctx, []byte("k2"), []byte("v2"), 0, 0)))
 	if dials.Load() < 2 {
@@ -255,7 +256,7 @@ func TestIncrAcceptsSpacePaddedReplyKeepsConn(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	got, err := client.Incr(context.Background(), []byte("n"), 1)
+	got, err := client.Incr(context.Background(), []byte("n"), 1, MutateOpts{})
 	noError(t, err)
 	equal(t, uint64(12), got)
 	ver, err := client.Version(context.Background())
@@ -320,7 +321,7 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	_, err = client.Store(ctx, StoreSet, StoreRequest{Key: []byte("k"), Value: []byte("v"), Quiet: true})
+	err = client.Store(ctx, StoreSet, StoreRequest{Key: []byte("k"), Value: []byte("v"), Quiet: true})
 	noError(t, err)
 	_, err = client.GetOne(ctx, []byte("missing"))
 	isErrorIs(t, err, ErrNotFound)

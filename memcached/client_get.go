@@ -106,7 +106,7 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 
 	addrs, picker := c.snapshotCluster()
 	if picker == nil || len(addrs) == 0 {
-		return nil, errors.New("no servers configured")
+		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = c.liveAddrs(addrs)
 

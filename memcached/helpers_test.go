@@ -53,23 +53,14 @@ func noError(t *testing.T, err error) {
 	}
 }
 
-func storeOK(res StoreResult, err error) error {
-	if err != nil {
-		return err
-	}
-	if res != StoreStored {
-		return fmt.Errorf("want StoreStored, got %v", res)
-	}
-	return nil
+func storeOK(err error) error {
+	return err
 }
 
-func expectStore(want StoreResult) func(StoreResult, error) error {
-	return func(res StoreResult, err error) error {
-		if err != nil {
-			return err
-		}
-		if res != want {
-			return fmt.Errorf("want %v, got %v", want, res)
+func expectStore(want error) func(error) error {
+	return func(err error) error {
+		if !errors.Is(err, want) {
+			return fmt.Errorf("got %v, want errors.Is(..., %v)", err, want)
 		}
 		return nil
 	}

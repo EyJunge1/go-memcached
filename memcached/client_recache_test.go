@@ -22,12 +22,12 @@ func TestGetEarlyRecacheWonThenBusy(t *testing.T) {
 	ctx := context.Background()
 	noError(t, storeOK(client.Set(ctx, []byte("k"), []byte("v"), 0, 0)))
 
-	res, won, err := client.GetEarlyRecache(ctx, []byte("k"), Rel(5*time.Second))
+	res, won, err := client.GetEarlyRecache(ctx, []byte("k"), 5*time.Second)
 	noError(t, err)
 	isTrue(t, won)
 	equal(t, []byte("v"), res.Item.Value)
 
-	res, won, err = client.GetEarlyRecache(ctx, []byte("k"), Rel(5*time.Second))
+	res, won, err = client.GetEarlyRecache(ctx, []byte("k"), 5*time.Second)
 	noError(t, err)
 	isFalse(t, won)
 	isTrue(t, res.Item.RecacheBusy)

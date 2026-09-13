@@ -123,10 +123,10 @@ func main() {
 	}
 	println("Version: ", version)
 
-	if _, err = client.Set(ctx, []byte("key"), []byte("value"), 0, memcached.ExptimeNever); err != nil {
+	if err = client.Set(ctx, []byte("key"), []byte("value"), 0, memcached.ExptimeNever); err != nil {
 		panic(err)
 	}
-	if _, err = client.Set(ctx, []byte("key2"), []byte("value2"), 0, memcached.ExptimeNever); err != nil {
+	if err = client.Set(ctx, []byte("key2"), []byte("value2"), 0, memcached.ExptimeNever); err != nil {
 		panic(err)
 	}
 
@@ -147,11 +147,11 @@ The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode 
 
 Keys are `[]byte` (1–250 bytes, no whitespace or control characters). Meta commands with a binary-key flag skip the whitespace check; the Base64 form on the wire must still be ≤250 bytes. After a get, `Item.Key` is the **wire key**, including a configured namespace prefix.
 
-Expiration is `Exptime`: `0` never expires; 1..2592000 are relative seconds; larger values are Unix timestamps. Use `Rel(d)` or `UnixExp(t)`.
+Expiration is `Exptime`: `0` never expires; negative values expire immediately; 1..2592000 are relative seconds; larger values are Unix timestamps. Use `Rel(d)` or `UnixExp(t)`. `flush_all` delay `0` means immediately (the delay token is omitted). Recache window `R` is remaining TTL seconds (`time.Duration`), not an item `Exptime`.
 
 `GetOne` maps a miss to `ErrNotFound`. Multi-`Get` and `GetMulti` omit missing keys and never return `ErrNotFound` for an empty result.
 
-`Get` and `GetMulti` split keys across cluster nodes and fetch in parallel. `GetOpts.CAS` selects `gets`/`gats`; `GetOpts.Touch` selects `gat`/`gats`. `Store` returns `StoreResult` for STORED/NOT_STORED/EXISTS/NOT_FOUND; transport and CLIENT/SERVER_ERROR stay `error`. `Pipeline()` writes every text frame, then reads every reply (no text `noreply`). Quiet mutations stay on `MetaPipeline`. Recache helpers: `GetOrVivify`, `GetEarlyRecache`, `Invalidate`. Meta structs accept proxy hints `P`/`L`. `Ping` checks every node. `SetServers` replaces the node list when `AllowSetServers` is set.
+`Get` and `GetMulti` split keys across cluster nodes and fetch in parallel. `GetOpts.CAS` selects `gets`/`gats`; `GetOpts.Touch` selects `gat`/`gats`. `Store`/`Add`/`Cas` return `ErrNotStored` / `ErrExists` / `ErrNotFound` via `errors.Is`. Text `noreply` (`StoreRequest.Quiet`, `MutateOpts.Quiet`, `FlushOpts.Quiet`, `AdminOpts.Quiet`) means send-ok only; the connection is discarded and wire errors are not observed. `Pipeline()` writes every text frame, then reads every reply (no text `noreply`). Quiet meta stays on `MetaPipeline` (`q` plus `mn`). Recache helpers: `GetOrVivify`, `GetEarlyRecache`, `Invalidate`. Meta structs accept proxy hints `P`/`L` (`mn` included). `Ping` checks every node. `SetServers` replaces the node list when `AllowSetServers` is set.
 
 ### Support Commands
 
@@ -160,22 +160,22 @@ arbitrary raw command passthrough.
 
 | Command         | Status | API Usage | Description |
 |-----------------|--------|-----------|-------------|
-| Set             | ✅ | `Set` / `Store(StoreSet, …)` | `StoreResult`; Quiet only via `StoreRequest.Quiet` |
-| Add / Replace / Cas | ✅ | typed + `Store` | Flags and `Exptime`; outcomes as `StoreResult` |
+| Set             | ✅ | `Set` / `Store(StoreSet, …)` | `error`; Quiet only via `StoreRequest.Quiet` |
+| Add / Replace / Cas | ✅ | typed + `Store` | Flags and `Exptime`; `ErrNotStored` / `ErrExists` / `ErrNotFound` |
 | Append / Prepend | ✅ | `Append(ctx, key, value)` | No dummy flags/expiry |
 | Get             | ✅ | `Get(ctx, GetOpts, keys...)` | Multi-key; miss omitted |
 | GetOne          | ✅ | `GetOne(ctx, key)` | Single key; miss → `ErrNotFound` |
 | GetMulti        | ✅ | `GetMulti(ctx, keys)` | Map with CAS; missing keys omitted |
-| Delete / Incr / Decr / Touch | ✅ | typed methods | Incr/Decr return the new uint64 |
-| Pipeline        | ✅ | `Pipeline().Set/Delete; Flush` | Write-then-read; TTL via `Item.Exp`; no text `noreply` |
+| Delete / Incr / Decr / Touch | ✅ | typed + `MutateOpts` | `Quiet` sends `noreply`; Incr/Decr Quiet return `(0, nil)` |
+| Pipeline        | ✅ | `Pipeline().Set/Delete; Flush` | Write-then-read; TTL via `Item.Exp`; append/prepend force `0 0`; no text `noreply` |
 | Stats           | ✅ | `Stats(ctx, args...)` | Free tokens; `reset`/`sizes` only Admin |
 | StatsAll / VersionAll | ✅ | cluster maps | Every node; partial errors joined |
-| Meta*           | ✅ | `MetaGet`/`MetaSet`/… structs | `MetaResult` + `k`/`b`/`P`/`L`; `q` still reads errors |
-| Recache         | ✅ | `GetOrVivify` / `GetEarlyRecache` / `Invalidate` | `mg N` / `mg R` / `md I T` |
+| Meta*           | ✅ | `MetaGet`/`MetaSet`/… structs | `MetaResult.Status` (HD/VA/EN/NF/NS/EX/MN); `me` via `MetaItemDebug.Status`; `P`/`L` including `mn` |
+| Recache         | ✅ | `GetOrVivify` / `GetEarlyRecache` / `Invalidate` | `mg N` / `mg R` (Duration ≤30d) / `md I T` |
 | MetaPipeline    | ✅ | mixed ops + auto-`O` + `mn` | Parallel per node; miss is empty slot |
 | Version / Ping  | ✅ | | `Version` one node; `Ping` all |
-| FlushAll        | ✅ | `Admin().FlushAll(FlushOpts)` | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger` as `Exptime`; no `noreply` |
-| Auth            | ✅ | `Config.Auth` | Token auth `-Y` on every new dial |
+| FlushAll        | ✅ | `Admin().FlushAll(FlushOpts)` | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger` as `time.Duration`; `Quiet` sends `noreply` |
+| Auth            | ✅ | `Config.Auth` | Token auth `-Y` on every new dial; leftover probe uses `__mc_auth` / `exptime=0` |
 | SetServers      | ✅ | requires `AllowSetServers` | Trust-anchor |
 | Admin()         | opt-in | `On(addr)` / `All()` | Shutdown only with `On` |
 

@@ -51,3 +51,17 @@ func UnixExp(t time.Time) (Exptime, error) {
 func expiryToken(e Exptime) int64 {
 	return int64(e)
 }
+
+// recacheToken encodes a remaining-TTL window as relative seconds.
+// Zero omits the flag (ok=false). Negative values and windows above 30 days
+// are invalid (ok=false). Sub-second windows encode as 1.
+func recacheToken(d time.Duration) (int64, bool) {
+	if d <= 0 || d > maxRelativeExpiry {
+		return 0, false
+	}
+	secs := int64(d / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs, true
+}

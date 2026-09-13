@@ -15,6 +15,9 @@ func stripTrailingMN(raw []byte) []byte {
 
 // MetaGet fetches a key with meta flags.
 func (c *Client) MetaGet(ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
+	if err := f.validate(); err != nil {
+		return MetaResult{}, err
+	}
 	mgFlags := f.toFlags()
 	key = c.nsBytes(key)
 	if err := c.checkKeyValueFlags(key, nil, mgFlags.b); err != nil {
@@ -31,7 +34,7 @@ func (c *Client) MetaGet(ctx context.Context, key []byte, f MetaGet) (MetaResult
 
 	item := &MetaItem{Key: key}
 	resp.afterRecv = func(r *response) error {
-		return parseMetaItem(r.rawLines, item, mgFlags.q, mgFlags.v)
+		return parseMetaItem(r.rawLines, item, mgFlags.q, true)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
@@ -90,6 +93,9 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		f, ok := flagsAny.(MetaGet)
 		if !ok {
 			return preparedMetaOp{}, fmt.Errorf("meta get flags: %w", ErrInvalidArgument)
+		}
+		if err := f.validate(); err != nil {
+			return preparedMetaOp{}, err
 		}
 		mg := f.toFlags()
 		if !mg.Cset {
@@ -270,7 +276,7 @@ func (c *Client) MetaPipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 
 	addrs, picker := c.snapshotCluster()
 	if picker == nil || len(addrs) == 0 {
-		return nil, errors.New("no servers configured")
+		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = c.liveAddrs(addrs)
 
@@ -361,6 +367,19 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []p
 			}
 		}
 		out[idx] = metaResultFrom(item, item.Status)
+	}
+	for _, p := range group {
+		if out[p.idx].Status != MetaStatusUnknown {
+			continue
+		}
+		switch {
+		case p.noop:
+			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key, Status: MetaStatusMN}}
+		case string(p.cmd) == "mg":
+			out[p.idx] = MetaResult{Status: MetaStatusEN, Item: MetaItem{Key: p.key, Status: MetaStatusEN}}
+		default:
+			out[p.idx] = MetaResult{Status: MetaStatusHD, Item: MetaItem{Key: p.key, Status: MetaStatusHD}}
+		}
 	}
 	return nil
 }

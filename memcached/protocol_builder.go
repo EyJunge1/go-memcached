@@ -3,6 +3,7 @@ package memcached
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -39,38 +40,12 @@ var (
 // NOT_FOUND\r\n
 // EXISTS\r\n
 // NOT_STORED\r\n
-// EN <flags>*\r\n or EN\r\n
-// EX <flags>*\r\n or EX\r\n
-// NS <flags>*\r\n or NS\r\n
-// NF <flags>*\r\n or NF\r\n
 func forecastCommonFaultLine(line []byte) error {
-	if err := prefixedProtocolError(line, "CLIENT_ERROR", ErrClientError); err != nil {
-		return err
+	hit := MapWireLine(line, WireApp)
+	if hit.Class != WireFault || errors.Is(hit.Err, ErrMalformedResponse) {
+		return nil
 	}
-	if err := prefixedProtocolError(line, "SERVER_ERROR", ErrServerError); err != nil {
-		return err
-	}
-	switch {
-	case bytes.Equal(trimCRLF(line), []byte("ERROR")):
-		return ErrNonexistentCommand
-	case bytes.Equal(trimCRLF(line), []byte("NOT_FOUND")):
-		return ErrNotFound
-	case bytes.Equal(trimCRLF(line), []byte("EXISTS")):
-		return ErrExists
-	case bytes.Equal(trimCRLF(line), []byte("NOT_STORED")):
-		return ErrNotStored
-	// meta status codes: exact token or token plus flags, never prefixes of END.
-	case metaStatusCode(line, "NF"):
-		return ErrNotFound
-	case metaStatusCode(line, "NS"):
-		return ErrNotStored
-	case metaStatusCode(line, "EX"):
-		return ErrExists
-	case metaStatusCode(line, "EN"):
-		return ErrNotFound
-	}
-
-	return nil
+	return hit.Err
 }
 
 func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
@@ -80,18 +55,11 @@ func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
 		return nil
 	}
 	rest := trimmed[len(p):]
-	if len(rest) > 0 && rest[0] != ' ' {
+	if len(rest) > 0 && rest[0] != ' ' && rest[0] != ':' {
 		return nil
 	}
-	return fmt.Errorf("%s: %w", bytes.TrimSpace(rest), sentinel)
-}
-
-func metaStatusCode(line []byte, code string) bool {
-	trimmed := trimCRLF(line)
-	if bytes.Equal(trimmed, []byte(code)) {
-		return true
-	}
-	return bytes.HasPrefix(trimmed, []byte(code+" "))
+	msg := bytes.TrimSpace(bytes.TrimLeft(rest, " :"))
+	return fmt.Errorf("%s: %w", msg, sentinel)
 }
 
 const (

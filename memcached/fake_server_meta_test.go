@@ -60,19 +60,15 @@ func (f *fakeMemcached) metaSet(fields []string, r *bufio.Reader, w *bufio.Write
 	case 'E':
 		if ok {
 			f.mu.Unlock()
-			if !quiet {
-				_, _ = w.WriteString("NS\r\n")
-				_ = w.Flush()
-			}
+			_, _ = w.WriteString("NS\r\n")
+			_ = w.Flush()
 			return true
 		}
 	case 'R':
 		if !ok {
 			f.mu.Unlock()
-			if !quiet {
-				_, _ = w.WriteString("NS\r\n")
-				_ = w.Flush()
-			}
+			_, _ = w.WriteString("NS\r\n")
+			_ = w.Flush()
 			return true
 		}
 	}
@@ -229,10 +225,8 @@ func (f *fakeMemcached) metaDelete(fields []string, w *bufio.Writer) {
 	item, ok := f.items[key]
 	if !ok {
 		f.mu.Unlock()
-		if !quiet {
-			_, _ = w.WriteString("NF\r\n")
-			_ = w.Flush()
-		}
+		_, _ = w.WriteString("NF\r\n")
+		_ = w.Flush()
 		return
 	}
 	if invalidate {
@@ -247,6 +241,78 @@ func (f *fakeMemcached) metaDelete(fields []string, w *bufio.Writer) {
 		_, _ = w.WriteString("HD\r\n")
 		_ = w.Flush()
 	}
+}
+
+func (f *fakeMemcached) metaArith(fields []string, w *bufio.Writer) {
+	if len(fields) < 2 {
+		_, _ = w.WriteString("CLIENT_ERROR bad command line\r\n")
+		_ = w.Flush()
+		return
+	}
+	quiet, wantValue, _, cas, casSet, mode, _ := parseFakeMetaFlags(fields[2:])
+	delta := uint64(1)
+	initial := uint64(0)
+	autoCreate := false
+	for _, tok := range fields[2:] {
+		switch {
+		case len(tok) > 1 && tok[0] == 'D':
+			delta, _ = strconv.ParseUint(tok[1:], 10, 64)
+		case len(tok) > 1 && tok[0] == 'J':
+			initial, _ = strconv.ParseUint(tok[1:], 10, 64)
+		case len(tok) > 0 && tok[0] == 'N':
+			autoCreate = true
+		}
+	}
+	key := fields[1]
+	f.mu.Lock()
+	item, ok := f.items[key]
+	if casSet && ok && item.cas != cas {
+		f.mu.Unlock()
+		_, _ = w.WriteString("EX\r\n")
+		_ = w.Flush()
+		return
+	}
+	if !ok {
+		if !autoCreate {
+			f.mu.Unlock()
+			_, _ = w.WriteString("NF\r\n")
+			_ = w.Flush()
+			return
+		}
+		f.cas++
+		item = &fakeItem{value: []byte(strconv.FormatUint(initial, 10)), cas: f.cas}
+		f.items[key] = item
+	}
+	cur, err := strconv.ParseUint(string(item.value), 10, 64)
+	if err != nil {
+		f.mu.Unlock()
+		_, _ = w.WriteString("CLIENT_ERROR cannot increment or decrement non-numeric value\r\n")
+		_ = w.Flush()
+		return
+	}
+	decr := mode == 'D' || mode == '-'
+	if decr {
+		if delta > cur {
+			cur = 0
+		} else {
+			cur -= delta
+		}
+	} else {
+		cur += delta
+	}
+	item.value = []byte(strconv.FormatUint(cur, 10))
+	f.cas++
+	item.cas = f.cas
+	f.mu.Unlock()
+	if quiet {
+		return
+	}
+	if wantValue {
+		_, _ = fmt.Fprintf(w, "VA %d\r\n%s\r\n", len(item.value), item.value)
+	} else {
+		_, _ = w.WriteString("HD\r\n")
+	}
+	_ = w.Flush()
 }
 
 func (f *fakeMemcached) metaDebug(fields []string, w *bufio.Writer) {
