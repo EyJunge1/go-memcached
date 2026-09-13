@@ -9,7 +9,7 @@ import (
 // GetOpts selects get vs gets vs gat vs gats.
 type GetOpts struct {
 	CAS   bool     // gets / gats
-	Touch *Exptime // gat / gats
+	Touch *Exptime // gat / gats; TCP-only (UDP returns ErrNotSupported)
 }
 
 // Get fetches keys. Missing keys are omitted. An empty result is not ErrNotFound.

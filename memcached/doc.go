@@ -21,7 +21,10 @@
 // on different nodes.
 //
 // The default transport is plaintext TCP. Transport.RequireTLS fails New
-// without TLS; it does not change that default. Token auth (-Y) is configured
-// on Config.Auth at dial time; it is not SASL. Binary, TAP, VBucket, and
-// range ops are out of scope.
+// without TLS; it does not change that default. UDP is udp:// / udp4 / udp6
+// only (8-byte framing, one request datagram). It cannot mix with TCP, Unix,
+// TLS, or Auth, and it cannot mutate: Get/GetOne/GetMulti/gets, Version/Ping,
+// MetaGet without N/R/T/E, MetaNoop, MetaDebug. GetOpts.Touch and Stats are
+// TCP-only. Token auth (-Y) is configured on Config.Auth at dial time; it is
+// not SASL. Binary, TAP, VBucket, and range ops are out of scope.
 package memcached

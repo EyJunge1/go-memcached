@@ -61,8 +61,9 @@ func expiryToken(e Exptime) int64 {
 }
 
 // recacheToken encodes a remaining-TTL window as relative seconds.
-// This is not an item Exptime: there is no 30-day cap. Zero and negative
-// omit the flag (ok=false). Sub-second windows encode as 1.
+// This is not an item Exptime and must not go through Rel: a window above
+// 30 days stays relative seconds (mg R compares remaining TTL). Zero and
+// negative omit the flag (ok=false). Sub-second windows encode as 1.
 func recacheToken(d time.Duration) (int64, bool) {
 	if d <= 0 {
 		return 0, false

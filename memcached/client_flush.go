@@ -11,9 +11,10 @@ import (
 // FlushOpts controls flush_all delay, cluster stagger, and noreply.
 // Exp, when non-zero, is sent as the delay token (including ExptimeImmediate).
 // Delay is used only when Exp is 0 and maps through Rel; 0 omits the token (immediate).
+// Delay < 0 is invalid (not ExptimeImmediate); immediate flush is Delay 0 or Exp: ExptimeImmediate.
 // Exp cannot be combined with Delay or Stagger.
 type FlushOpts struct {
-	Delay   time.Duration // used when Exp == 0; 0 omits the delay token
+	Delay   time.Duration // used when Exp == 0; 0 omits the delay token; negative is ErrInvalidArgument
 	Exp     Exptime       // when != 0, sent as the flush_all delay token
 	Stagger time.Duration
 	Quiet   bool
