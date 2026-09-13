@@ -32,7 +32,7 @@ func (c *Client) MetaArithmetic(ctx context.Context, key []byte, delta uint64, f
 		return parseMetaItem(r.rawLines, item, maFlags.q, false)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
+		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
 	}
 	return metaResultFrom(item, item.Status), nil
 }

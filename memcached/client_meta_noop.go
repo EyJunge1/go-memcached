@@ -22,7 +22,7 @@ func (c *Client) MetaNoop(ctx context.Context, f MetaNoop) (MetaResult, error) {
 		return nil
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
+		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
 	}
 	return metaResultFrom(item, MetaStatusMN), nil
 }

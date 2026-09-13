@@ -2,7 +2,7 @@
 //
 // Application commands:
 //   - set/add/replace/append/prepend/cas (NOT_STORED/EXISTS/NOT_FOUND via errors.Is; Pipeline for write-then-read)
-//   - StoreRequest.Quiet / MutateOpts.Quiet (Delete/Touch) / IncrQuiet / DecrQuiet / FlushOpts.Quiet / AdminOpts.Quiet send noreply (send-ok only; conn discarded)
+//   - StoreRequest.Quiet / MutateOpts.Quiet (Delete/Touch) / IncrQuiet / DecrQuiet / FlushOpts.Quiet send noreply (conn discarded; CLIENT_ERROR still returned). AdminOpts.Quiet is send-ok only.
 //   - get / gets / gat / gats via Get + GetOpts; GetOne for a single-key miss
 //   - ms/mg/md/mn/ma/me, including proxy hints P/L and recache helpers
 //   - MetaNoop returns MetaResult (MN); MetaDebug sets Status (ME/EN) and decodes b keys

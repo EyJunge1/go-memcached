@@ -106,7 +106,7 @@ func (c *Client) flushAllOnAddr(ctx context.Context, addr *Addr, delay Exptime, 
 	req, resp := buildFlushAllCommand(delay, quiet)
 	defer releaseReqAndResp(req, resp)
 	if quiet {
-		return c.sendQuietToAddr(ctx, addr, req, resp)
+		return c.sendQuietToAddr(ctx, addr, req, resp, true)
 	}
 
 	cn, err := c.getConn(ctx, addr)

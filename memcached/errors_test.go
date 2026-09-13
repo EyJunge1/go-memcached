@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -37,6 +38,10 @@ func TestWrapRecvErrorKeepsProtocolSentinels(t *testing.T) {
 	isErrorIs(t, cmd, ErrCommandError)
 	isFalse(t, isTransportError(cmd))
 	isFalse(t, shouldDiscardConn(cmd))
+
+	arg := wrapRecvError(fmt.Errorf("recv failed: %w", ErrInvalidArgument))
+	isErrorIs(t, arg, ErrInvalidArgument)
+	isFalse(t, isTransportError(arg))
 }
 
 type ioTimeoutError struct{}
@@ -46,6 +51,24 @@ func (ioTimeoutError) Error() string { return "i/o timeout" }
 func TestTransportSentinel(t *testing.T) {
 	err := wrapTransport(fmt.Errorf("dial failed: %w", ioTimeoutError{}))
 	isErrorIs(t, err, ErrTransport)
+}
+
+func TestWrapTransportSkipsProtocolSentinels(t *testing.T) {
+	err := wrapTransport(fmt.Errorf("alloc connection failed: %w", ErrClientError))
+	isErrorIs(t, err, ErrClientError)
+	isFalse(t, isTransportError(err))
+
+	arg := wrapTransport(fmt.Errorf("alloc connection failed: %w", ErrInvalidArgument))
+	isErrorIs(t, arg, ErrInvalidArgument)
+	isFalse(t, isTransportError(arg))
+
+	canceled := wrapTransport(fmt.Errorf("alloc connection failed: %w", context.Canceled))
+	isErrorIs(t, canceled, context.Canceled)
+	isFalse(t, isTransportError(canceled))
+
+	deadline := wrapTransport(fmt.Errorf("alloc connection failed: %w", context.DeadlineExceeded))
+	isErrorIs(t, deadline, context.DeadlineExceeded)
+	isFalse(t, isTransportError(deadline))
 }
 
 func TestErrorsJoinPreservesJoinedSentinels(t *testing.T) {

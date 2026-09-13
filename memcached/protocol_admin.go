@@ -129,14 +129,6 @@ func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 	return req, buildLimitedLineResponse(1)
 }
 
-func mapAdminKeyword(tok string) error {
-	hit, ok := mapAdminKeywordHit(tok)
-	if ok {
-		return hit.Err
-	}
-	return nil
-}
-
 func adminStreamLineError(s string) error {
 	if s == "" {
 		return nil

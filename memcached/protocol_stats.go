@@ -447,7 +447,9 @@ func parseStatsMap(lines [][]byte) (map[string]string, error) {
 	out := make(map[string]string, len(lines))
 	for _, line := range lines {
 		trimmed := trimCRLF(line)
-		if bytes.Equal(trimmed, []byte("END")) || bytes.Equal(trimmed, []byte("RESET")) {
+		if bytes.Equal(trimmed, []byte("END")) || bytes.Equal(trimmed, []byte("RESET")) ||
+			bytes.Equal(trimmed, []byte("OK")) || bytes.Equal(trimmed, []byte("PREFIX")) ||
+			bytes.HasPrefix(trimmed, []byte("PREFIX ")) {
 			continue
 		}
 		hit := MapWireLine(line, WireStats)

@@ -37,7 +37,7 @@ func (c *Client) MetaSet(ctx context.Context, key, value []byte, f MetaSet) (Met
 		return parseMetaItem(r.rawLines, item, msFlags.q, false)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
+		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
 	}
 	return metaResultFrom(item, item.Status), nil
 }

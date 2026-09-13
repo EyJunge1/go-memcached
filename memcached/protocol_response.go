@@ -339,7 +339,7 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 
-		if bytes.Equal(line, resp.specEndLine) {
+		if bytes.Equal(trimCRLF(line), trimCRLF(resp.specEndLine)) {
 			resp.rawLines = append(resp.rawLines, line)
 			break
 		}

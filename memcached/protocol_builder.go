@@ -261,6 +261,10 @@ func trimCRLF(line []byte) []byte {
 	return line
 }
 
+func isMetaNoopLine(line []byte) bool {
+	return bytes.Equal(trimCRLF(line), []byte("MN"))
+}
+
 func base64Encode(src []byte) []byte {
 	dst := make([]byte, base64.StdEncoding.EncodedLen(len(src)))
 	base64.StdEncoding.Encode(dst, src)

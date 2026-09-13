@@ -26,7 +26,12 @@ func TestMapWireLineGlobalAndAdmin(t *testing.T) {
 		{"NOSPARE source class has no spare pages\r\n", WireAdmin, ErrNoSpare, false, false},
 		{"WATCHER_TOO_MANY log watcher limit reached\r\n", WireAdmin, ErrWatcherTooMany, false, false},
 		{"WATCHER_FAILED failed to add log watcher\r\n", WireAdmin, ErrWatcherFailed, false, false},
-		{"MEMLIMIT_TOO_SMALL cannot set maxbytes to less than 8m\r\n", WireAdmin, ErrMemlimit, false, false},
+		{"MEMLIMIT_TOO_SMALL cannot set maxbytes to less than 8m\r\n", WireAdmin, ErrMemlimitTooSmall, false, false},
+		{"MEMLIMIT_ADJUST_FAILED out of bounds\r\n", WireAdmin, ErrMemlimitAdjustFailed, false, false},
+		{"PREFIX name get 1 hit 0 set 0 del 0\r\n", WireStats, nil, false, false},
+		{"OK\r\n", WireStats, nil, false, false},
+		{"END\r\n", WireMeta, ErrMalformedResponse, true, false},
+		{"ENTRY\r\n", WireMeta, ErrMalformedResponse, true, false},
 		{"NOTSTARTED no items to crawl\r\n", WireAdmin, ErrNotStarted, false, false},
 		{"ERROR bad args\r\n", WireStats, ErrCommandError, false, false},
 		{"ERROR bad args\r\n", WireMeta, ErrCommandError, false, false},
@@ -65,7 +70,9 @@ func TestMapWireLineMetaStatus(t *testing.T) {
 	equal(t, MetaStatusEX, MapWireLine([]byte("EX\r\n"), WireMeta).Status)
 	equal(t, MetaStatusHD, MapWireLine([]byte("HD\r\n"), WireMeta).Status)
 	isErrorIs(t, MapWireLine([]byte("EN\r\n"), WireMeta).Err, ErrNotFound)
-	equal(t, error(nil), MapWireLine([]byte("END\r\n"), WireMeta).Err)
+	isErrorIs(t, MapWireLine([]byte("END\r\n"), WireMeta).Err, ErrMalformedResponse)
+	isErrorIs(t, MapWireLine([]byte("ENTRY\r\n"), WireMeta).Err, ErrMalformedResponse)
+	isTrue(t, MapWireLine([]byte("END\r\n"), WireMeta).Discard)
 }
 
 func TestForecastKeepsUnknownAppLines(t *testing.T) {

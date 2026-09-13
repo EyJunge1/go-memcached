@@ -258,7 +258,15 @@ func TestAuthRejectsWrongPassword(t *testing.T) {
 	})
 	err := client.Ping(context.Background())
 	isErrorIs(t, err, ErrClientError)
+	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "authentication failure")
+
+	_, err = client.GetOne(context.Background(), []byte("k"))
+	isErrorIs(t, err, ErrClientError)
+	isFalse(t, errors.Is(err, ErrTransport))
+	err = client.Set(context.Background(), []byte("k"), []byte("v"), 0, 0)
+	isErrorIs(t, err, ErrClientError)
+	isFalse(t, errors.Is(err, ErrTransport))
 }
 
 func TestConnCloseSkipsQuitOnUDP(t *testing.T) {
@@ -300,15 +308,13 @@ func TestConnCloseTCPWritesQuit(t *testing.T) {
 	equal(t, []byte("quit\r\n"), buf[:n])
 }
 
-func TestMetaArithmeticQuietReturnValueIsSuccess(t *testing.T) {
+func TestMetaArithmeticQuietReturnValueIsRejected(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, storeOK(client.Set(ctx, []byte("n"), []byte("10"), 0, 0)))
-	res, err := client.MetaArithmetic(ctx, []byte("n"), 1, MetaArithmetic{Quiet: true, ReturnValue: true})
-	noError(t, err)
-	equal(t, MetaStatusHD, res.Status)
-	isNil(t, res.Err())
+	_, err := client.MetaArithmetic(ctx, []byte("n"), 1, MetaArithmetic{Quiet: true, ReturnValue: true})
+	isErrorIs(t, err, ErrInvalidArgument)
 }
 
 func TestCommandErrorFromGet(t *testing.T) {

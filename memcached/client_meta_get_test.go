@@ -88,8 +88,9 @@ func TestMetaQuietClientErrorThenMN(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, err := client.MetaGet(context.Background(), []byte("cerr"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
+	res, err := client.MetaGet(context.Background(), []byte("cerr"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
 	isErrorIs(t, err, ErrClientError)
+	isErrorIs(t, res.Err(), ErrClientError)
 	_, err = client.Version(context.Background())
 	noError(t, err)
 	equal(t, int32(1), dials.Load())

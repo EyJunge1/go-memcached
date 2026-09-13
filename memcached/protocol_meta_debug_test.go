@@ -17,6 +17,9 @@ func Test_parseMetaItemDebug(t *testing.T) {
 	miss := &MetaItemDebug{}
 	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("EN\r\n")}, miss, false), ErrNotFound)
 	equal(t, MetaStatusEN, miss.Status)
+	nf := &MetaItemDebug{}
+	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("NF\r\n")}, nf, false), ErrNotFound)
+	equal(t, MetaStatusNF, nf.Status)
 	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("ERROR bad args\r\n")}, &MetaItemDebug{}, false), ErrCommandError)
 	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("CLIENT_ERROR bad me\r\n")}, &MetaItemDebug{}, false), ErrClientError)
 	isErrorIs(t, parseMetaItemDebug([][]byte{[]byte("XX\r\n")}, &MetaItemDebug{}, false), ErrMalformedResponse)

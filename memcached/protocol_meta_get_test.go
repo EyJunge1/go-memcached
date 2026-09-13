@@ -346,6 +346,24 @@ func Test_parseMetaPipeline_flagError(t *testing.T) {
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 
+func Test_parseMetaPipeline_chargeKeepsSibling(t *testing.T) {
+	items, err := parseMetaPipeline([][]byte{
+		[]byte("HD O0\r\n"),
+		[]byte("CLIENT_ERROR bad meta\r\n"),
+		_MetaMNCRLFBytes,
+	})
+	isErrorIs(t, err, ErrClientError)
+	hasLen(t, items, 1)
+	equal(t, MetaStatusHD, items[0].Status)
+	equal(t, "0", items[0].OpaqueToken)
+}
+
+func Test_parseMetaItem_quietOnlyMN_LF(t *testing.T) {
+	item := &MetaItem{}
+	noError(t, parseMetaItem([][]byte{[]byte("MN\n")}, item, true, false))
+	equal(t, MetaStatusHD, item.Status)
+}
+
 func Test_parseMetaItem_valueSizeMismatch(t *testing.T) {
 	item := &MetaItem{}
 	err := parseMetaItem([][]byte{

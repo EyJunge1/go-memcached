@@ -174,6 +174,13 @@ func (c *conn) isClosed() bool {
 	return c.closed
 }
 
+func (c *conn) buffered() int {
+	if c.rr == nil {
+		return 0
+	}
+	return c.rr.Buffered()
+}
+
 func (c *conn) readLine(delim byte) ([]byte, error) {
 	if c.isClosed() {
 		return nil, errors.New("connection is closed")

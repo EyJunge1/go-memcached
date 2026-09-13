@@ -60,7 +60,9 @@ func MapWireLine(line []byte, kind WireKind) WireHit {
 		}
 		return malformedHit(tok)
 	case WireStats:
-		if tok == "END" || tok == "RESET" || strings.HasPrefix(tok, "STAT") {
+		if tok == "END" || tok == "RESET" || tok == "OK" ||
+			strings.HasPrefix(tok, "STAT") ||
+			tok == "PREFIX" || strings.HasPrefix(tok, "PREFIX ") {
 			return WireHit{Class: WireNominal}
 		}
 		return malformedHit(tok)
@@ -153,8 +155,6 @@ func mapMetaCDLine(tok string) WireHit {
 		return WireHit{Class: WireNominal, Status: MetaStatusMN}
 	case "ME":
 		return WireHit{Class: WireNominal, Status: MetaStatusME}
-	case "END", "ENTRY":
-		return WireHit{Class: WireNominal}
 	default:
 		return WireHit{
 			Class:   WireFault,
@@ -178,8 +178,8 @@ func mapAdminKeywordHit(tok string) (WireHit, bool) {
 		{"SAME", ErrSame},
 		{"WATCHER_TOO_MANY", ErrWatcherTooMany},
 		{"WATCHER_FAILED", ErrWatcherFailed},
-		{"MEMLIMIT_TOO_SMALL", ErrMemlimit},
-		{"MEMLIMIT_ADJUST_FAILED", ErrMemlimit},
+		{"MEMLIMIT_TOO_SMALL", ErrMemlimitTooSmall},
+		{"MEMLIMIT_ADJUST_FAILED", ErrMemlimitAdjustFailed},
 		{"NOTSTARTED", ErrNotStarted},
 	} {
 		if tok == k.prefix || strings.HasPrefix(tok, k.prefix+" ") {

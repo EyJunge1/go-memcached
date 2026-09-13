@@ -61,8 +61,10 @@ var (
 	ErrWatcherTooMany = errors.New("watcher too many")
 	// ErrWatcherFailed is the server WATCHER_FAILED reply.
 	ErrWatcherFailed = errors.New("watcher failed")
-	// ErrMemlimit is MEMLIMIT_TOO_SMALL or MEMLIMIT_ADJUST_FAILED.
-	ErrMemlimit = errors.New("memlimit")
+	// ErrMemlimitTooSmall is the server MEMLIMIT_TOO_SMALL reply.
+	ErrMemlimitTooSmall = errors.New("memlimit too small")
+	// ErrMemlimitAdjustFailed is the server MEMLIMIT_ADJUST_FAILED reply.
+	ErrMemlimitAdjustFailed = errors.New("memlimit adjust failed")
 	// ErrNotStarted is the server NOTSTARTED reply (crawler).
 	ErrNotStarted = errors.New("not started")
 	// ErrMixedTransport is returned when a client mixes UDP with TCP/Unix.

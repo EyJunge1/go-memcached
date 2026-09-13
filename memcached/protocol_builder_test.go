@@ -229,6 +229,24 @@ func Test_read2ValueContainsCRLFAndEND(t *testing.T) {
 	equal(t, []byte("hello\nworld"), items[0].Value)
 }
 
+func Test_read2AcceptsLFOnlyEND(t *testing.T) {
+	payload := []byte("END\n")
+	resp := buildSpecEndLineResponse(_EndCRLFBytes, 1)
+	defer resp.release()
+	noError(t, resp.read2(newPayloadReader(payload), false))
+	hasLen(t, resp.rawLines, 1)
+}
+
+func Test_read2AcceptsLFOnlyMN(t *testing.T) {
+	payload := []byte("HD O1\r\nMN\n")
+	resp := buildQuietBarrierResponse()
+	defer resp.release()
+	noError(t, resp.read2(newPayloadReader(payload), true))
+	item := &MetaItem{}
+	noError(t, parseMetaItem(resp.rawLines, item, true, false))
+	equal(t, MetaStatusHD, item.Status)
+}
+
 func Test_read2ValueLooksLikeEND(t *testing.T) {
 	payload := []byte("VALUE k 0 3\r\nEND\r\nEND\r\n")
 	resp := buildSpecEndLineResponse(_EndCRLFBytes, 3)

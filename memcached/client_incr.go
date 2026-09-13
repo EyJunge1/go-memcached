@@ -65,6 +65,9 @@ func parseArithmeticAfterRecv(dst *uint64) func(*response) error {
 		if len(resp.rawLines) == 0 {
 			return fmt.Errorf("empty arithmetic reply: %w", ErrMalformedResponse)
 		}
+		if err := forecastCommonFaultLine(resp.rawLines[0]); err != nil {
+			return err
+		}
 		value, err := parseArithmetic(resp.rawLines[0])
 		if err != nil {
 			return fmt.Errorf("%s: %w", err.Error(), ErrMalformedResponse)

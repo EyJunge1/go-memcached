@@ -111,7 +111,7 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 
 	proto := make([][]byte, 0, len(lines))
 	for _, line := range lines {
-		if bytes.Equal(line, _MetaMNCRLFBytes) {
+		if isMetaNoopLine(line) {
 			continue
 		}
 		proto = append(proto, line)
@@ -198,7 +198,7 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 
 func forecastCollectedMeta(lines [][]byte) error {
 	for i := 0; i < len(lines); i++ {
-		if bytes.Equal(lines[i], _MetaMNCRLFBytes) {
+		if isMetaNoopLine(lines[i]) {
 			continue
 		}
 		hit := MapWireLine(lines[i], WireMeta)
@@ -303,12 +303,18 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 }
 
 func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
-	if err := forecastCollectedMeta(lines); err != nil {
-		return nil, err
-	}
 	var items []*MetaItem
+	var charge error
 	for i := 0; i < len(lines); {
-		if bytes.Equal(lines[i], _MetaMNCRLFBytes) {
+		if isMetaNoopLine(lines[i]) {
+			i++
+			continue
+		}
+		hit := MapWireLine(lines[i], WireMeta)
+		if hit.Class == WireFault && isChargeMetaFault(hit.Err) {
+			if charge == nil {
+				charge = hit.Err
+			}
 			i++
 			continue
 		}
@@ -350,5 +356,5 @@ func parseMetaPipeline(lines [][]byte) ([]*MetaItem, error) {
 			i++
 		}
 	}
-	return items, nil
+	return items, charge
 }

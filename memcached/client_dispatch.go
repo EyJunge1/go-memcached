@@ -84,7 +84,32 @@ func wrapTransport(err error) error {
 	if errors.Is(err, ErrTransport) {
 		return err
 	}
+	if isClassifiedNonTransport(err) {
+		return err
+	}
 	return fmt.Errorf("%w: %w", ErrTransport, err)
+}
+
+func isClassifiedNonTransport(err error) bool {
+	return isKeepaliveProtocolError(err) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrServerError) ||
+		errors.Is(err, ErrMalformedResponse) ||
+		errors.Is(err, ErrUnknownIndicator) ||
+		errors.Is(err, ErrInvalidArgument) ||
+		errors.Is(err, ErrInvalidKey) ||
+		errors.Is(err, ErrInvalidValue) ||
+		errors.Is(err, ErrInvalidAddress) ||
+		errors.Is(err, ErrInvalidNetworkProtocol) ||
+		errors.Is(err, ErrNotSupported) ||
+		errors.Is(err, ErrFlushAllNotAllowed) ||
+		errors.Is(err, ErrAdminNotEnabled) ||
+		errors.Is(err, ErrSetServersNotAllowed) ||
+		errors.Is(err, ErrMixedTransport) ||
+		errors.Is(err, ErrInsecureTLS) ||
+		errors.Is(err, ErrDeadlineRequired) ||
+		errors.Is(err, ErrAdminTargetRequired)
 }
 
 func isTransportError(err error) bool {
@@ -106,20 +131,12 @@ func isKeepaliveProtocolError(err error) bool {
 		errors.Is(err, ErrSame) ||
 		errors.Is(err, ErrWatcherTooMany) ||
 		errors.Is(err, ErrWatcherFailed) ||
-		errors.Is(err, ErrMemlimit) ||
+		errors.Is(err, ErrMemlimitTooSmall) ||
+		errors.Is(err, ErrMemlimitAdjustFailed) ||
 		errors.Is(err, ErrNotStarted)
 }
 
 func wrapRecvError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if isKeepaliveProtocolError(err) ||
-		errors.Is(err, ErrServerError) ||
-		errors.Is(err, ErrMalformedResponse) ||
-		errors.Is(err, ErrUnknownIndicator) {
-		return err
-	}
 	return wrapTransport(err)
 }
 

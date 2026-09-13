@@ -37,7 +37,7 @@ func (c *Client) MetaGet(ctx context.Context, key []byte, f MetaGet) (MetaResult
 		return parseMetaItem(r.rawLines, item, mgFlags.q, true)
 	}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return metaResultFrom(item, item.Status), fmt.Errorf("request failed: %w", err)
+		return metaResultWithErr(item, item.Status, err), fmt.Errorf("request failed: %w", err)
 	}
 	applyCheckCAS(item, mgFlags)
 	return metaResultFrom(item, item.Status), nil
@@ -170,7 +170,9 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			return preparedMetaOp{}, err
 		}
 		ma := f.toFlags()
-		ma.q = true
+		if !ma.v {
+			ma.q = true
+		}
 		if err := c.checkKeyValueFlags(key, nil, ma.b); err != nil {
 			return preparedMetaOp{}, err
 		}
@@ -349,13 +351,16 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []p
 	defer releaseReqAndResp(req, resp)
 
 	var parsed []*MetaItem
+	gotLines := false
 	resp.afterRecv = func(r *response) error {
 		items, err := parseMetaPipeline(r.rawLines)
 		parsed = items
+		gotLines = true
 		return err
 	}
-	if err := c.dispatchToAddr(ctx, addr, req, resp); err != nil {
-		return err
+	dispatchErr := c.dispatchToAddr(ctx, addr, req, resp)
+	if !gotLines {
+		return dispatchErr
 	}
 	for _, p := range group {
 		if p.noop {
@@ -385,6 +390,10 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []p
 		if out[p.idx].Status != MetaStatusUnknown {
 			continue
 		}
+		if isChargeMetaFault(dispatchErr) {
+			out[p.idx] = metaResultWithErr(&MetaItem{Key: p.key}, MetaStatusUnknown, dispatchErr)
+			continue
+		}
 		switch {
 		case p.noop:
 			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key, Status: MetaStatusMN}}
@@ -394,5 +403,5 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, addr *Addr, group []p
 			out[p.idx] = MetaResult{Status: MetaStatusHD, Item: MetaItem{Key: p.key, Status: MetaStatusHD}}
 		}
 	}
-	return nil
+	return dispatchErr
 }

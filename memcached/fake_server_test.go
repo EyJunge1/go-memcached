@@ -165,8 +165,6 @@ func (f *fakeMemcached) handle(cn net.Conn) {
 				_ = w.Flush()
 			}
 		case "shutdown":
-			_, _ = w.WriteString("OK\r\n")
-			_ = w.Flush()
 			return
 		case "slabs":
 			f.slabs(fields, w)

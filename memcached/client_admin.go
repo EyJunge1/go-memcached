@@ -88,7 +88,7 @@ func (a *AdminClient) doQuiet(ctx context.Context, req *request, resp *response)
 	if err != nil {
 		return err
 	}
-	if err := a.c.sendQuietToAddr(ctx, addr, req, resp); err != nil {
+	if err := a.c.sendQuietToAddr(ctx, addr, req, resp, false); err != nil {
 		return fmt.Errorf("admin: %w", err)
 	}
 	return nil
@@ -119,7 +119,7 @@ func (b *AdminBroadcast) doAllQuiet(ctx context.Context, build func() (*request,
 		wg.Go(func() {
 			req, resp := build()
 			defer releaseReqAndResp(req, resp)
-			errCh <- b.c.sendQuietToAddr(ctx, addr, req, resp)
+			errCh <- b.c.sendQuietToAddr(ctx, addr, req, resp, false)
 		})
 	}
 	wg.Wait()

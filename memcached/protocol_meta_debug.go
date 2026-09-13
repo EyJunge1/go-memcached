@@ -46,7 +46,7 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 	hit := MapWireLine(lines[0], WireMeta)
 	if hit.Class == WireFault {
 		if errors.Is(hit.Err, ErrNotFound) {
-			item.Status = MetaStatusEN
+			item.Status = hit.Status
 			return ErrNotFound
 		}
 		return hit.Err

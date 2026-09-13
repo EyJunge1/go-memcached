@@ -35,6 +35,9 @@ func (s MetaStatus) Err() error {
 }
 
 func (r MetaResult) Err() error {
+	if r.err != nil {
+		return r.err
+	}
 	return r.Status.Err()
 }
 
@@ -90,6 +93,7 @@ type MetaResult struct {
 	Item      MetaItem
 	WireKey   []byte
 	KeyBase64 bool
+	err       error
 }
 
 func metaResultFrom(item *MetaItem, status MetaStatus) MetaResult {
@@ -105,6 +109,12 @@ func metaResultFrom(item *MetaItem, status MetaStatus) MetaResult {
 		WireKey:   item.WireKey,
 		KeyBase64: item.KeyBase64,
 	}
+}
+
+func metaResultWithErr(item *MetaItem, status MetaStatus, err error) MetaResult {
+	res := metaResultFrom(item, status)
+	res.err = err
+	return res
 }
 
 // MetaGetReturn selects response tokens for mg.
@@ -404,6 +414,9 @@ func (f MetaDelete) validate() error {
 func (f MetaArithmetic) validate() error {
 	if err := validMetaHints(f.P, f.L); err != nil {
 		return err
+	}
+	if f.Quiet && f.ReturnValue {
+		return fmt.Errorf("ma q+v: %w", ErrInvalidArgument)
 	}
 	if f.Initial != nil && f.AutoCreate == nil {
 		return fmt.Errorf("ma J requires auto-create: %w", ErrInvalidArgument)

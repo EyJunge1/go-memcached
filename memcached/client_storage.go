@@ -3,6 +3,7 @@ package memcached
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // StoreMode selects the text storage command.
@@ -48,8 +49,9 @@ func storeCommand(mode StoreMode) (string, error) {
 
 // Store issues one text storage command.
 // NOT_STORED, EXISTS, and NOT_FOUND are returned as sentinels.
-// Quiet sends noreply: success means the write was sent, not that the
-// server accepted the item. The connection is discarded.
+// Quiet sends noreply. A nil error means the write was sent, not that the
+// server accepted the item. CLIENT_ERROR and SERVER_ERROR are still
+// returned if the server replies. The connection is discarded.
 func (c *Client) Store(ctx context.Context, mode StoreMode, req StoreRequest) error {
 	command, err := storeCommand(mode)
 	if err != nil {
@@ -95,10 +97,56 @@ func (c *Client) dispatchQuiet(ctx context.Context, req *request, resp *response
 	if err != nil {
 		return fmt.Errorf("pick node failed: %w", err)
 	}
-	return c.sendQuietToAddr(ctx, addr, req, resp)
+	return c.sendQuietToAddr(ctx, addr, req, resp, true)
 }
 
-func (c *Client) sendQuietToAddr(ctx context.Context, addr *Addr, req *request, resp *response) error {
+// quietFaultWait is how long a noreply send waits for CLIENT_ERROR/SERVER_ERROR.
+// The deadline must be in the future or Go skips the Read entirely. Data already
+// on the socket returns immediately; a well-formed quiet write waits the full
+// budget. Shorter than the default ReadTimeout so Quiet stays cheaper than a
+// normal round-trip.
+const quietFaultWait = 25 * time.Millisecond
+
+func connBuffered(cn memcachedConn) int {
+	type withBuf interface{ buffered() int }
+	if b, ok := cn.(withBuf); ok {
+		return b.buffered()
+	}
+	return -1
+}
+
+func readQuietFault(ctx context.Context, cn memcachedConn) error {
+	deadline := nowFunc().Add(quietFaultWait)
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			switch connBuffered(cn) {
+			case 0:
+				return nil
+			case -1:
+				deadline = nowFunc().Add(time.Millisecond)
+			default:
+				deadline = nowFunc().Add(time.Second)
+			}
+		default:
+			if d, ok := ctx.Deadline(); ok && !d.IsZero() && d.Before(deadline) {
+				deadline = d
+			}
+		}
+	}
+	_ = cn.setReadDeadline(deadline)
+	defer func() { _ = cn.setReadDeadline(zeroTime) }()
+	line, err := cn.readLine('\n')
+	if err != nil {
+		return nil
+	}
+	if hit, ok := mapGlobalErrorLine(line, string(trimCRLF(line))); ok {
+		return hit.Err
+	}
+	return nil
+}
+
+func (c *Client) sendQuietToAddr(ctx context.Context, addr *Addr, req *request, resp *response, probeFault bool) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -113,6 +161,10 @@ func (c *Client) sendQuietToAddr(ctx context.Context, addr *Addr, req *request, 
 	}
 	c.enableUDPFraming(addr, req, resp)
 	sendErr := req.send(ctx, cn, c.options.writeTimeout)
+	var fault error
+	if sendErr == nil && probeFault {
+		fault = readQuietFault(ctx, cn)
+	}
 	if p := cn.getConnPool(); p != nil {
 		_ = p.discard(cn)
 	} else {
@@ -121,6 +173,9 @@ func (c *Client) sendQuietToAddr(ctx context.Context, addr *Addr, req *request, 
 	if sendErr != nil {
 		c.noteFailure(addr)
 		return wrapTransport(fmt.Errorf("send failed: %w", sendErr))
+	}
+	if fault != nil {
+		return fault
 	}
 	c.noteSuccess(addr)
 	return nil
