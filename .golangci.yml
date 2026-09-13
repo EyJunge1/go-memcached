@@ -24,6 +24,9 @@ linters:
       - linters:
           - revive
         text: "var-naming: avoid package names that conflict with Go standard library"
+      - path: _test\.go
+        linters:
+          - gosec
 
 formatters:
   enable:

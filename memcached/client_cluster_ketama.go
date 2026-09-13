@@ -1,7 +1,7 @@
 package memcached
 
 import (
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // G501: Ketama/libmemcached interop requires MD5
 	"fmt"
 	"hash/crc32"
 	"math"
@@ -160,7 +160,7 @@ func buildKetamaContinuum(addrs []*Addr, hash KetamaHash, weighted bool, pointsP
 
 	cont := make([]ketamaPoint, 0, live*pointsPerServer)
 	for hostIndex, addr := range addrs {
-		pointerPerServer := uint32(pointsPerServer)
+		pointerPerServer := uint32(pointsPerServer) //nolint:gosec // G115: continuum points are a small config value
 		pointerPerHash := uint32(1)
 		if weighted {
 			// hosts.cc 1.1.4: floor((float)(pct * 160 / 4 * live + 0.0000000001F)) * 4
@@ -237,7 +237,7 @@ func ketamaLookup(cont []ketamaPoint, h uint32) int {
 }
 
 func ketamaServerHash(key string, alignment uint32) uint32 {
-	sum := md5.Sum([]byte(key))
+	sum := md5.Sum([]byte(key)) //nolint:gosec // G401: Ketama/libmemcached interop requires MD5
 	off := alignment * 4
 	return uint32(sum[off]) |
 		uint32(sum[off+1])<<8 |
@@ -252,7 +252,7 @@ func ketamaDigest(h KetamaHash, key []byte) uint32 {
 	case KetamaHashFNV1A:
 		return hashkitFNV1A32(key)
 	default:
-		sum := md5.Sum(key)
+		sum := md5.Sum(key) //nolint:gosec // G401: Ketama/libmemcached interop requires MD5
 		return uint32(sum[0]) | uint32(sum[1])<<8 | uint32(sum[2])<<16 | uint32(sum[3])<<24
 	}
 }
@@ -265,8 +265,12 @@ func hashkitCRC32(key []byte) uint32 {
 func hashkitFNV1A32(key []byte) uint32 {
 	hash := uint32(2166136261)
 	for _, b := range key {
-		// libhashkit: uint32_t val = (uint32_t) key[x] with signed char (Linux/macOS).
-		hash ^= uint32(int8(b))
+		// libhashkit sign-extends char before XOR (Linux/macOS signed char).
+		v := uint32(b)
+		if b&0x80 != 0 {
+			v |= 0xffffff00
+		}
+		hash ^= v
 		hash *= 16777619
 	}
 	return hash

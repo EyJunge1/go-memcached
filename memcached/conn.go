@@ -21,7 +21,7 @@ const connWriteBufferSize = 16 << 10
 
 var udpScratchPool = sync.Pool{New: func() any {
 	b := make([]byte, 65535)
-	return b
+	return &b
 }}
 
 func applyTCPNoDelay(c net.Conn, on bool) {
@@ -193,14 +193,14 @@ func (c *conn) readDatagram() ([]byte, error) {
 	if c.isClosed() {
 		return nil, errors.New("connection is closed")
 	}
-	scratch := udpScratchPool.Get().([]byte)
-	n, err := c.raw.Read(scratch)
+	scratch := udpScratchPool.Get().(*[]byte)
+	n, err := c.raw.Read(*scratch)
 	if err != nil {
 		udpScratchPool.Put(scratch)
 		return nil, err
 	}
 	out := make([]byte, n)
-	copy(out, scratch[:n])
+	copy(out, (*scratch)[:n])
 	udpScratchPool.Put(scratch)
 	return out, nil
 }

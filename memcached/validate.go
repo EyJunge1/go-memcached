@@ -18,7 +18,7 @@ func (c *Client) checkKeyValueFlags(key, value []byte, binaryKey bool) error {
 	return validateKeyAndValueFlagsLimit(key, value, binaryKey, c.valueLimit())
 }
 
-func validateKeyAndValueFlagsLimit(key, value []byte, binaryKey bool, max int) error {
+func validateKeyAndValueFlagsLimit(key, value []byte, binaryKey bool, limit int) error {
 	nKey := len(key)
 	if nKey == 0 {
 		return ErrInvalidKey
@@ -38,10 +38,10 @@ func validateKeyAndValueFlagsLimit(key, value []byte, binaryKey bool, max int) e
 		}
 	}
 
-	if max <= 0 {
-		max = defaultMaxValueBytes
+	if limit <= 0 {
+		limit = defaultMaxValueBytes
 	}
-	if nValue := len(value); nValue > max {
+	if nValue := len(value); nValue > limit {
 		return ErrInvalidValue
 	}
 

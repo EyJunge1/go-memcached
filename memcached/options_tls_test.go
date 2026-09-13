@@ -90,7 +90,7 @@ func TestTLSWrapsCustomDial(t *testing.T) {
 		if acceptErr != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		r := bufio.NewReader(conn)
 		for {
 			line, err := r.ReadBytes('\n')

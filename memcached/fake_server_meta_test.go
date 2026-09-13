@@ -121,7 +121,6 @@ func (f *fakeMemcached) metaGet(fields []string, w *bufio.Writer) {
 		f.cas++
 		item = &fakeItem{cas: f.cas}
 		f.items[fields[1]] = item
-		ok = true
 		item.recacheBusy = true
 		f.mu.Unlock()
 		suffix := recacheSuffix(opaque, returnKey, binaryKey, fields[1], true, false, false)

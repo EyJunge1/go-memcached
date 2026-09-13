@@ -98,10 +98,6 @@ func mgLineHasSideEffect(fields [][]byte) bool {
 	return false
 }
 
-func metaRawHasSideEffect(raw []byte) bool {
-	return udpMetaRawAllowed(raw) != nil
-}
-
 func idempotentReadCommand(cmd []byte) bool {
 	switch string(cmd) {
 	case "get", "gets", "version", "mg", "mn", "me":

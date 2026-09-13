@@ -280,7 +280,7 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 	if size > uint64(limit) {
 		return 0, fmt.Errorf("data block too large: %w", ErrMalformedResponse)
 	}
-	payload, err := rr.readExact(int(size) + 2)
+	payload, err := rr.readExact(int(size) + 2) //nolint:gosec // G115: size already bounded by maxValueBytes
 	if err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return 0, fmt.Errorf("short data block: %w", ErrMalformedResponse)

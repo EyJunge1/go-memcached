@@ -217,13 +217,6 @@ func (c *Client) PoolStats() []PoolStat {
 	return out
 }
 
-func (c *Client) nsString(key string) string {
-	if c.options == nil || c.options.namespace == "" {
-		return key
-	}
-	return c.options.namespace + key
-}
-
 func (c *Client) nsBytes(key []byte) []byte {
 	if c.options == nil || c.options.namespace == "" {
 		return key
