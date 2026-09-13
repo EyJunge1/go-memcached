@@ -3,6 +3,7 @@ package memcached
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestMetaArithmeticRejectsInjectedMode(t *testing.T) {
@@ -11,4 +12,29 @@ func TestMetaArithmeticRejectsInjectedMode(t *testing.T) {
 
 	_, err := client.Meta().Arithmetic(context.Background(), []byte("k"), 1, MetaArithmetic{Mode: "I\r\nflush_all\r\n"})
 	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestMetaArithmeticAutoCreate(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	init := uint64(10)
+	cas := uint64(1)
+	newCAS := uint64(9)
+	ttl := Rel(time.Second)
+
+	res, err := client.Meta().Arithmetic(context.Background(), []byte("n"), 2, MetaArithmetic{
+		AutoCreate:  delayPtr(ttl),
+		Initial:     &init,
+		ReturnValue: true,
+		CompareCAS:  &cas,
+		NewCAS:      &newCAS,
+		TTL:         delayPtr(ttl),
+	})
+	noError(t, err)
+	equal(t, []byte("12"), res.Item.Value)
+	waitLastCmdHasToken(t, srv, "N1")
+	waitLastCmdHasToken(t, srv, "J10")
+	waitLastCmdHasToken(t, srv, "C1")
+	waitLastCmdHasToken(t, srv, "E9")
+	waitLastCmdHasToken(t, srv, "T1")
 }

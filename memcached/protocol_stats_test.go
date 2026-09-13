@@ -25,3 +25,20 @@ func Test_parseStatsDetailDump(t *testing.T) {
 	equal(t, "1 2 3", got["foo"])
 	equal(t, "0 0 1", got["bar"])
 }
+
+func Test_parseStatsDetailDump_edges(t *testing.T) {
+	got, err := parseStatsDetailDump([][]byte{
+		[]byte("PREFIX onlykey\r\n"),
+		[]byte("STAT pid 7\r\n"),
+		[]byte("END\r\n"),
+	})
+	noError(t, err)
+	equal(t, "", got["onlykey"])
+	equal(t, "7", got["pid"])
+
+	_, err = parseStatsDetailDump([][]byte{[]byte("CLIENT_ERROR bad detail\r\n")})
+	isErrorIs(t, err, ErrClientError)
+
+	_, err = parseStatsDetailDump([][]byte{[]byte("not-a-stat-line\r\n")})
+	isErrorIs(t, err, ErrMalformedResponse)
+}

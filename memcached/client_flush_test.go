@@ -203,3 +203,49 @@ func TestFlushAllExpImmediate(t *testing.T) {
 	equal(t, "-1", srv.lastFlushDelay)
 	srv.mu.Unlock()
 }
+
+func TestFlushOnRequiresAllowFlushAll(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("k"), []byte("v"))
+	isErrorIs(t, mustAdminOn(t, client).Flush(ctx, FlushOpts{}), ErrFlushAllNotAllowed)
+	equal(t, []byte("v"), mustGet(t, client, ctx, []byte("k")).Value)
+}
+
+func TestFlushAllOnAddrRecvError(t *testing.T) {
+	addr, dials := startCloseAfterCommand(t, "flush_all")
+	client := testClient(t, addr, func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.AllowFlushAll = true
+	})
+	err := mustAdminOn(t, client).Flush(context.Background(), FlushOpts{})
+	isErrorIs(t, err, ErrTransport)
+	ver, verErr := client.Version(context.Background())
+	noError(t, verErr)
+	equal(t, "after-close", ver)
+	greater(t, int(dials.Load()), 1)
+}
+
+func TestFlushAllOnAddrBadStatus(t *testing.T) {
+	addr, dials := startCmdServer(t, func(fields []string) string {
+		switch fields[0] {
+		case "flush_all":
+			return "CLIENT_ERROR bad flush\r\n"
+		case "version":
+			return "VERSION after-flush\r\n"
+		default:
+			return "ERROR\r\n"
+		}
+	})
+	client := testClient(t, addr, func(cfg *Config) {
+		cfg.AllowAdmin = true
+		cfg.AllowFlushAll = true
+	})
+	err := mustAdminOn(t, client).Flush(context.Background(), FlushOpts{})
+	isErrorIs(t, err, ErrClientError)
+	ver, err := client.Version(context.Background())
+	noError(t, err)
+	equal(t, "after-flush", ver)
+	equal(t, int32(1), dials.Load())
+}

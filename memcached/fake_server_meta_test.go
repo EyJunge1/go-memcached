@@ -249,7 +249,7 @@ func (f *fakeMemcached) metaArith(fields []string, w *bufio.Writer) {
 		_ = w.Flush()
 		return
 	}
-	quiet, wantValue, _, cas, casSet, mode, _ := parseFakeMetaFlags(fields[2:])
+	quiet, wantValue, _, cas, casSet, mode, opaque := parseFakeMetaFlags(fields[2:])
 	delta := uint64(1)
 	initial := uint64(0)
 	autoCreate := false
@@ -307,10 +307,14 @@ func (f *fakeMemcached) metaArith(fields []string, w *bufio.Writer) {
 	if quiet {
 		return
 	}
+	suffix := ""
+	if opaque != "" {
+		suffix = " O" + opaque
+	}
 	if wantValue {
-		_, _ = fmt.Fprintf(w, "VA %d\r\n%s\r\n", len(item.value), item.value)
+		_, _ = fmt.Fprintf(w, "VA %d%s\r\n%s\r\n", len(item.value), suffix, item.value)
 	} else {
-		_, _ = w.WriteString("HD\r\n")
+		_, _ = w.WriteString("HD" + suffix + "\r\n")
 	}
 	_ = w.Flush()
 }

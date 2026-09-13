@@ -58,6 +58,59 @@ func startCmdServer(t *testing.T, reply func(fields []string) string) (addr stri
 	return ln.Addr().String(), &n
 }
 
+// startCloseAfterCommand is like startCmdServer but closes the socket after
+// reading cmd (and its data block). version gets a reply; other verbs get ERROR.
+func startCloseAfterCommand(t *testing.T, cmd string) (addr string, dials *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	noError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	var n atomic.Int32
+	go func() {
+		for {
+			cn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			n.Add(1)
+			go func(cn net.Conn) {
+				defer func() { _ = cn.Close() }()
+				r := bufio.NewReader(cn)
+				for {
+					line, err := r.ReadBytes('\n')
+					if err != nil {
+						return
+					}
+					fields := strings.Fields(string(line))
+					if len(fields) == 0 {
+						continue
+					}
+					switch fields[0] {
+					case "set", "add", "replace", "append", "prepend", "cas":
+						if len(fields) >= 5 {
+							if nbytes, err := strconv.Atoi(fields[4]); err == nil && nbytes >= 0 {
+								_, _ = io.ReadFull(r, make([]byte, nbytes+2))
+							}
+						}
+					case "quit", "shutdown":
+						return
+					}
+					if fields[0] == cmd {
+						return
+					}
+					switch fields[0] {
+					case "version":
+						_, _ = cn.Write([]byte("VERSION after-close\r\n"))
+					default:
+						_, _ = cn.Write([]byte("ERROR\r\n"))
+					}
+				}
+			}(cn)
+		}
+	}()
+	return ln.Addr().String(), &n
+}
+
 func TestCommandErrorHeldOnGet(t *testing.T) {
 	addr, dials := startCmdServer(t, func(fields []string) string {
 		switch fields[0] {

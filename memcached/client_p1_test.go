@@ -18,6 +18,28 @@ func TestParseArithmeticAcceptsSpacePadding(t *testing.T) {
 	equal(t, uint64(12), got)
 }
 
+func Test_parseArithmetic_empty(t *testing.T) {
+	_, err := parseArithmetic([]byte("\r\n"))
+	isErrorIs(t, err, ErrMalformedResponse)
+	_, err = parseArithmetic(nil)
+	isErrorIs(t, err, ErrMalformedResponse)
+}
+
+func Test_parseVersionLine(t *testing.T) {
+	got, err := parseVersionLine([][]byte{[]byte("VERSION 1.6.29\r\n")})
+	noError(t, err)
+	equal(t, "1.6.29", got)
+
+	got, err = parseVersionLine([][]byte{[]byte("VERSION  1.6.29 \r\n")})
+	noError(t, err)
+	equal(t, "1.6.29", got)
+
+	_, err = parseVersionLine(nil)
+	isErrorIs(t, err, ErrMalformedResponse)
+	_, err = parseVersionLine([][]byte{[]byte("NOTVERSION\r\n")})
+	isErrorIs(t, err, ErrMalformedResponse)
+}
+
 func TestReplaceAppendPrependNotStored(t *testing.T) {
 	srv := startFakeMemcached(t)
 	var dials atomic.Int32

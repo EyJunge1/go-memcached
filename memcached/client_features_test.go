@@ -28,6 +28,26 @@ func waitLastCmdContains(t *testing.T, srv *fakeMemcached, want string) {
 	t.Fatalf("%q does not contain %q", cmd, want)
 }
 
+func waitLastCmdHasToken(t *testing.T, srv *fakeMemcached, token string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		cmd := srv.lastCmd
+		srv.mu.Unlock()
+		for _, field := range strings.Fields(cmd) {
+			if field == token {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	srv.mu.Lock()
+	cmd := srv.lastCmd
+	srv.mu.Unlock()
+	t.Fatalf("%q has no token %q", cmd, token)
+}
+
 func waitEitherLastCmdContains(t *testing.T, a, b *fakeMemcached, want string) bool {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -396,4 +416,56 @@ func TestMetaGetMissKeepsENFlags(t *testing.T) {
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
+}
+
+func TestMetaDeleteInvalidateTTL(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("k"), []byte("v"))
+	cas := uint64(1)
+	newCAS := uint64(2)
+
+	_, err := client.Meta().Delete(ctx, []byte("k"), MetaDelete{
+		Invalidate: true,
+		TTL:        delayPtr(Rel(5 * time.Second)),
+		CompareCAS: &cas,
+		NewCAS:     &newCAS,
+	})
+	noError(t, err)
+	waitLastCmdHasToken(t, srv, "I")
+	waitLastCmdHasToken(t, srv, "T5")
+	waitLastCmdHasToken(t, srv, "C1")
+	waitLastCmdHasToken(t, srv, "E2")
+
+	got, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	noError(t, err)
+	equal(t, []byte("v"), got.Item.Value)
+	isTrue(t, got.Item.Stale)
+}
+
+func TestMetaDeleteRemoveValueOnlyWire(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("k"), []byte("v"))
+
+	_, err := client.Meta().Delete(ctx, []byte("k"), MetaDelete{RemoveValueOnly: true})
+	noError(t, err)
+	waitLastCmdHasToken(t, srv, "x")
+}
+
+func TestMetaSetAutoVivifyAppend(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("k"), []byte("v"))
+
+	_, err := client.Meta().Set(ctx, []byte("k"), []byte("x"), MetaSet{
+		Mode:       MetaSetModeAppend,
+		AutoVivify: delayPtr(Rel(time.Second)),
+	})
+	noError(t, err)
+	waitLastCmdHasToken(t, srv, "MA")
+	waitLastCmdHasToken(t, srv, "N1")
 }

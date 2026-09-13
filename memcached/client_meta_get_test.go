@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestMetaQuietHitReturnsValue(t *testing.T) {
@@ -116,4 +117,105 @@ func TestMetaPipelineRejectsInvalidOp(t *testing.T) {
 	isErrorIs(t, err, ErrInvalidArgument)
 	_, err = client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}, Set: &MetaSet{}}})
 	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestMetaPipelineArithmetic(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("n"), []byte("10"))
+
+	got, err := client.Meta().Pipeline(ctx, []MetaOp{
+		{Key: []byte("n"), Delta: 3, Arith: &MetaArithmetic{ReturnValue: true}},
+	})
+	noError(t, err)
+	hasLen(t, got, 1)
+	equal(t, []byte("13"), got[0].Item.Value)
+	equal(t, "0", got[0].Item.Opaque)
+	equal(t, []byte("13"), mustGet(t, client, ctx, []byte("n")).Value)
+}
+
+func TestMetaPipelineAcrossNodes(t *testing.T) {
+	a := startFakeMemcached(t)
+	b := startFakeMemcached(t)
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.Cluster.pickBuilder = prefixPickBuilder{}
+	})
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("a-one"), []byte("1"))
+	mustStore(t, client, ctx, []byte("b-two"), []byte("2"))
+
+	got, err := client.Meta().Pipeline(ctx, []MetaOp{
+		{Key: []byte("a-one"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
+		{Key: []byte("b-two"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
+	})
+	noError(t, err)
+	hasLen(t, got, 2)
+	equal(t, []byte("1"), got[0].Item.Value)
+	equal(t, []byte("2"), got[1].Item.Value)
+}
+
+func TestMetaPipelineEmptyAndCanceled(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+
+	got, err := client.Meta().Pipeline(context.Background(), nil)
+	noError(t, err)
+	hasLen(t, got, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
+	isErrorIs(t, err, context.Canceled)
+}
+
+func TestMetaPipelineValidateRejects(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	init := uint64(1)
+
+	tests := []struct {
+		name string
+		op   MetaOp
+	}{
+		{
+			name: "autovivify-set",
+			op:   MetaOp{Key: []byte("k"), Body: []byte("v"), Set: &MetaSet{AutoVivify: delayPtr(Rel(time.Second))}},
+		},
+		{
+			name: "md-ttl",
+			op:   MetaOp{Key: []byte("k"), Del: &MetaDelete{TTL: delayPtr(Rel(time.Second))}},
+		},
+		{
+			name: "ma-j",
+			op:   MetaOp{Key: []byte("k"), Arith: &MetaArithmetic{Initial: &init}},
+		},
+		{
+			name: "hints",
+			op:   MetaOp{Key: []byte("k"), Get: &MetaGet{P: "bad token"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.Meta().Pipeline(ctx, []MetaOp{tt.op})
+			isErrorIs(t, err, ErrInvalidArgument)
+		})
+	}
+}
+
+func TestMetaGetVivifyRoundTrip(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	newCAS := uint64(42)
+
+	res, err := client.Meta().Get(context.Background(), []byte("missing"), MetaGet{
+		Vivify: delayPtr(Rel(time.Second)),
+		NewCAS: &newCAS,
+	})
+	noError(t, err)
+	equal(t, MetaStatusHD, res.Status)
+	isTrue(t, res.Item.Won)
+	waitLastCmdHasToken(t, srv, "N1")
+	waitLastCmdHasToken(t, srv, "E42")
 }

@@ -429,3 +429,24 @@ func Test_quarantineDuration(t *testing.T) {
 	equal(t, 30*time.Second, quarantineDuration(Failover{FailureLimit: 1, DeadAfter: 30 * time.Second}, 1))
 	equal(t, time.Duration(0), quarantineDuration(Failover{FailureLimit: 2}, 2))
 }
+
+func TestCloseDuringGet(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	mustStore(t, client, context.Background(), []byte("k"), []byte("v"))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = client.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	}()
+	wg.Wait()
+
+	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	isErrorIs(t, err, ErrClosed)
+}

@@ -67,6 +67,37 @@ func TestAdminAllBroadcast(t *testing.T) {
 	noError(t, all.CacheMemLimit(ctx, 32, AdminOpts{}))
 }
 
+func TestAdminAllQuietBroadcast(t *testing.T) {
+	a := startFakeMemcached(t)
+	b := startFakeMemcached(t)
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.AllowAdmin = true
+	})
+	all := mustAdmin(t, client).All()
+	ctx := context.Background()
+	noError(t, all.Verbosity(ctx, 1, AdminOpts{Quiet: true}))
+	waitLastCmdContains(t, a, "verbosity 1 noreply")
+	waitLastCmdContains(t, b, "verbosity 1 noreply")
+	noError(t, all.CacheMemLimit(ctx, 32, AdminOpts{Quiet: true}))
+	waitLastCmdContains(t, a, "cache_memlimit 32 noreply")
+	waitLastCmdContains(t, b, "cache_memlimit 32 noreply")
+}
+
+func TestAdminVerbosityRejectsNegative(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	ctx := context.Background()
+	isErrorIs(t, mustAdminOn(t, client).Verbosity(ctx, -1, AdminOpts{}), ErrInvalidArgument)
+	isErrorIs(t, mustAdmin(t, client).All().Verbosity(ctx, -1, AdminOpts{}), ErrInvalidArgument)
+}
+
+func TestAdminOnUnknownServer(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	err := mustAdmin(t, client).On(Server{Address: "127.0.0.1:1"}).Verbosity(context.Background(), 1, AdminOpts{})
+	isErrorIs(t, err, ErrInvalidAddress)
+}
+
 func TestAdminWatchAndDumps(t *testing.T) {
 	srv := startFakeMemcached(t)
 	srv.mu.Lock()
@@ -190,4 +221,66 @@ func TestAdminWatchLineCap(t *testing.T) {
 	ev, ok := <-events
 	isTrue(t, ok)
 	isErrorIs(t, ev.Err, ErrMalformedResponse)
+}
+
+func TestAdminDumpSendFails(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	noError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		cn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = cn.Close()
+	}()
+
+	client := testClient(t, ln.Addr().String(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = admin.LRUCrawlerMetaDump(ctx, "all")
+	isErrorIs(t, err, ErrTransport)
+}
+
+func TestAdminDumpOKThenError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	noError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		cn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = cn.Close() }()
+		buf := make([]byte, 64)
+		_, _ = cn.Read(buf)
+		_, _ = cn.Write([]byte("OK\r\nERROR locked try again later\r\n"))
+	}()
+
+	client := testClient(t, ln.Addr().String(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = admin.LRUCrawlerMetaDump(ctx, "all")
+	isErrorIs(t, err, ErrCommandError)
+}
+
+func TestAdminWatchAfterClose(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
+	admin := mustAdminOn(t, client)
+	noError(t, client.Close())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := admin.Watch(ctx, WatchFetchers)
+	isErrorIs(t, err, ErrClosed)
+}
+
+func TestAdminShutdownEmptyReplyOK(t *testing.T) {
+	addr, _ := startCmdServer(t, func(fields []string) string {
+		return ""
+	})
+	client := testClient(t, addr, func(cfg *Config) { cfg.AllowAdmin = true })
+	noError(t, mustAdminOn(t, client).Shutdown(context.Background(), false))
 }
