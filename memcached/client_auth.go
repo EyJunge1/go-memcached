@@ -75,7 +75,7 @@ func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTim
 	defer releaseReqAndResp(greq, gresp)
 	var leftover []Item
 	gresp.afterRecv = func(r *response) error {
-		items, err := parseValueItems(r.rawLines, false, false)
+		items, err := parseValueItems(r.rawLines, false)
 		if err != nil {
 			return fmt.Errorf("parse values failed: %w", err)
 		}

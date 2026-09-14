@@ -2,7 +2,6 @@ package memcached
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -345,19 +344,6 @@ func opaqueStringIsCanonical(token string, n uint64) bool {
 	return true
 }
 
-// parseFlags applies meta reply tokens (c, f, t, l, s, O, h, W, X, Z, k, b).
-func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
-	for i := startPos; i < len(parts); i++ {
-		if len(parts[i]) == 0 {
-			return fmt.Errorf("empty meta flag: %w", ErrMalformedResponse)
-		}
-		if err := applyMetaFlag(parts[i], item); err != nil {
-			return err
-		}
-	}
-	return bindMetaKeyFromWire(item)
-}
-
 func bindMetaKeyFromWire(item *MetaItem) error {
 	if item == nil || len(item.WireKey) == 0 {
 		return nil
@@ -378,47 +364,4 @@ func bindMetaKeyFromWire(item *MetaItem) error {
 		item.Key = item.WireKey
 	}
 	return nil
-}
-
-// parseMetaPipeline parses a pipelined meta reply into items.
-func parseMetaPipeline(lines [][]byte) ([]MetaItem, error) {
-	items := make([]MetaItem, 0, len(lines))
-	var charge error
-	for i := 0; i < len(lines); {
-		if isMetaNoopLine(lines[i]) {
-			i++
-			continue
-		}
-		if err := forecastCommonFaultLine(lines[i]); err != nil && isChargeMetaFault(err) {
-			if charge == nil {
-				charge = err
-			}
-			i++
-			continue
-		}
-		var item MetaItem
-		cd := trimCRLF(lines[i])
-		if sp := bytes.IndexByte(cd, ' '); sp >= 0 {
-			cd = cd[:sp]
-		}
-		if bytes.Equal(cd, _VABytes) {
-			if i+1 >= len(lines) {
-				return nil, fmt.Errorf("missing value: %w", ErrMalformedResponse)
-			}
-			header, body := lines[i], lines[i+1] //nolint:gosec // G602: i+1 is bounds-checked above
-			if err := parseMetaItem([][]byte{header, body}, &item, false, false); err != nil {
-				return nil, err
-			}
-			items = append(items, item)
-			i += 2
-			continue
-		}
-		if err := parseMetaItem([][]byte{lines[i]}, &item, false, false); err != nil &&
-			!errors.Is(err, ErrNotFound) && !errors.Is(err, ErrNotStored) && !errors.Is(err, ErrExists) {
-			return nil, err
-		}
-		items = append(items, item)
-		i++
-	}
-	return items, charge
 }

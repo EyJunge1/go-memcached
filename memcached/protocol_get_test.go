@@ -1,7 +1,6 @@
 package memcached
 
 import (
-	"bytes"
 	"errors"
 	"testing"
 	"time"
@@ -9,9 +8,8 @@ import (
 
 func Test_parseValueItems(t *testing.T) {
 	type args struct {
-		lines          [][]byte
-		withoutEndLine bool
-		withCAS        bool
+		lines   [][]byte
+		withCAS bool
 	}
 	tests := []struct {
 		name    string
@@ -29,8 +27,7 @@ func Test_parseValueItems(t *testing.T) {
 					[]byte("value2\r\n"),
 					[]byte("END\r\n"),
 				},
-				withoutEndLine: false,
-				withCAS:        false,
+				withCAS: false,
 			},
 			want: []Item{
 				{
@@ -54,36 +51,7 @@ func Test_parseValueItems(t *testing.T) {
 					[]byte("value2\r\n"),
 					[]byte("END\r\n"),
 				},
-				withoutEndLine: false,
-				withCAS:        true,
-			},
-			want: []Item{
-				{
-					Key:   []byte("key"),
-					Value: []byte("value"),
-					Flags: 123,
-					CAS:   1,
-				},
-				{
-					Key:   []byte("key2"),
-					Value: []byte("value2"),
-					Flags: 123,
-					CAS:   2,
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "without end line",
-			args: args{
-				lines: [][]byte{
-					[]byte("VALUE key 123 5 1\r\n"),
-					[]byte("value\r\n"),
-					[]byte("VALUE key2 123 6 2\r\n"),
-					[]byte("value2\r\n"),
-				},
-				withoutEndLine: true,
-				withCAS:        true,
+				withCAS: true,
 			},
 			want: []Item{
 				{
@@ -109,19 +77,7 @@ func Test_parseValueItems(t *testing.T) {
 					[]byte("value\r\n"),
 					[]byte("END\r\n"),
 				},
-				withoutEndLine: false,
-				withCAS:        false,
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "malformed-2",
-			args: args{
-				lines: [][]byte{
-					[]byte("VALUE key 0 5\r\n"),
-				},
-				withoutEndLine: true,
+				withCAS: false,
 			},
 			want:    nil,
 			wantErr: true,
@@ -134,7 +90,6 @@ func Test_parseValueItems(t *testing.T) {
 					[]byte("ignored\r\n"),
 					[]byte("END\r\n"),
 				},
-				withoutEndLine: false,
 			},
 			want:    nil,
 			wantErr: true,
@@ -142,7 +97,7 @@ func Test_parseValueItems(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseValueItems(tt.args.lines, tt.args.withoutEndLine, tt.args.withCAS)
+			got, err := parseValueItems(tt.args.lines, tt.args.withCAS)
 			if tt.wantErr {
 				isError(t, err)
 				return
@@ -163,7 +118,7 @@ func Test_parseValueItemsPreservesOpaqueValue(t *testing.T) {
 		[]byte("END\r\n"),
 	}
 
-	items, err := parseValueItems(lines, false, false)
+	items, err := parseValueItems(lines, false)
 	noError(t, err)
 	hasLen(t, items, 1)
 	equal(t, value, items[0].Value)
@@ -177,18 +132,10 @@ func Test_encodeGetOneCommand(t *testing.T) {
 	equal(t, []byte("gats 1 k\r\n"), req.raw)
 }
 
-func Test_buildGetAndTouchesCommand(t *testing.T) {
-	req, resp := buildGetAndTouchesCommand("gats", Rel(time.Second), []byte("key1"), []byte("key2"))
-	defer releaseReqAndResp(req, resp)
-
+func Test_encodeGetAndTouchesCommand(t *testing.T) {
+	req := encodeGetAndTouchesCommand("gats", Rel(time.Second), []byte("key1"), []byte("key2"))
+	defer req.release()
 	equal(t, []byte("gats 1 key1 key2\r\n"), req.raw)
-	equal(t, endIndicatorSpecificEndLine, resp.endIndicator)
-	equal(t, _EndCRLFBytes, resp.specEndLine)
-	hasLen(t, resp.rawLines, 0)
-}
-
-func constructParts(raw []byte) [][]byte {
-	return bytes.Split(trimCRLF(raw), []byte(" "))
 }
 
 func Test_parseUintFromBytes(t *testing.T) {
@@ -415,13 +362,13 @@ func Test_buildGetsCommand_setsPickKey(t *testing.T) {
 	isNil(t, req.key)
 }
 
-func Test_buildGetAndTouchesCommand_setsPickKey(t *testing.T) {
-	req, resp := buildGetAndTouchesCommand("gat", Rel(time.Second), []byte("only"))
-	defer releaseReqAndResp(req, resp)
+func Test_encodeGetAndTouchesCommand_setsPickKey(t *testing.T) {
+	req := encodeGetAndTouchesCommand("gat", Rel(time.Second), []byte("only"))
+	defer req.release()
 	equal(t, []byte("only"), req.key)
 
-	req, resp = buildGetAndTouchesCommand("gat", Rel(time.Second), []byte("a"), []byte("b"))
-	defer releaseReqAndResp(req, resp)
+	req = encodeGetAndTouchesCommand("gat", Rel(time.Second), []byte("a"), []byte("b"))
+	defer req.release()
 	isNil(t, req.key)
 }
 

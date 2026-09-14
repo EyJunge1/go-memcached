@@ -61,31 +61,15 @@ func encodeGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) 
 	return b.request(cmd, pickKey(keys))
 }
 
-// buildGetAndTouchesCommand encodes gat/gats and reads until END.
-func buildGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) (*request, *response) {
-	req := encodeGetAndTouchesCommand(command, expiry, keys...)
-	resp := buildSpecEndLineResponse(_EndCRLFBytes, len(keys)*2+1)
-	return req, resp
-}
-
-// parseValueItems reads VALUE/data pairs, optionally ending with END.
-func parseValueItems(lines [][]byte, withoutEndLine, withCAS bool) (_ []Item, err error) {
+// parseValueItems reads VALUE/data pairs ending with END.
+func parseValueItems(lines [][]byte, withCAS bool) (_ []Item, err error) {
 	n := len(lines)
-	if withoutEndLine && n%2 != 0 {
-		return nil, fmt.Errorf("want times of 2 lines, got %d: %w", n, ErrMalformedResponse)
-	}
-	if !withoutEndLine && n%2 == 0 {
+	if n%2 == 0 {
 		return nil, fmt.Errorf("want odd lines, got %d: %w", n, ErrMalformedResponse)
 	}
 
-	var (
-		rn    = n
-		items = make([]Item, 0, (n/2)+1)
-	)
-
-	if !withoutEndLine {
-		rn = n - 1
-	}
+	items := make([]Item, 0, (n/2)+1)
+	rn := n - 1
 
 	for i := 0; i < rn; i += 2 {
 		line := trimCRLF(lines[i])

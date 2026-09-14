@@ -4,86 +4,6 @@ import (
 	"testing"
 )
 
-func Test_parseFlags(t *testing.T) {
-	type args struct {
-		parts    [][]byte
-		startPos int
-		item     *MetaItem
-	}
-	tests := []struct {
-		name string
-		args args
-		want *MetaItem
-	}{
-		{
-			name: "normal",
-			args: args{
-				parts:    constructParts([]byte("HD c26 kZm9v b O456 s3\r\n")),
-				startPos: 1,
-				item:     &MetaItem{},
-			},
-			want: &MetaItem{
-				Key:          []byte("foo"),
-				Value:        nil,
-				CAS:          26,
-				Flags:        0,
-				TTL:          0,
-				LastAccess:   0,
-				Size:         3,
-				Opaque:       []byte("456"),
-				HitBefore:    false,
-				WireKey:      []byte("Zm9v"),
-				KeyBase64:    true,
-				opaqueNum:    456,
-				hasOpaqueNum: true,
-			},
-		},
-		{
-			name: "with flags",
-			args: args{
-				parts:    constructParts([]byte("VA 3 c29 f123 h1 kZm9v b l0 O789 s3 t200\r\n")),
-				startPos: 2,
-				item:     &MetaItem{},
-			},
-			want: &MetaItem{
-				Key:          []byte("foo"),
-				Value:        nil,
-				CAS:          29,
-				Flags:        123,
-				TTL:          200,
-				LastAccess:   0,
-				Size:         3,
-				Opaque:       []byte("789"),
-				HitBefore:    true,
-				WireKey:      []byte("Zm9v"),
-				KeyBase64:    true,
-				opaqueNum:    789,
-				hasOpaqueNum: true,
-			},
-		},
-		{
-			name: "recache WXZ",
-			args: args{
-				parts:    constructParts([]byte("HD W X Z Oopaque\r\n")),
-				startPos: 1,
-				item:     &MetaItem{},
-			},
-			want: &MetaItem{
-				Won:         true,
-				Stale:       true,
-				RecacheBusy: true,
-				Opaque:      []byte("opaque"),
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			noError(t, parseFlags(tt.args.parts, tt.args.startPos, tt.args.item))
-			equal(t, tt.want, tt.args.item)
-		})
-	}
-}
-
 func Test_parseMetaItem(t *testing.T) {
 	type args struct {
 		lines   [][]byte
@@ -189,6 +109,25 @@ func Test_parseMetaItem(t *testing.T) {
 			},
 		},
 		{
+			name: "recache WXZ",
+			args: args{
+				lines: [][]byte{
+					[]byte("HD W X Z Oopaque\r\n"),
+				},
+				item:    &MetaItem{},
+				noReply: false,
+			},
+			wantErr: false,
+			wantItem: &MetaItem{
+				Won:         true,
+				Stale:       true,
+				RecacheBusy: true,
+				Opaque:      []byte("opaque"),
+				status:      MetaStatusHD,
+				gotHD:       true,
+			},
+		},
+		{
 			name: "malformed1: missing data block",
 			args: args{
 				lines: [][]byte{
@@ -217,11 +156,11 @@ func Test_parseMetaItem(t *testing.T) {
 
 func Test_parseMetaItemOpaqueReusesDest(t *testing.T) {
 	item := &MetaItem{Opaque: make([]byte, 0, 16)}
-	noError(t, parseFlags(constructParts([]byte("HD Oopaque\r\n")), 1, item))
+	noError(t, parseMetaItem([][]byte{[]byte("HD Oopaque\r\n")}, item, false, false))
 	equal(t, []byte("opaque"), item.Opaque)
 	equal(t, 16, cap(item.Opaque))
 	line := []byte("HD Oopaque\r\n")
-	noError(t, parseFlags(constructParts(line), 1, item))
+	noError(t, parseMetaItem([][]byte{line}, item, false, false))
 	line[4] = 'X'
 	equal(t, []byte("opaque"), item.Opaque)
 }
@@ -349,21 +288,9 @@ func Test_buildMetaGetCommand_PL(t *testing.T) {
 	equal(t, []byte("mg foo Ph L/p\r\n"), req.raw)
 }
 
-func Test_parseMetaPipeline_flagError(t *testing.T) {
-	_, err := parseMetaPipeline([][]byte{[]byte("HD cxyz\r\n"), _MetaMNCRLFBytes})
-	isErrorIs(t, err, ErrMalformedResponse)
-}
-
-func Test_parseMetaPipeline_chargeKeepsSibling(t *testing.T) {
-	items, err := parseMetaPipeline([][]byte{
-		[]byte("HD O0\r\n"),
-		[]byte("CLIENT_ERROR bad meta\r\n"),
-		_MetaMNCRLFBytes,
-	})
-	isErrorIs(t, err, ErrClientError)
-	hasLen(t, items, 1)
-	equal(t, MetaStatusHD, items[0].status)
-	equal(t, []byte("0"), items[0].Opaque)
+func Test_parseMetaItem_flagError(t *testing.T) {
+	item := &MetaItem{}
+	isErrorIs(t, parseMetaItem([][]byte{[]byte("HD cxyz\r\n")}, item, false, false), ErrMalformedResponse)
 }
 
 func Test_parseMetaItem_quietOnlyMN_LF(t *testing.T) {

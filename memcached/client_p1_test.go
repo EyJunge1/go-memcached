@@ -108,11 +108,11 @@ func TestExpiryTokenThirtyDaysAndMetaT(t *testing.T) {
 	touch, touchResp := buildTouchCommand([]byte("k"), Rel(30*24*time.Hour), false)
 	defer releaseReqAndResp(touch, touchResp)
 	equal(t, []byte("touch k 2592000\r\n"), touch.raw)
-	gat, gatResp := buildGetAndTouchesCommand("gat", Rel(30*24*time.Hour), []byte("k"))
-	defer releaseReqAndResp(gat, gatResp)
+	gat := encodeGetAndTouchesCommand("gat", Rel(30*24*time.Hour), []byte("k"))
+	defer gat.release()
 	equal(t, []byte("gat 2592000 k\r\n"), gat.raw)
-	gats, gatsResp := buildGetAndTouchesCommand("gats", Rel(30*24*time.Hour), []byte("k"))
-	defer releaseReqAndResp(gats, gatsResp)
+	gats := encodeGetAndTouchesCommand("gats", Rel(30*24*time.Hour), []byte("k"))
+	defer gats.release()
 	equal(t, []byte("gats 2592000 k\r\n"), gats.raw)
 }
 
