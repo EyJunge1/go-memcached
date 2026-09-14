@@ -69,10 +69,12 @@ func parseValueItems(lines [][]byte, withCAS bool) (_ []Item, err error) {
 	}
 
 	items := make([]Item, 0, (n/2)+1)
-	rn := n - 1
+	pairs := lines[:n-1]
 
-	for i := 0; i < rn; i += 2 {
-		line := trimCRLF(lines[i])
+	for len(pairs) >= 2 {
+		line := trimCRLF(pairs[0])
+		raw := pairs[1]
+		pairs = pairs[2:]
 		if !bytes.HasPrefix(line, _ValueSpaceBytes) {
 			return nil, fmt.Errorf("unexpected retrieval line: %w", ErrMalformedResponse)
 		}
@@ -83,10 +85,7 @@ func parseValueItems(lines [][]byte, withCAS bool) (_ []Item, err error) {
 			return nil, err
 		}
 
-		if i+1 >= n {
-			return nil, fmt.Errorf("missing data block: %w", ErrMalformedResponse)
-		}
-		item.Value, err = dataBlockValue(lines[i+1], dataLen) //nolint:gosec // G602: i+1 is bounds-checked above
+		item.Value, err = dataBlockValue(raw, dataLen)
 		if err != nil {
 			return nil, err
 		}

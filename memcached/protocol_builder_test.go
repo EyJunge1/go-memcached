@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 )
@@ -217,6 +218,18 @@ func Test_selectProximateDeadline(t *testing.T) {
 			equal(t, tt.wantDeadline, tt.conn.readDeadline)
 		})
 	}
+}
+
+func Test_cappedValueSize(t *testing.T) {
+	n, err := cappedValueSize(4, 0)
+	noError(t, err)
+	equal(t, 4, n)
+
+	_, err = cappedValueSize(8, 4)
+	isErrorIs(t, err, ErrMalformedResponse)
+
+	_, err = cappedValueSize(uint64(math.MaxInt)+1, math.MaxInt)
+	isErrorIs(t, err, ErrMalformedResponse)
 }
 
 func Test_readRetrievalValueContainsCRLFAndEND(t *testing.T) {

@@ -27,8 +27,7 @@ func newAuthProbeKey() []byte {
 	}
 	// Fallback when CSPRNG fails: nanosecond clock plus a monotonic counter.
 	n := authProbeSeq.Add(1)
-	t := uint64(clock().UnixNano()) //nolint:gosec // uniqueness only
-	return []byte(fmt.Sprintf("%s%016x%08x", authProbeKeyPrefix, t, n))
+	return []byte(fmt.Sprintf("%s%016x%08x", authProbeKeyPrefix, clock().UnixNano(), n))
 }
 
 // isAuthProbeKey reports whether key was minted by newAuthProbeKey.

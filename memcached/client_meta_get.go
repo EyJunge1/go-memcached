@@ -211,6 +211,10 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 	if metaOpKinds(op) != 1 {
 		return preparedMetaOp{}, fmt.Errorf("meta op: %w", ErrInvalidArgument)
 	}
+	if idx < 0 {
+		return preparedMetaOp{}, fmt.Errorf("pipeline index: %w", ErrInvalidArgument)
+	}
+	opaque := uint64(idx)
 	key, keyBox := c.nsKey(op.Key)
 	prep := preparedMetaOp{idx: idx, key: key, keyBox: keyBox}
 
@@ -229,7 +233,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
-		if err := ensurePipelineOpaque(&mg, idx); err != nil {
+		if err := ensurePipelineOpaque(&mg, opaque); err != nil {
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
@@ -259,7 +263,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, fmt.Errorf("invalid meta set mode: %w", ErrInvalidArgument)
 		}
-		if err := ensureSetOpaque(&ms, idx); err != nil {
+		if err := ensureSetOpaque(&ms, opaque); err != nil {
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
@@ -286,7 +290,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
-		if err := ensureDeleteOpaque(&md, idx); err != nil {
+		if err := ensureDeleteOpaque(&md, opaque); err != nil {
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
@@ -316,7 +320,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, fmt.Errorf("invalid meta arithmetic mode: %w", ErrInvalidArgument)
 		}
-		if err := ensureArithOpaque(&ma, idx); err != nil {
+		if err := ensureArithOpaque(&ma, opaque); err != nil {
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
@@ -355,53 +359,53 @@ func opaqueToken(tok string, num uint64, set bool) string {
 }
 
 // ensurePipelineOpaque assigns a unique O token for a pipelined mg when the caller omitted one.
-func ensurePipelineOpaque(flags *metaGetFlags, idx int) error {
+func ensurePipelineOpaque(flags *metaGetFlags, idx uint64) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
 	}
 	if flags.Oset {
 		return nil
 	}
-	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.O = idx
 	flags.Oset = true
 	return nil
 }
 
 // ensureSetOpaque assigns a unique O token for a pipelined ms when the caller omitted one.
-func ensureSetOpaque(flags *metaSetFlags, idx int) error {
+func ensureSetOpaque(flags *metaSetFlags, idx uint64) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
 	}
 	if flags.Oset {
 		return nil
 	}
-	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.O = idx
 	flags.Oset = true
 	return nil
 }
 
 // ensureDeleteOpaque assigns a unique O token for a pipelined md when the caller omitted one.
-func ensureDeleteOpaque(flags *metaDeleteFlags, idx int) error {
+func ensureDeleteOpaque(flags *metaDeleteFlags, idx uint64) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
 	}
 	if flags.Oset {
 		return nil
 	}
-	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.O = idx
 	flags.Oset = true
 	return nil
 }
 
 // ensureArithOpaque assigns a unique O token for a pipelined ma when the caller omitted one.
-func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
+func ensureArithOpaque(flags *metaArithmeticFlags, idx uint64) error {
 	if flags.OtokenSet {
 		return validOpaqueToken(flags.Otoken)
 	}
 	if flags.Oset {
 		return nil
 	}
-	flags.O = uint64(idx) //nolint:gosec // G115: pipeline index
+	flags.O = idx
 	flags.Oset = true
 	return nil
 }
@@ -577,14 +581,10 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 		if !hasSize {
 			return fmt.Errorf("missing value size: %w", ErrMalformedResponse)
 		}
-		limit := resp.maxValueBytes
-		if limit <= 0 {
-			limit = defaultMaxValueBytes
+		n, err := cappedValueSize(size, resp.maxValueBytes)
+		if err != nil {
+			return err
 		}
-		if size > uint64(limit) {
-			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
-		}
-		n := int(size) //nolint:gosec // G115: size is bounded above
 		if ok {
 			item.Value = takeValueBuffer(item.Value, n)
 			if err = readFramedValueInto(rr, item.Value); err != nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"time"
 )
@@ -545,6 +546,17 @@ func protocolDataBlockSize(line []byte) (size uint64, has bool, err error) {
 	}
 }
 
+// cappedValueSize converts a protocol body size to int after the configured limit.
+func cappedValueSize(size uint64, limit int) (int, error) {
+	if limit <= 0 {
+		limit = defaultMaxValueBytes
+	}
+	if size > uint64(math.MaxInt) || size > uint64(limit) {
+		return 0, fmt.Errorf("data block too large: %w", ErrMalformedResponse)
+	}
+	return int(size), nil
+}
+
 // appendDataBlock appends a header and its length-framed body, if any.
 func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consumed int, err error) {
 	size, has, err := protocolDataBlockSize(header)
@@ -555,14 +567,14 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 		resp.rawLines = append(resp.rawLines, header)
 		return 1, nil
 	}
-	limit := resp.maxValueBytes
-	if limit <= 0 {
-		limit = defaultMaxValueBytes
+	n, err := cappedValueSize(size, resp.maxValueBytes)
+	if err != nil {
+		return 0, err
 	}
-	if size > uint64(limit) {
+	if n > math.MaxInt-2 {
 		return 0, fmt.Errorf("data block too large: %w", ErrMalformedResponse)
 	}
-	payload, err := rr.readExact(int(size) + 2) //nolint:gosec // G115: size already bounded by maxValueBytes
+	payload, err := rr.readExact(n + 2)
 	if err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return 0, fmt.Errorf("short data block: %w", ErrMalformedResponse)
@@ -719,14 +731,10 @@ func (resp *response) fillMetaItem(rr protocolReader, header []byte) error {
 	if !hasSize {
 		return fmt.Errorf("missing value size: %w", ErrMalformedResponse)
 	}
-	limit := resp.maxValueBytes
-	if limit <= 0 {
-		limit = defaultMaxValueBytes
+	n, err := cappedValueSize(size, resp.maxValueBytes)
+	if err != nil {
+		return err
 	}
-	if size > uint64(limit) {
-		return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
-	}
-	n := int(size) //nolint:gosec // G115: size is bounded above
 	item.Value = takeValueBuffer(item.Value, n)
 	if err = readFramedValueInto(rr, item.Value); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -869,10 +877,6 @@ func discardFramedValueFrom(r io.Reader, n int) error {
 
 // readRetrieval reads VALUE/data pairs until END into getDst.
 func (resp *response) readRetrieval(rr protocolReader) error {
-	limit := resp.maxValueBytes
-	if limit <= 0 {
-		limit = defaultMaxValueBytes
-	}
 	sr, sliceOK := rr.(sliceReader)
 	cursor := 0
 
@@ -897,15 +901,15 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		if err != nil {
 			return err
 		}
-		if dataLen > uint64(limit) {
-			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
+		valueLen, err := cappedValueSize(dataLen, resp.maxValueBytes)
+		if err != nil {
+			return err
 		}
 		slot, err := resp.retrievalSlot(parsed.Key, &cursor)
 		if err != nil {
 			return err
 		}
 
-		valueLen := int(dataLen) //nolint:gosec // G115: dataLen is bounded above
 		slot.Found = true
 		slot.Flags = parsed.Flags
 		slot.CAS = parsed.CAS
