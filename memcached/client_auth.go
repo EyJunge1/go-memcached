@@ -6,28 +6,23 @@ import (
 	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode"
 )
 
 const authProbeKeyPrefix = "__mc_auth_"
 
-var (
-	readAuthRand = crand.Read
-	authProbeSeq atomic.Uint64
-)
+var readAuthRand = crand.Read
 
 // newAuthProbeKey returns a unique key used only for the token-auth handshake probe.
-func newAuthProbeKey() []byte {
+func newAuthProbeKey() ([]byte, error) {
 	var b [8]byte
-	if _, err := readAuthRand(b[:]); err == nil {
-		return []byte(authProbeKeyPrefix + hex.EncodeToString(b[:]))
+	if _, err := readAuthRand(b[:]); err != nil {
+		return nil, fmt.Errorf("auth probe entropy: %w", err)
 	}
-	// Fallback when CSPRNG fails: nanosecond clock plus a monotonic counter.
-	n := authProbeSeq.Add(1)
-	return []byte(fmt.Sprintf("%s%016x%08x", authProbeKeyPrefix, clock().UnixNano(), n))
+	return []byte(authProbeKeyPrefix + hex.EncodeToString(b[:])), nil
 }
 
 // isAuthProbeKey reports whether key was minted by newAuthProbeKey.
@@ -45,6 +40,33 @@ func validAuthSecret(s string) error {
 	return nil
 }
 
+// validateAuthPeer verifies the actual standard-dial peer when plaintext auth
+// relies on the loopback exception. Custom dialers are an explicit trust boundary.
+func validateAuthPeer(cn wireConn, node *addr, rt *runtime) error {
+	if rt == nil || rt.tlsSet || rt.authAllowPlain || rt.customDial ||
+		node == nil || strings.HasPrefix(node.Network, "unix") {
+		return nil
+	}
+	c, ok := cn.(*conn)
+	if !ok || c.addr == nil {
+		return fmt.Errorf("cannot verify plaintext auth peer: %w", ErrInvalidArgument)
+	}
+	var ip net.IP
+	switch a := c.addr.(type) {
+	case *net.TCPAddr:
+		ip = a.IP
+	default:
+		host, _, err := net.SplitHostPort(c.addr.String())
+		if err == nil {
+			ip = net.ParseIP(host)
+		}
+	}
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("plaintext auth peer is not loopback: %w", ErrInvalidArgument)
+	}
+	return nil
+}
+
 // buildAuthCommand encodes the set used to plant the -Y token-auth probe item.
 func buildAuthCommand(username, password string, key []byte) (*request, *response) {
 	payload := []byte(username + " " + password)
@@ -54,7 +76,10 @@ func buildAuthCommand(username, password string, key []byte) (*request, *respons
 // authHandshake runs -Y token auth on a new connection and fails if the probe item remains.
 func authHandshake(ctx context.Context, cn wireConn, user, pass string, writeTimeout, readTimeout time.Duration) error {
 	payload := []byte(user + " " + pass)
-	probeKey := newAuthProbeKey()
+	probeKey, err := newAuthProbeKey()
+	if err != nil {
+		return err
+	}
 	req, resp := buildAuthCommand(user, pass, probeKey)
 	defer releaseReqAndResp(req, resp)
 	resp.afterRecv = mapStorageReply

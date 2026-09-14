@@ -39,7 +39,7 @@ func (c *Client) VersionAll(ctx context.Context, dst *[]NodeVersion) error {
 	}
 	acc := (*dst)[:0]
 	var mu sync.Mutex
-	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
+	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn *wireConn) error {
 		req, resp := buildVersionCommand()
 		defer releaseReqAndResp(req, resp)
 		if err := c.sendOnConn(ctx, node, cn, req, resp); err != nil {

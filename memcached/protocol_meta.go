@@ -4,7 +4,10 @@ import (
 	"fmt"
 )
 
-const maxOpaqueTokenBytes = 32
+const (
+	maxOpaqueTokenBytes = 32
+	maxMetaHintBytes    = 4 << 10
+)
 
 // validMetaHints rejects whitespace or controls in proxy tokens P and L.
 func validMetaHints(p, l string) error {
@@ -17,10 +20,13 @@ func validMetaHints(p, l string) error {
 	return nil
 }
 
-// validMetaHint rejects whitespace or controls in one proxy hint token.
+// validMetaHint rejects whitespace, controls, or overlong proxy hint tokens.
 func validMetaHint(tok string) error {
 	if tok == "" {
 		return nil
+	}
+	if len(tok) > maxMetaHintBytes {
+		return fmt.Errorf("hint token too long: %w", ErrInvalidArgument)
 	}
 	for i := 0; i < len(tok); i++ {
 		if tok[i] <= ' ' || tok[i] == 0x7f {

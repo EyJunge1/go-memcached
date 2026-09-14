@@ -10,7 +10,10 @@ import (
 // Transport and parse failures are the method error. EN, NF, NS, and EX live
 // on dst.Status / dst.Err(); the method error stays nil.
 func (m *MetaClient) Delete(ctx context.Context, key []byte, dst *MetaResult, f MetaDelete) error {
-	c := m.c
+	c, err := m.boundClient()
+	if err != nil {
+		return err
+	}
 	keep, err := prepareMetaDest(dst)
 	if err != nil {
 		return err

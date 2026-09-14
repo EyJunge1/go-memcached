@@ -126,6 +126,12 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	if c.closed.Load() {
 		return ErrClosed
 	}
+	if sameAddrMembership(c.addrs, addrs) {
+		if updateSpec && !c.resolveSpecFixed {
+			c.resolveSpec = formatServerSpec(servers)
+		}
+		return nil
+	}
 
 	next := make(map[string]*connPool, len(addrs))
 	for key, pool := range c.connPools {
@@ -134,6 +140,16 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 			continue
 		}
 		_ = pool.close()
+	}
+	// Clear pool pointers on removed membership so in-flight snapshots do not
+	// keep dialing a closed pool under an opaque errPoolClosed.
+	for _, a := range c.addrs {
+		if a == nil {
+			continue
+		}
+		if _, ok := keep[a.id()]; !ok {
+			a.pool.Store(nil)
+		}
 	}
 
 	c.healthMu.Lock()
@@ -179,11 +195,12 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 // Close stops resolver refresh, cancels persistent fanout work, and closes idle
 // pooled sockets (TCP/Unix send quit first; UDP does not).
 //
-// Close does not cancel an already checked-out single-node call that uses
-// context.Background() together with TimeoutNone; such I/O ends when the peer
-// responds or the caller cancels its own context. Dedicated admin streams
-// (Watch/Dump) likewise require the caller context. After Close, new API calls
-// return ErrClosed.
+// Close does not cancel already checked-out caller work that uses
+// context.Background() together with TimeoutNone. This includes single-node
+// calls, ephemeral fanout (FanoutWorkers == 0), broadcasts, Sessions, and
+// dedicated admin streams. Such work ends when the peer responds or its caller
+// context is canceled. Callers must still close Sessions. After Close, new API
+// calls return ErrClosed.
 func (c *Client) Close() error {
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()

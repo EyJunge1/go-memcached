@@ -16,10 +16,13 @@ import (
 // Transport and parse failures are the method error. EN, NF, NS, and EX live
 // on dst.Status / dst.Err(); the method error stays nil.
 func (m *MetaClient) Get(ctx context.Context, key []byte, dst *MetaResult, f MetaGet) error {
+	c, err := m.boundClient()
+	if err != nil {
+		return err
+	}
 	if dst == nil {
 		return fmt.Errorf("meta get dst: %w", ErrInvalidArgument)
 	}
-	c := m.c
 	if err := f.validate(); err != nil {
 		return err
 	}
@@ -442,10 +445,16 @@ func ensureArithOpaque(flags *metaArithmeticFlags, idx uint64) error {
 // Pipeline runs mixed meta ops, assigns O when missing, appends mn, and fans out by node.
 // len(dst) must equal len(ops). Each dst[i] is filled for ops[i]. Value buffers
 // with enough cap are reused.
-// Transport and parse failures are the method error. EN, NF, NS, and EX live
-// on dst[i].Status / dst[i].Err(); the method error stays nil.
+// Transport failures are the method error. Protocol misses and conflicts
+// (EN, NF, NS, EX) live on dst[i].Status / dst[i].Err().
+// CLIENT_ERROR/SERVER_ERROR after some opaque replies may leave matched
+// siblings populated (per-opaque partial success). ErrMalformedResponse and
+// transport failures clear that node wave's destinations before returning.
 func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResult) error {
-	c := m.c
+	c, err := m.boundClient()
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -613,8 +622,16 @@ func (c *Client) finishMetaPipelineDispatch(
 	resp *response,
 ) error {
 	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
-	if dispatchErr != nil && !resp.metaSawReply && !isChargeMetaFault(dispatchErr) {
+	if dispatchErr != nil && !isChargeMetaFault(dispatchErr) {
+		if resp.metaSawReply {
+			invalidateMetaPipelineDest(c, out, group)
+		}
 		return dispatchErr
+	}
+	// Malformed/desync responses must not leave a mixed success wave; protocol
+	// CLIENT_ERROR/SERVER_ERROR may keep already-matched opaque siblings.
+	if errors.Is(dispatchErr, ErrMalformedResponse) {
+		invalidateMetaPipelineDest(c, out, group)
 	}
 	for _, p := range group {
 		if p.noop {
@@ -641,6 +658,17 @@ func (c *Client) finishMetaPipelineDispatch(
 	return dispatchErr
 }
 
+// invalidateMetaPipelineDest clears slots written by this node wave so a
+// malformed response cannot leave opaque siblings looking successful.
+func invalidateMetaPipelineDest(c *Client, out []MetaResult, group []preparedMetaOp) {
+	for _, p := range group {
+		if p.idx < 0 || p.idx >= len(out) {
+			continue
+		}
+		storeMetaPipelineResult(c, out, p.idx, &p, MetaResult{})
+	}
+}
+
 func metaQuietBarrierLen(f MetaNoop) int {
 	n := len(_MnCRLFBytes)
 	if f.ProxyHint != "" {
@@ -658,24 +686,21 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 	}
 	resp.metaSawReply = true
 	pos, ok := matchMetaPipelineOpaque(header, resp.metaPipeGroup, resp.metaPipeIndex)
-	idx := 0
-	var prep *preparedMetaOp
-	if ok {
-		prep = &resp.metaPipeGroup[pos]
-		idx = prep.idx
-		if metaPipeOpaqueSeen(resp, pos) {
-			return fmt.Errorf("duplicate meta opaque response: %w", ErrMalformedResponse)
+	if !ok {
+		_, hasNum, tok := scanMetaOpaque(header)
+		if hasNum || len(tok) > 0 {
+			return fmt.Errorf("unknown meta opaque response: %w", ErrMalformedResponse)
 		}
-		markMetaPipeOpaqueSeen(resp, pos)
+		return fmt.Errorf("missing meta opaque response: %w", ErrMalformedResponse)
 	}
+	prep := &resp.metaPipeGroup[pos]
+	idx := prep.idx
+	if metaPipeOpaqueSeen(resp, pos) {
+		return fmt.Errorf("duplicate meta opaque response: %w", ErrMalformedResponse)
+	}
+	markMetaPipeOpaqueSeen(resp, pos)
 
-	var item *MetaItem
-	var scratch MetaItem
-	if ok {
-		item = &resp.metaPipeDst[idx].Item
-	} else {
-		item = &scratch
-	}
+	item := &resp.metaPipeDst[idx].Item
 	_, size, hasSize, err := parseMetaHeader(header, item)
 	if err != nil {
 		return err
@@ -691,20 +716,13 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 		if err != nil {
 			return err
 		}
-		if ok {
-			item.Value = takeValueBuffer(item.Value, n)
-			if err = readFramedValueInto(rr, item.Value); err != nil {
-				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-					return fmt.Errorf("short data block: %w", ErrMalformedResponse)
-				}
-				return fmt.Errorf("read data block: %w", err)
+		item.Value = takeValueBuffer(item.Value, n)
+		if err = readFramedValueInto(rr, item.Value); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
 			}
-		} else if err = discardFramedValue(rr, n); err != nil {
-			return err
+			return fmt.Errorf("read data block: %w", err)
 		}
-	}
-	if !ok {
-		return nil
 	}
 	if prep.hasGet {
 		applyCheckCAS(item, &prep.getFlags)

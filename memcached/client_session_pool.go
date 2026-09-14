@@ -38,7 +38,10 @@ func (c *Client) NewSessionPool(ctx context.Context, key []byte, size int) (*Ses
 	if size > maxOpen {
 		return nil, fmt.Errorf("session pool size %d exceeds Pool.MaxOpen %d: %w", size, maxOpen, ErrInvalidArgument)
 	}
-	if err := c.checkKeyValue(key, nil); err != nil {
+	wired, box := c.nsKey(key)
+	err := c.checkKeyValue(wired, nil)
+	putBuilderBox(box)
+	if err != nil {
 		return nil, err
 	}
 	p := &SessionPool{

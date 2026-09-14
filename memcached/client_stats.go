@@ -99,7 +99,7 @@ func (c *Client) StatsAll(ctx context.Context, dst *[]NodeStats, args ...string)
 	sub := strings.Join(args, " ")
 	acc := (*dst)[:0]
 	var mu sync.Mutex
-	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
+	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn *wireConn) error {
 		req, resp := buildStatsCommand(sub)
 		defer releaseReqAndResp(req, resp)
 		var slot []Stat

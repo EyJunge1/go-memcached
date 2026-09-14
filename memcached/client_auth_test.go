@@ -9,31 +9,38 @@ import (
 )
 
 func Test_newAuthProbeKey(t *testing.T) {
-	a := string(newAuthProbeKey())
-	b := string(newAuthProbeKey())
-	isTrue(t, isAuthProbeKey(a))
-	isTrue(t, isAuthProbeKey(b))
-	if a == b {
+	a, err := newAuthProbeKey()
+	noError(t, err)
+	b, err := newAuthProbeKey()
+	noError(t, err)
+	isTrue(t, isAuthProbeKey(string(a)))
+	isTrue(t, isAuthProbeKey(string(b)))
+	if string(a) == string(b) {
 		t.Fatalf("expected unique probe keys, got %q", a)
 	}
 	isFalse(t, isAuthProbeKey("__mc_auth"))
 }
 
-func Test_newAuthProbeKeyFallback(t *testing.T) {
+func Test_newAuthProbeKeyRequiresEntropy(t *testing.T) {
 	orig := readAuthRand
 	readAuthRand = func([]byte) (int, error) { return 0, errors.New("no rand") }
 	t.Cleanup(func() { readAuthRand = orig })
 
-	k1 := string(newAuthProbeKey())
-	k2 := string(newAuthProbeKey())
-	isTrue(t, isAuthProbeKey(k1))
-	isTrue(t, isAuthProbeKey(k2))
-	if k1 == authProbeKeyPrefix+"fallback" || k2 == authProbeKeyPrefix+"fallback" {
-		t.Fatal("constant fallback key")
-	}
-	if k1 == k2 {
-		t.Fatalf("fallback collision %q", k1)
-	}
+	_, err := newAuthProbeKey()
+	isError(t, err)
+}
+
+func TestValidateAuthPeerRequiresActualLoopback(t *testing.T) {
+	rt := &runtime{}
+	node := newAddrWeighted("tcp", "localhost:11211", 0)
+	loopback := &conn{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 11211}}
+	noError(t, validateAuthPeer(loopback, node, rt))
+
+	remote := &conn{addr: &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 11211}}
+	isErrorIs(t, validateAuthPeer(remote, node, rt), ErrInvalidArgument)
+
+	rt.customDial = true
+	noError(t, validateAuthPeer(remote, node, rt))
 }
 
 func TestOpaqueTokenRejectedAndAuth(t *testing.T) {

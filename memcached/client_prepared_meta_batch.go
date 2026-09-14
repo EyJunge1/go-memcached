@@ -50,7 +50,8 @@ type preparedMetaBatchGroup struct {
 // The returned batch owns keys, default set bodies, flags, routing metadata,
 // and wire bytes. dst and its reusable buffers must remain valid until Close.
 func (m *MetaClient) PreparePipeline(ops []MetaOp, dst []MetaResult) (*PreparedMetaBatch, error) {
-	if m == nil || m.c == nil {
+	c, err := m.boundClient()
+	if err != nil || c.closed.Load() {
 		return nil, ErrClosed
 	}
 	if len(ops) != len(dst) {
@@ -58,7 +59,7 @@ func (m *MetaClient) PreparePipeline(ops []MetaOp, dst []MetaResult) (*PreparedM
 			len(dst), len(ops), ErrInvalidArgument)
 	}
 	b := &PreparedMetaBatch{
-		c:         m.c,
+		c:         c,
 		ops:       make([]preparedMetaOp, len(ops)),
 		dst:       dst,
 		valueSlot: make([]int, len(ops)),
@@ -73,7 +74,7 @@ func (m *MetaClient) PreparePipeline(ops []MetaOp, dst []MetaResult) (*PreparedM
 		if op.Set != nil {
 			op.Body = bytes.Clone(op.Body)
 		}
-		prepared, err := encodeMetaPipelineOp(m.c, op, i)
+		prepared, err := encodeMetaPipelineOp(c, op, i)
 		if err != nil {
 			b.release()
 			return nil, err
@@ -171,7 +172,8 @@ func (b *PreparedMetaBatch) run(ctx context.Context, values [][]byte) error {
 	return errors.Join(errs...)
 }
 
-// Close releases retained keys and wire buffers.
+// Close releases retained keys and wire buffers. It returns ErrInvalidArgument
+// when a Run is currently active.
 func (b *PreparedMetaBatch) Close() error {
 	if b == nil || b.closed.Load() {
 		return nil

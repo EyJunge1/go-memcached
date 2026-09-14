@@ -9,10 +9,13 @@ import (
 // Transport and parse failures are the method error. A protocol miss lives
 // on dst.Status / dst.Err(); the method error stays nil.
 func (m *MetaClient) Debug(ctx context.Context, key []byte, dst *MetaItemDebug, f MetaDebug) error {
+	c, err := m.boundClient()
+	if err != nil {
+		return err
+	}
 	if dst == nil {
 		return fmt.Errorf("meta debug dst: %w", ErrInvalidArgument)
 	}
-	c := m.c
 	if err := f.validate(); err != nil {
 		return err
 	}

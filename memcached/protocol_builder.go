@@ -221,6 +221,10 @@ func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
 		return nil
 	}
 	msg := bytes.TrimSpace(bytes.TrimLeft(rest, " :"))
+	const maxServerErrorTextBytes = 4 << 10
+	if len(msg) > maxServerErrorTextBytes {
+		msg = msg[:maxServerErrorTextBytes]
+	}
 	return fmt.Errorf("%s: %w", msg, sentinel)
 }
 

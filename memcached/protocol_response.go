@@ -396,22 +396,6 @@ func (f *byteFrame) buffered() int {
 	return n
 }
 
-func (f *byteFrame) discardFramed(n int) error {
-	if n < 0 {
-		return fmt.Errorf("negative read: %w", ErrMalformedResponse)
-	}
-	need := n + 2
-	if f.off+need > len(f.buf) {
-		return fmt.Errorf("short data block: %w", ErrMalformedResponse)
-	}
-	crlf := f.buf[f.off+n : f.off+need]
-	f.off += need
-	if crlf[0] != '\r' || crlf[1] != '\n' {
-		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
-	}
-	return nil
-}
-
 type wireProtocolReader struct{ c wireConn }
 
 func (w wireProtocolReader) readLine(delim byte) ([]byte, error) {
@@ -919,52 +903,6 @@ func readFramedValueInto(rr protocolReader, dst []byte) error {
 	return nil
 }
 
-func discardFramedValue(rr protocolReader, n int) error {
-	if n < 0 {
-		return fmt.Errorf("negative read: %w", ErrMalformedResponse)
-	}
-	switch r := rr.(type) {
-	case *conn:
-		return discardFramedValueFrom(r.rr, n)
-	case *payloadReader:
-		return discardFramedValueFrom(r.r, n)
-	case *byteFrame:
-		return r.discardFramed(n)
-	default:
-		buf := make([]byte, n)
-		return readFramedValueInto(rr, buf)
-	}
-}
-
-func discardFramedValueFrom(r io.Reader, n int) error {
-	var buf [256]byte
-	left := n
-	for left > 0 {
-		chunk := buf[:]
-		if left < len(chunk) {
-			chunk = buf[:left]
-		}
-		if _, err := io.ReadFull(r, chunk); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
-			}
-			return fmt.Errorf("read data block: %w", err)
-		}
-		left -= len(chunk)
-	}
-	var crlf [2]byte
-	if _, err := io.ReadFull(r, crlf[:]); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return fmt.Errorf("short data block: %w", ErrMalformedResponse)
-		}
-		return fmt.Errorf("read data block: %w", err)
-	}
-	if crlf[0] != '\r' || crlf[1] != '\n' {
-		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
-	}
-	return nil
-}
-
 // readRetrieval reads VALUE/data pairs until END into getDst.
 func (resp *response) readRetrieval(rr protocolReader) error {
 	sr, sliceOK := rr.(sliceReader)
@@ -1004,6 +942,10 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		if err != nil {
 			resp.invalidateRetrievalDest()
 			return err
+		}
+		if slot.Found {
+			resp.invalidateRetrievalDest()
+			return fmt.Errorf("duplicate VALUE for key: %w", ErrMalformedResponse)
 		}
 
 		slot.Found = true

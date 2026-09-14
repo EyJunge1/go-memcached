@@ -32,6 +32,7 @@ type runtime struct {
 	allowSetServers bool
 
 	dialContext DialContextFunc
+	customDial  bool
 
 	tlsConfig        *tls.Config
 	tlsSet           bool
@@ -77,6 +78,7 @@ func runtimeFromConfig(cfg Config) (*runtime, error) {
 		allowSetServers: cfg.AllowSetServers,
 
 		dialContext:   cfg.Transport.Dial,
+		customDial:    cfg.Transport.Dial != nil,
 		keepAlive:     cfg.Transport.KeepAlive,
 		retryAttempts: cfg.Transport.RetryAttempts,
 

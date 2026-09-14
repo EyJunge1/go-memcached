@@ -9,6 +9,9 @@ import (
 
 // Session exclusively holds one pooled stream connection for sequential
 // operations on a single routed node. It must not be used concurrently.
+// Client.Close does not reclaim the checkout; the caller must still call
+// Session.Close. A failover eject can make an operation return
+// ErrInvalidAddress without closing the node-sticky Session.
 type Session struct {
 	c       *Client
 	node    *addr
@@ -356,7 +359,7 @@ func (s *Session) validateKey(key []byte) error {
 }
 
 func (s *Session) execute(ctx context.Context, req *request, resp *response) error {
-	err := s.c.sendOnConn(ctx, s.node, s.cn, req, resp)
+	err := s.c.sendOnConn(ctx, s.node, &s.cn, req, resp)
 	if shouldDiscardConn(err) {
 		s.c.noteFailure(s.node)
 	} else {

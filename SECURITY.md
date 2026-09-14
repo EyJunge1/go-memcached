@@ -30,6 +30,10 @@ advisory for confirmed issues in supported versions as quickly as practical.
 ## Scope Notes
 
 - Default TCP is plaintext. Use `Transport.TLS` / `RequireTLS` for confidentiality.
+- TLS configurations below TLS 1.2 are rejected.
 - UDP provides no authenticity or integrity; IDs are correlation only.
-- A custom `Transport.Dial` is a caller trust boundary for Auth plaintext policy.
-- Unix socket mode checks are best-effort before connect.
+- Plaintext Auth through the standard dialer verifies the connected peer is
+  loopback; a custom `Transport.Dial` remains a caller trust boundary.
+- Unix socket mode checks reject symlinks and world-writable sockets before
+  connect; a TOCTOU race between the check and `Dial` remains possible on the
+  local filesystem.

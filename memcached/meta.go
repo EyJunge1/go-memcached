@@ -128,6 +128,8 @@ type MetaGetReturn struct {
 }
 
 // MetaGet is the flag set for mg.
+// ProxyHint/ProxyPath fields on meta options are wire P/L tokens ignored by
+// memcached and limited to 4 KiB each.
 // CompareCAS, Vivify (create-if-missing TTL), and Touch are pointers: nil drops the flag.
 // Recache is a duration: zero omits R.
 type MetaGet struct {

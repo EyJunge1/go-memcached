@@ -32,10 +32,20 @@ jobs:
             exit 1
           fi
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          ver="${tag#v}"
+          if ! grep -qF "## [${ver}]" CHANGELOG.md; then
+            echo "CHANGELOG.md missing section ## [${ver}]"
+            exit 1
+          fi
+
+  check:
+    name: Pre-release checks
+    needs: validate-tag
+    uses: ./.github/workflows/check.yml
 
   release:
     name: GitHub Release
-    needs: validate-tag
+    needs: [validate-tag, check]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -50,8 +60,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
+          tag="${GITHUB_REF_NAME}"
+          latest_args=(--latest)
+          # Only mark as GitHub "latest" when this tag is the highest SemVer tag.
+          mapfile -t tags < <(git tag -l 'v*.*.*' | sed 's/^v//' | sort -V)
+          highest="v${tags[-1]}"
+          if [[ "$tag" != "$highest" ]]; then
+            latest_args=(--latest=false)
+          fi
+          gh release create "$tag" \
+            --title "$tag" \
             --generate-notes \
             --verify-tag \
-            --latest
+            "${latest_args[@]}"

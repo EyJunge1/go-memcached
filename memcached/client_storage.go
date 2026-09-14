@@ -46,7 +46,8 @@ func storeCommand(mode StoreMode) ([]byte, error) {
 }
 
 // Store sends one text storage command. NOT_STORED, EXISTS, and NOT_FOUND are sentinels.
-// Quiet adds noreply: the connection is discarded after send; CLIENT_ERROR is still returned.
+// Quiet adds noreply: the connection is discarded after send; CLIENT_ERROR and
+// SERVER_ERROR are still returned when the server already replied.
 func (c *Client) Store(ctx context.Context, item Item) error {
 	command, err := storeCommand(item.Mode)
 	if err != nil {

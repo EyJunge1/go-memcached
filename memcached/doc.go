@@ -12,15 +12,21 @@
 // that destination slot is filled again. On a retrieval parse/transport error
 // for one node wave, that wave's destination slots are cleared; successful
 // slots from other nodes may still be populated when the joined error is
-// non-nil (documented partial success).
+// non-nil (documented partial success). Meta().Pipeline keeps per-opaque
+// siblings on CLIENT_ERROR/SERVER_ERROR, but clears the node wave on
+// ErrMalformedResponse or transport failure.
 //
 // Close shuts idle pooled sockets and cancels persistent fanout workers. It
-// does not abort an already checked-out single-node call with TimeoutNone and
-// an uncancellable context. SetServers(nil) clears membership; changing the
-// ring remaps keys and does not migrate data.
+// does not abort already checked-out single-node calls, ephemeral fanout
+// (FanoutWorkers == 0), VersionAll/StatsAll/Admin.All broadcasts, or Sessions
+// when those operations use TimeoutNone and an uncancellable caller context.
+// Callers still own and must close Sessions after Client.Close. SetServers(nil)
+// clears membership; changing the ring remaps keys and does not migrate data.
 //
 // Meta() is the typed meta-protocol surface. Transport and parse failures are
 // the method error; protocol misses and conflicts live on dst.
+// Unknown response flags are ignored for forward compatibility; malformed
+// values of known numeric fields are rejected.
 // Client.Pipeline is a text write-then-read batch for mixed mutations and
 // retrievals. Optional PipelineResult destinations retain each operation's
 // outcome. Pipeline.Prepare creates a reusable prepared execution plan;

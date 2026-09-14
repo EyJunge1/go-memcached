@@ -2,10 +2,13 @@ package memcached
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"math"
+	"net"
 	"testing"
+	"time"
 )
 
 type recordUDPConn struct {
@@ -189,6 +192,77 @@ func Test_nextUDPRequestIDWrapBumpsEpoch(t *testing.T) {
 	equal(t, prev+1, udpRequestEpoch.Load())
 }
 
+func TestVersionAllRotatesUDPBeforeWrappedIDReceive(t *testing.T) {
+	server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	noError(t, err)
+	t.Cleanup(func() { _ = server.Close() })
+
+	oldID := udpRequestID.Load()
+	oldEpoch := udpRequestEpoch.Load()
+	t.Cleanup(func() {
+		udpRequestID.Store(oldID)
+		udpRequestEpoch.Store(oldEpoch)
+	})
+	udpRequestID.Store(41)
+
+	firstDone := make(chan *net.UDPAddr, 1)
+	secondDone := make(chan *net.UDPAddr, 1)
+	go func() {
+		buf := make([]byte, 256)
+		_ = server.SetReadDeadline(time.Now().Add(5 * time.Second))
+		n, first, readErr := server.ReadFromUDP(buf)
+		if readErr != nil || n < udpHeaderSize {
+			return
+		}
+		reply := make([]byte, udpHeaderSize+len("VERSION first\r\n"))
+		copy(reply[:2], buf[:2])
+		binary.BigEndian.PutUint16(reply[4:6], 1)
+		copy(reply[udpHeaderSize:], "VERSION first\r\n")
+		_, _ = server.WriteToUDP(reply, first)
+
+		stale := make([]byte, udpHeaderSize+len("VERSION stale\r\n"))
+		binary.BigEndian.PutUint16(stale[:2], 1)
+		binary.BigEndian.PutUint16(stale[4:6], 1)
+		copy(stale[udpHeaderSize:], "VERSION stale\r\n")
+		_, _ = server.WriteToUDP(stale, first)
+		firstDone <- first
+
+		n, second, readErr := server.ReadFromUDP(buf)
+		if readErr != nil || n < udpHeaderSize {
+			return
+		}
+		reply = make([]byte, udpHeaderSize+len("VERSION second\r\n"))
+		copy(reply[:2], buf[:2])
+		binary.BigEndian.PutUint16(reply[4:6], 1)
+		copy(reply[udpHeaderSize:], "VERSION second\r\n")
+		_, _ = server.WriteToUDP(reply, second)
+		secondDone <- second
+	}()
+
+	client, err := New(Config{Servers: []Server{{
+		Network: "udp",
+		Address: server.LocalAddr().String(),
+	}}})
+	noError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var versions []NodeVersion
+	noError(t, client.VersionAll(ctx, &versions))
+	equal(t, []byte("first"), versions[0].Version)
+	first := <-firstDone
+
+	udpRequestID.Store(math.MaxUint16)
+	versions = versions[:0]
+	noError(t, client.VersionAll(ctx, &versions))
+	equal(t, []byte("second"), versions[0].Version)
+	second := <-secondDone
+	if first.Port == second.Port {
+		t.Fatalf("wrapped request reused UDP socket port %d", first.Port)
+	}
+}
+
 func Test_udpRequestAllowedAllocs(t *testing.T) {
 	req := buildRequest(_GetBytes, []byte("k"), []byte("get k\r\n"))
 	defer req.release()
@@ -215,7 +289,9 @@ func Test_udpMetaRawAllowedAllocs(t *testing.T) {
 }
 
 func Test_udpMetaRawAllowedRejectsSideEffect(t *testing.T) {
-	isErrorIs(t, udpMetaRawAllowed([]byte("mg k T30\r\n")), ErrNotSupported)
+	for _, flag := range []string{"N30", "R30", "T30", "Eabc"} {
+		isErrorIs(t, udpMetaRawAllowed([]byte("mg k "+flag+"\r\n")), ErrNotSupported)
+	}
 	isErrorIs(t, udpMetaRawAllowed([]byte("ms k\r\n")), ErrNotSupported)
 	noError(t, udpMetaRawAllowed([]byte("mg k v\r\n")))
 	noError(t, udpMetaRawAllowed([]byte("mn\r\n")))

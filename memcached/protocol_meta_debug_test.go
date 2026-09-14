@@ -35,6 +35,15 @@ func Test_parseMetaItemDebug_unknownFields(t *testing.T) {
 	isTrue(t, debugField(*item, "exp") == "")
 }
 
+func Test_parseMetaItemDebug_rejectsInvalidKnownNumbers(t *testing.T) {
+	for _, field := range []string{
+		"exp=notint", "la=notint", "cas=notint", "cls=notint", "size=notint",
+	} {
+		line := []byte("ME foo " + field + "\r\n")
+		isErrorIs(t, parseMetaItemDebug([][]byte{line}, &MetaItemDebug{}, false), ErrMalformedResponse)
+	}
+}
+
 func Test_parseMetaItemDebug_binaryKey(t *testing.T) {
 	raw := []byte("hi")
 	wire := base64Encode(raw)

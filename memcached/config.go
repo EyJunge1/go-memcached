@@ -46,6 +46,8 @@ type Server struct {
 // Zero timeouts become DialTimeout 3s and Read/WriteTimeout 5s; RetryAttempts 0 becomes 1.
 // TimeoutNone skips the extra deadline. Dial is the raw socket; a non-nil TLS wraps it.
 type Transport struct {
+	// TLS enables TLS. MinVersion 0 defaults to TLS 1.2; explicit versions
+	// below TLS 1.2 are rejected.
 	TLS               *tls.Config
 	Dial              DialContextFunc
 	DialTimeout       time.Duration // 0 becomes 3s; TimeoutNone skips the extra deadline
@@ -311,6 +313,25 @@ func validateConfig(cfg Config) error {
 	if cfg.Pool.MaxOpen < 0 {
 		return fmt.Errorf("Pool.MaxOpen must be >= 0: %w", ErrInvalidArgument)
 	}
+	if cfg.Pool.MinIdle < 0 {
+		return fmt.Errorf("Pool.MinIdle must be >= 0: %w", ErrInvalidArgument)
+	}
+	maxOpen := cfg.Pool.MaxOpen
+	if maxOpen == 0 {
+		maxOpen = 100
+	}
+	if cfg.Pool.MinIdle > maxOpen {
+		return fmt.Errorf("Pool.MinIdle exceeds MaxOpen: %w", ErrInvalidArgument)
+	}
+	if cfg.Pool.MinIdle > 0 && cfg.Pool.MaxIdle < 0 {
+		return fmt.Errorf("Pool.MinIdle requires idle connections: %w", ErrInvalidArgument)
+	}
+	if cfg.Pool.MaxIdle > 0 && cfg.Pool.MinIdle > cfg.Pool.MaxIdle {
+		return fmt.Errorf("Pool.MinIdle exceeds MaxIdle: %w", ErrInvalidArgument)
+	}
+	if err := validNamespace(cfg.Cluster.Namespace); err != nil {
+		return err
+	}
 	if cfg.Cluster.FanoutWorkers < 0 {
 		return fmt.Errorf("Cluster.FanoutWorkers must be >= 0: %w", ErrInvalidArgument)
 	}
@@ -336,6 +357,11 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.Transport.RequireTLS && cfg.Transport.TLS == nil {
 		return fmt.Errorf("RequireTLS requires Transport.TLS: %w", ErrInvalidArgument)
+	}
+	if cfg.Transport.TLS != nil &&
+		cfg.Transport.TLS.MinVersion != 0 &&
+		cfg.Transport.TLS.MinVersion < tls.VersionTLS12 {
+		return fmt.Errorf("TLS.MinVersion must be TLS 1.2 or newer: %w", ErrInvalidArgument)
 	}
 	if cfg.Transport.TLS != nil && cfg.Transport.TLS.InsecureSkipVerify && !cfg.Transport.AllowInsecureTLS {
 		return fmt.Errorf("%w", ErrInsecureTLS)

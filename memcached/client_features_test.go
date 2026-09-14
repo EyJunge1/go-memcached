@@ -301,6 +301,9 @@ func TestAuthRejectsWrongPassword(t *testing.T) {
 	isErrorIs(t, err, ErrClientError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "authentication failure")
+	if strings.Contains(err.Error(), "wrong") {
+		t.Fatalf("auth error exposed password: %v", err)
+	}
 
 	_, err = doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrClientError)

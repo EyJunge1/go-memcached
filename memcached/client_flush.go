@@ -9,7 +9,8 @@ import (
 )
 
 // FlushOpts sets flush_all delay, cluster stagger, and noreply. Nil Delay runs now and may stagger as Rel(i*Stagger); ExptimeImmediate sends -1.
-// Quiet is text noreply: the connection is discarded after send; CLIENT_ERROR is still returned.
+// Quiet is text noreply: the connection is discarded after send; CLIENT_ERROR and
+// SERVER_ERROR are still returned when the server already replied.
 // Stagger applies only to Admin().All().Flush.
 type FlushOpts struct {
 	Delay   *Exptime

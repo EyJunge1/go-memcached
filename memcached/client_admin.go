@@ -149,7 +149,7 @@ func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *res
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
 	}
-	if err := b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
+	if err := b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn *wireConn) error {
 		req, resp := build()
 		defer releaseReqAndResp(req, resp)
 		if err := b.c.sendOnConn(ctx, node, cn, req, resp); err != nil {

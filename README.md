@@ -35,7 +35,8 @@ client, err := memcached.New(memcached.Config{
 `Transport.Dial` is the raw socket. If `Transport.TLS` is set, the client
 always wraps that socket with `tls.Client` and handshakes — Dial is never a
 silent plaintext escape. `InsecureSkipVerify` requires
-`Transport.AllowInsecureTLS`. `MinVersion == 0` defaults to TLS 1.2.
+`Transport.AllowInsecureTLS`. `MinVersion == 0` defaults to TLS 1.2; explicit
+versions below TLS 1.2 are rejected.
 UDP and TLS together are a `New` error. The default is plaintext: any on-path
 party is a full cache admin.
 
@@ -72,6 +73,10 @@ run without `On`. `All()` is Verbosity, CacheMemLimit, and Flush.
 Watch and dump streams require a context deadline.
 
 **UDP** has no integrity; request IDs help but the path is spoofable.
+
+Unix socket checks reject symlinks even with `UnixSocketAnyMode`; direct
+world-writable sockets require that explicit opt-in. The pre-connect mode check
+remains subject to a local filesystem TOCTOU race.
 
 Without `AllowFlushAll`, `All().Flush` / `On().Flush` return
 `ErrFlushAllNotAllowed` and do not send `flush_all`.

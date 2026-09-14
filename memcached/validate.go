@@ -1,6 +1,9 @@
 package memcached
 
-import "encoding/base64"
+import (
+	"encoding/base64"
+	"fmt"
+)
 
 // validateKeyAndValue checks a text-protocol key and value against the default size limits.
 func validateKeyAndValue(key, value []byte) error {
@@ -22,7 +25,9 @@ func (c *Client) checkKeyValueFlags(key, value []byte, binaryKey bool) error {
 	return validateKeyAndValueFlagsLimit(key, value, binaryKey, c.valueLimit())
 }
 
-// validateKeyAndValueFlagsLimit checks key length, whitespace, and value size; binaryKey skips whitespace and compares Base64(key) to maxKeySize.
+// validateKeyAndValueFlagsLimit checks key length, ASCII whitespace/control
+// bytes, and value size. Other high-bit bytes remain opaque and valid.
+// binaryKey skips byte checks and compares Base64(key) to maxKeySize.
 func validateKeyAndValueFlagsLimit(key, value []byte, binaryKey bool, limit int) error {
 	nKey := len(key)
 	if nKey == 0 {
@@ -50,5 +55,22 @@ func validateKeyAndValueFlagsLimit(key, value []byte, binaryKey bool, limit int)
 		return ErrInvalidValue
 	}
 
+	return nil
+}
+
+// validNamespace rejects Cluster.Namespace values that would break text framing
+// or leave no room for a non-empty key in the 250-byte wire-key budget.
+func validNamespace(ns string) error {
+	if ns == "" {
+		return nil
+	}
+	if len(ns) >= maxKeySize {
+		return fmt.Errorf("namespace too long: %w", ErrInvalidArgument)
+	}
+	for i := 0; i < len(ns); i++ {
+		if ns[i] <= ' ' || ns[i] == 0x7f {
+			return fmt.Errorf("namespace invalid: %w", ErrInvalidArgument)
+		}
+	}
 	return nil
 }

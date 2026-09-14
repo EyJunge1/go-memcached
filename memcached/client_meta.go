@@ -7,6 +7,7 @@ import (
 )
 
 // MetaClient is the mg/ms/md/mn/ma/me API. Get it from Client.Meta.
+// A nil or zero MetaClient returns ErrClosed from its entry methods.
 type MetaClient struct {
 	c *Client
 }
@@ -17,6 +18,13 @@ func (c *Client) Meta() *MetaClient {
 		return nil
 	}
 	return &c.meta
+}
+
+func (m *MetaClient) boundClient() (*Client, error) {
+	if m == nil || m.c == nil {
+		return nil, ErrClosed
+	}
+	return m.c, nil
 }
 
 type metaKeep struct {

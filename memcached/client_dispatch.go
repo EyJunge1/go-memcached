@@ -13,7 +13,12 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 		return nil, ErrClosed
 	}
 	if pool := node.pool.Load(); pool != nil {
-		return c.checkoutPool(ctx, pool)
+		if pool.closed.Load() {
+			// Removed by SetServers/Close: drop the stale pointer and re-resolve membership.
+			node.pool.CompareAndSwap(pool, nil)
+		} else {
+			return c.checkoutPool(ctx, pool)
+		}
 	}
 
 	key := node.id()
@@ -65,6 +70,10 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 				return nil, fmt.Errorf("newConnContext failed: %w", err)
 			}
 			if (c.rt.authUser != "" || c.rt.authPass != "") && !isUDPNetwork(node.Network) {
+				if err = validateAuthPeer(cn, node, c.rt); err != nil {
+					_ = cn.Close()
+					return nil, err
+				}
 				if err = validAuthSecret(c.rt.authUser); err != nil {
 					_ = cn.Close()
 					return nil, err
@@ -114,8 +123,9 @@ func (c *Client) checkoutPool(ctx context.Context, pool *connPool) (wireConn, er
 	return cn, err
 }
 
-// callFunc runs one request on an already checked-out connection.
-type callFunc func(ctx context.Context, node *addr, conn wireConn) error
+// callFunc runs one request on an already checked-out connection. It receives
+// a pointer so UDP epoch rotation can replace the owned checkout safely.
+type callFunc func(ctx context.Context, node *addr, conn *wireConn) error
 
 // wrapTransport marks unclassified I/O failures as ErrTransport.
 func wrapTransport(err error) error {
@@ -214,26 +224,70 @@ func finishConn(cn wireConn, err error) {
 	_ = cn.release()
 }
 
+// udpConnEpochStale reports whether a UDP socket predates the current request-id epoch.
+func udpConnEpochStale(cn wireConn) bool {
+	c, ok := cn.(*conn)
+	if !ok || !isUDPNetwork(c.network) {
+		return false
+	}
+	return c.udpEpoch != udpRequestEpoch.Load()
+}
+
+// rotateUDPConnIfStale discards a pre-wrap UDP socket and checks out a fresh one.
+// The request id must already be assigned so the wrap-request never reads on the old socket.
+func (c *Client) rotateUDPConnIfStale(ctx context.Context, node *addr, cn wireConn) (wireConn, error) {
+	if !udpConnEpochStale(cn) {
+		return cn, nil
+	}
+	if p := cn.getConnPool(); p != nil {
+		_ = p.discard(cn)
+	} else {
+		_ = cn.closeSilent()
+	}
+	fresh, err := c.getConn(ctx, node)
+	if err != nil {
+		return nil, wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
+	}
+	if udpConnEpochStale(fresh) {
+		if p := fresh.getConnPool(); p != nil {
+			_ = p.discard(fresh)
+		} else {
+			_ = fresh.closeSilent()
+		}
+		return nil, wrapTransport(fmt.Errorf("udp epoch rotation failed: %w", ErrTransport))
+	}
+	return fresh, nil
+}
+
 // sendOnConn writes req on an already-checked-out connection and reads resp.
-func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *request, resp *response) error {
+func (c *Client) sendOnConn(ctx context.Context, node *addr, cn *wireConn, req *request, resp *response) error {
+	if cn == nil || *cn == nil {
+		return fmt.Errorf("missing connection: %w", ErrTransport)
+	}
 	c.enableUDPFraming(node, req, resp)
 	if req.udpEnabled {
 		if err := udpRequestAllowed(req); err != nil {
 			return err
 		}
+		fresh, err := c.rotateUDPConnIfStale(ctx, node, *cn)
+		if err != nil {
+			*cn = nil
+			return err
+		}
+		*cn = fresh
 	}
 	if resp != nil {
 		resp.maxValueBytes = c.valueLimit()
 		resp.readTimeout = c.rt.readTimeout
 		resp.readCtx = ctx
-		resp.readConn = cn
+		resp.readConn = *cn
 	}
-	stop := prepareOpIO(ctx, cn, c.rt.readTimeout, c.rt.writeTimeout)
+	stop := prepareOpIO(ctx, *cn, c.rt.readTimeout, c.rt.writeTimeout)
 	defer stop()
-	if err := req.sendReady(ctx, cn); err != nil {
+	if err := req.sendReady(ctx, *cn); err != nil {
 		return wrapTransport(fmt.Errorf("send failed: %w", err))
 	}
-	if err := resp.recvReady(ctx, cn); err != nil {
+	if err := resp.recvReady(ctx, *cn); err != nil {
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 	}
 	if resp.afterRecv != nil {
@@ -241,7 +295,7 @@ func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *r
 			return wrapRecvError(err)
 		}
 	}
-	if err := ensureNoTrailingBytes(cn); err != nil {
+	if err := ensureNoTrailingBytes(*cn); err != nil {
 		return wrapRecvError(err)
 	}
 	return nil
@@ -287,9 +341,9 @@ func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 			}
 
 			var opErr error
-			defer finishDispatch(cn, &opErr)
+			defer func() { finishDispatch(cn, &opErr) }()
 
-			opErr = call(ctx, addr, cn)
+			opErr = call(ctx, addr, &cn)
 			if opErr != nil {
 				c.noteFailure(addr)
 				errCh <- opErr
@@ -317,8 +371,8 @@ func (c *Client) broadcastOne(ctx context.Context, node *addr, call callFunc) er
 		return err
 	}
 	var opErr error
-	defer finishDispatch(cn, &opErr)
-	opErr = call(ctx, node, cn)
+	defer func() { finishDispatch(cn, &opErr) }()
+	opErr = call(ctx, node, &cn)
 	if opErr != nil {
 		c.noteFailure(node)
 		return opErr
@@ -424,11 +478,19 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 	if err != nil {
 		return false, wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
 	}
-	defer finishDispatch(cn, &err)
+	defer func() { finishDispatch(cn, &err) }()
 
 	c.enableUDPFraming(node, req, resp)
 	if req.udpEnabled {
 		if err = udpRequestAllowed(req); err != nil {
+			return false, err
+		}
+		// Allocate the id (and possible epoch bump) before I/O, then ensure the
+		// socket matches the current epoch so a recycled id cannot match a late
+		// datagram still queued on the previous UDP socket.
+		cn, err = c.rotateUDPConnIfStale(ctx, node, cn)
+		if err != nil {
+			cn = nil
 			return false, err
 		}
 	}
@@ -494,11 +556,23 @@ func (c *Client) dialDedicated(ctx context.Context, node *addr) (wireConn, error
 	if err != nil {
 		return nil, fmt.Errorf("newConnContext failed: %w", err)
 	}
+	if c.closed.Load() {
+		_ = cn.Close()
+		return nil, ErrClosed
+	}
 	if c.rt.authUser != "" || c.rt.authPass != "" {
+		if err = validateAuthPeer(cn, node, c.rt); err != nil {
+			_ = cn.Close()
+			return nil, err
+		}
 		if err = authHandshake(ctx, cn, c.rt.authUser, c.rt.authPass, c.rt.writeTimeout, c.rt.readTimeout); err != nil {
 			_ = cn.Close()
 			return nil, err
 		}
+	}
+	if c.closed.Load() {
+		_ = cn.Close()
+		return nil, ErrClosed
 	}
 	return cn, nil
 }

@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"testing"
@@ -386,4 +387,14 @@ func Test_forecastCommonFaultLine(t *testing.T) {
 	equal(t, error(nil), forecastCommonFaultLine([]byte("12\r\n")))
 	equal(t, error(nil), forecastCommonFaultLine([]byte("12 \r\n")))
 	equal(t, error(nil), forecastCommonFaultLine([]byte("NF kfoo\r\n")))
+}
+
+func TestPrefixedProtocolErrorCapsServerText(t *testing.T) {
+	line := append([]byte("SERVER_ERROR "), bytes.Repeat([]byte("x"), (4<<10)+100)...)
+	line = append(line, '\r', '\n')
+	err := prefixedProtocolError(line, "SERVER_ERROR", ErrServerError)
+	isErrorIs(t, err, ErrServerError)
+	if len(err.Error()) > (4<<10)+len(ErrServerError.Error())+3 {
+		t.Fatalf("server error text was not capped: %d bytes", len(err.Error()))
+	}
 }

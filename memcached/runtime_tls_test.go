@@ -37,6 +37,14 @@ func Test_tlsConfigForDial_defaultsMinVersion(t *testing.T) {
 	equal(t, uint16(tls.VersionTLS12), got.MinVersion)
 }
 
+func TestNewRejectsTLSBelowVersion12(t *testing.T) {
+	_, err := New(Config{
+		Servers:   []Server{{Address: "127.0.0.1:11211"}},
+		Transport: Transport{TLS: &tls.Config{MinVersion: tls.VersionTLS11}},
+	})
+	isErrorIs(t, err, ErrInvalidArgument)
+}
+
 func TestNewRejectsMixedUDPAndTCP(t *testing.T) {
 	_, err := New(Config{Servers: []Server{
 		{Address: "127.0.0.1:11211"},

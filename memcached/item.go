@@ -26,7 +26,9 @@ type Item struct {
 	Exp   Exptime
 	// CAS is sent only when Mode is StoreCAS.
 	CAS uint64
-	// Quiet adds noreply. Pipeline.Store rejects Quiet.
+	// Quiet adds noreply. Pipeline.Store rejects Quiet. On Quiet Store/Delete/
+	// Touch the connection is discarded after send; CLIENT_ERROR and
+	// SERVER_ERROR are still returned when the server already replied.
 	Quiet bool
 }
 

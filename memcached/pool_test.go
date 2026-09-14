@@ -631,3 +631,111 @@ func TestCleanerDoesNotExceedMaxOpenUnderGet(t *testing.T) {
 	<-done
 	lessOrEqual(t, int(pool.open.Load()), pool.maxOpen)
 }
+
+func TestConnPoolCloseCancelsCleanerDial(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		pool := newConnPool(1, 2, 0, 0, func(ctx context.Context) (wireConn, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		pool.minIdle = 1
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			// Cleaner calls ensureMinIdle with Background; mergeDialContext still
+			// binds the pool lifecycle so TimeoutNone dials abort on close.
+			pool.ensureMinIdle(context.Background())
+		}()
+		<-started
+		noError(t, pool.close())
+		<-done
+		equal(t, 0, int(pool.open.Load()))
+	})
+}
+
+func TestWarmupRespectsMaxOpenUnderParallelGet(t *testing.T) {
+	var peak atomic.Int32
+	var open atomic.Int32
+	pool := newConnPool(8, 2, 0, 0, func(context.Context) (wireConn, error) {
+		n := open.Add(1)
+		for {
+			cur := peak.Load()
+			if n <= cur || peak.CompareAndSwap(cur, n) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		open.Add(-1)
+		return newMockConn(), nil
+	})
+	pool.minIdle = 8
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			cn, err := pool.get(context.Background())
+			if err != nil {
+				return
+			}
+			_ = pool.put(cn)
+		})
+	}
+	pool.warmup(context.Background(), pool.minIdle)
+	wg.Wait()
+	lessOrEqual(t, int(peak.Load()), pool.maxOpen)
+	lessOrEqual(t, int(pool.open.Load()), pool.maxOpen)
+	noError(t, pool.close())
+}
+
+func TestWarmupStopsWhenPoolClosed(t *testing.T) {
+	started := make(chan struct{})
+	pool := newConnPool(4, 4, 0, 0, func(ctx context.Context) (wireConn, error) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pool.warmup(context.Background(), 4)
+	}()
+	<-started
+	noError(t, pool.close())
+	<-done
+	equal(t, 0, int(pool.open.Load()))
+}
+
+func TestConcurrentPutAndCloseDrainsIdle(t *testing.T) {
+	for range 1000 {
+		pool := newConnPool(1, 1, 0, 0, createConn)
+		cn := newMockConn()
+		cn.setConnPool(pool)
+		pool.open.Store(1)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = pool.put(cn)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = pool.close()
+		}()
+		close(start)
+		wg.Wait()
+
+		equal(t, 0, int(pool.open.Load()))
+		equal(t, 0, len(pool.conns))
+	}
+}

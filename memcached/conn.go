@@ -53,14 +53,17 @@ func applyTCPNoDelay(c net.Conn, on bool) {
 	}
 }
 
-// checkUnixSocketMode rejects a Unix socket that is world-writable or exceeds maxMode.
+// checkUnixSocketMode rejects a Unix socket that is a symlink, world-writable, or exceeds maxMode.
 func checkUnixSocketMode(path string, anyMode bool, maxMode os.FileMode) error {
-	if anyMode && maxMode == 0 {
-		return nil
-	}
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("unix socket: %w", err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unix socket symlink not allowed: %w", ErrInvalidArgument)
+	}
+	if anyMode && maxMode == 0 {
+		return nil
 	}
 	perm := fi.Mode().Perm()
 	if !anyMode && perm&0o002 != 0 {
@@ -559,8 +562,12 @@ func (c *conn) release() error {
 		}
 		return c.closeSilent()
 	}
-	if p := c.pool; p != nil && (p.maxIdleTime > 0 || p.maxLifetime > 0) {
+	p := c.pool
+	if p == nil {
+		return c.closeSilent()
+	}
+	if p.maxIdleTime > 0 || p.maxLifetime > 0 {
 		c.returnedAt = clock()
 	}
-	return c.pool.put(c)
+	return p.put(c)
 }

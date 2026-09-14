@@ -7,6 +7,8 @@ import (
 
 // MutateOpts adds optional noreply on Delete and Touch.
 // Text Incr and Decr have no Quiet; use Meta().Arithmetic with q.
+// Quiet adds noreply: the connection is discarded after send; CLIENT_ERROR and
+// SERVER_ERROR are still returned when the server already replied.
 type MutateOpts struct {
 	Quiet bool
 }

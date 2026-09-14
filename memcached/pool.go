@@ -29,6 +29,10 @@ type connPool struct {
 	waitCh    chan struct{}
 	hasWaiter atomic.Bool
 
+	// lifeCtx is canceled by close so Cleaner/Warmup dials cannot outlive the pool.
+	lifeCtx    context.Context
+	lifeCancel context.CancelFunc
+
 	closedIdleCap  int64
 	closedIdleAge  int64
 	closedLifetime int64
@@ -46,6 +50,7 @@ func newConnPool(
 	if maxOpen > 0 && idleCap > maxOpen {
 		idleCap = maxOpen
 	}
+	lifeCtx, lifeCancel := context.WithCancel(context.Background())
 	p := &connPool{
 		maxIdle:     maxIdle,
 		maxOpen:     maxOpen,
@@ -54,9 +59,28 @@ func newConnPool(
 		conns:       make(chan wireConn, idleCap),
 		createConn:  createConn,
 		closedCh:    make(chan struct{}),
+		lifeCtx:     lifeCtx,
+		lifeCancel:  lifeCancel,
 	}
 
 	return p
+}
+
+// mergeDialContext returns a context canceled when either the caller context or
+// the pool lifecycle ends. The returned cancel must be called.
+func (p *connPool) mergeDialContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	if p.lifeCtx == nil {
+		return ctx, cancel
+	}
+	stop := context.AfterFunc(p.lifeCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // close shuts the pool, drains idle sockets, and wakes waiters.
@@ -69,18 +93,12 @@ func (p *connPool) close() error {
 
 	p.closed.Store(true)
 	close(p.closedCh)
+	if p.lifeCancel != nil {
+		p.lifeCancel()
+	}
 
 	// Drain idle sockets; closing the idle channel would race with lock-free get.
-	for {
-		select {
-		case cn := <-p.conns:
-			_ = cn.Close()
-			p.open.Add(-1)
-		default:
-			goto drained
-		}
-	}
-drained:
+	p.drainIdleLocked()
 
 	if p.cleanerCh != nil {
 		select {
@@ -91,6 +109,19 @@ drained:
 
 	p.mu.Unlock()
 	return nil
+}
+
+// drainIdleLocked closes every currently parked socket. Caller must hold p.mu.
+func (p *connPool) drainIdleLocked() {
+	for {
+		select {
+		case cn := <-p.conns:
+			_ = cn.Close()
+			p.open.Add(-1)
+		default:
+			return
+		}
+	}
 }
 
 // connReusable reports whether cn is still within maxLifetime and maxIdleTime.
@@ -146,6 +177,16 @@ func (p *connPool) signalWaitersLocked() {
 	p.hasWaiter.Store(false)
 }
 
+// reserveOpenSlotLocked increments open when under MaxOpen and the pool is open.
+// Caller must hold p.mu. Returns false when closed or at capacity.
+func (p *connPool) reserveOpenSlotLocked() bool {
+	if p.closed.Load() || int(p.open.Load()) >= p.maxOpen {
+		return false
+	}
+	p.open.Add(1)
+	return true
+}
+
 // get returns an idle reusable conn or dials a new one, waiting if the pool is at maxOpen.
 func (p *connPool) get(ctx context.Context) (wireConn, error) {
 	for {
@@ -196,12 +237,20 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 				return nil, ctx.Err()
 			}
 		}
-		p.open.Add(1)
+		if !p.reserveOpenSlotLocked() {
+			p.mu.Unlock()
+			continue
+		}
 		p.mu.Unlock()
 
-		cn, err := p.createConn(ctx)
+		dialCtx, cancel := p.mergeDialContext(ctx)
+		cn, err := p.createConn(dialCtx)
+		cancel()
 		if err != nil {
 			p.releaseOpen()
+			if p.closed.Load() {
+				return nil, errPoolClosed
+			}
 			return nil, err
 		}
 		cn.setConnPool(p)
@@ -217,7 +266,8 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 	}
 }
 
-// discard closes cn and decrements the open-connection count without returning it to idle.
+// discard closes cn and decrements the open-connection count without returning
+// it to idle. Every checkout must reach exactly one of discard or put.
 func (p *connPool) discard(cn wireConn) error {
 	if cn == nil {
 		return nil
@@ -227,7 +277,8 @@ func (p *connPool) discard(cn wireConn) error {
 	return err
 }
 
-// put parks cn in the idle set or closes it when the pool is closed or at the idle cap.
+// put parks cn in the idle set or closes it when the pool is closed or at the
+// idle cap. Every checkout must reach exactly one of put or discard.
 func (p *connPool) put(cn wireConn) error {
 	if cn == nil {
 		panic("pool: put nil connection")
@@ -243,6 +294,17 @@ func (p *connPool) put(cn wireConn) error {
 	}
 	select {
 	case p.conns <- cn:
+		// A close can set closed and finish its first drain between the check
+		// above and this send. Either close observes this socket, or this
+		// post-send check performs the final drain.
+		if p.closed.Load() {
+			p.mu.Lock()
+			if p.closed.Load() {
+				p.drainIdleLocked()
+			}
+			p.mu.Unlock()
+			return nil
+		}
 		if p.maxLifetime > 0 || p.maxIdleTime > 0 {
 			p.mu.Lock()
 			if !p.closed.Load() {
@@ -280,11 +342,17 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 	}
 
 	t := time.NewTimer(d)
+	defer t.Stop()
 
 	for {
 		select {
 		case <-t.C:
 		case <-p.cleanerCh:
+		case <-p.closedCh:
+			p.mu.Lock()
+			p.cleanerCh = nil
+			p.mu.Unlock()
+			return
 		}
 
 		p.mu.Lock()
@@ -299,7 +367,15 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 		p.mu.Unlock()
 
 		p.closeReaped(closing)
-		p.ensureMinIdle(context.Background())
+		// Bind MinIdle redials to the pool lifecycle so TimeoutNone dials abort on close.
+		p.ensureMinIdle(p.lifeCtx)
+
+		if p.closed.Load() {
+			p.mu.Lock()
+			p.cleanerCh = nil
+			p.mu.Unlock()
+			return
+		}
 
 		if d < minInterval {
 			d = minInterval
@@ -424,18 +500,19 @@ func (p *connPool) stats() *connPoolStats {
 
 // ensureMinIdle dials until the idle set reaches minIdle or the open cap is hit.
 func (p *connPool) ensureMinIdle(ctx context.Context) {
-	if p.minIdle <= 0 {
+	if p.minIdle <= 0 || p.maxIdle <= 0 {
 		return
 	}
 	for {
 		p.mu.Lock()
-		if p.closed.Load() || len(p.conns) >= p.minIdle || int(p.open.Load()) >= p.maxOpen {
+		if p.closed.Load() || len(p.conns) >= p.minIdle || !p.reserveOpenSlotLocked() {
 			p.mu.Unlock()
 			return
 		}
-		p.open.Add(1)
 		p.mu.Unlock()
-		cn, err := p.createConn(ctx)
+		dialCtx, cancel := p.mergeDialContext(ctx)
+		cn, err := p.createConn(dialCtx)
+		cancel()
 		if err != nil {
 			p.releaseOpen()
 			return
@@ -448,16 +525,27 @@ func (p *connPool) ensureMinIdle(ctx context.Context) {
 }
 
 // warmup dials up to n connections and parks them in the idle set.
+// Slots are reserved under the same MaxOpen rule as get/ensureMinIdle.
 func (p *connPool) warmup(ctx context.Context, n int) {
-	if n <= 0 {
+	if n <= 0 || p.maxIdle <= 0 {
 		return
 	}
 	if n > p.maxIdle && p.maxIdle > 0 {
 		n = p.maxIdle
 	}
+	if n > p.maxOpen {
+		n = p.maxOpen
+	}
 	for i := 0; i < n; i++ {
-		p.open.Add(1)
-		cn, err := p.createConn(ctx)
+		p.mu.Lock()
+		if !p.reserveOpenSlotLocked() {
+			p.mu.Unlock()
+			return
+		}
+		p.mu.Unlock()
+		dialCtx, cancel := p.mergeDialContext(ctx)
+		cn, err := p.createConn(dialCtx)
+		cancel()
 		if err != nil {
 			p.releaseOpen()
 			return

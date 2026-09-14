@@ -194,6 +194,9 @@ func (c *Client) startResolverRefresh() {
 				spec := c.resolveSpec
 				c.mu.RUnlock()
 				addrs, err := c.rt.resolver.Resolve(spec)
+				if c.closed.Load() {
+					return
+				}
 				if err != nil {
 					c.setResolverErr(err)
 					continue
@@ -203,6 +206,9 @@ func (c *Client) startResolverRefresh() {
 					continue
 				}
 				if err = c.applyServers(addrsToServers(addrs), false); err != nil {
+					if errors.Is(err, ErrClosed) {
+						return
+					}
 					c.setResolverErr(err)
 					continue
 				}
@@ -219,18 +225,22 @@ func (c *Client) startResolverRefresh() {
 func (c *Client) sameResolvedAddrs(addrs []*addr) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if len(c.addrs) != len(addrs) {
+	return sameAddrMembership(c.addrs, addrs)
+}
+
+func sameAddrMembership(current, next []*addr) bool {
+	if len(current) != len(next) {
 		return false
 	}
-	for i, a := range addrs {
-		current := c.addrs[i]
-		if a == nil || current == nil {
-			if a != current {
+	for i, a := range next {
+		have := current[i]
+		if a == nil || have == nil {
+			if a != have {
 				return false
 			}
 			continue
 		}
-		if a.Network != current.Network || a.Address != current.Address || a.Weight != current.Weight {
+		if a.Network != have.Network || a.Address != have.Address || a.Weight != have.Weight {
 			return false
 		}
 	}

@@ -8,6 +8,9 @@ import (
 // Noop sends mn and writes the outcome into dst. dst must be non-nil.
 // Transport and parse failures are the method error.
 func (m *MetaClient) Noop(ctx context.Context, dst *MetaResult, f MetaNoop) error {
+	if _, err := m.boundClient(); err != nil {
+		return err
+	}
 	keep, err := prepareMetaDest(dst)
 	if err != nil {
 		return err

@@ -7,9 +7,9 @@ import (
 var (
 	// ErrNonexistentCommand matches a bare ERROR line (unknown command).
 	ErrNonexistentCommand = errors.New("nonexistent command")
-	// ErrClientError matches CLIENT_ERROR followed by a message.
+	// ErrClientError matches CLIENT_ERROR followed by at most 4 KiB of server text.
 	ErrClientError = errors.New("client error")
-	// ErrServerError matches SERVER_ERROR followed by a message.
+	// ErrServerError matches SERVER_ERROR followed by at most 4 KiB of server text.
 	ErrServerError = errors.New("server error")
 	// ErrNotFound matches NOT_FOUND and meta EN/NF.
 	ErrNotFound = errors.New("not found")

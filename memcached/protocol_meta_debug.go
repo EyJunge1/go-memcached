@@ -112,11 +112,10 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 	if len(fields) == 0 {
 		return nil
 	}
-	parseMetaDebugFields(fields, item)
-	return nil
+	return parseMetaDebugFields(fields, item)
 }
 
-func parseMetaDebugFields(fields []byte, item *MetaItemDebug) {
+func parseMetaDebugFields(fields []byte, item *MetaItemDebug) error {
 	start := 0
 	for i := 0; i <= len(fields); i++ {
 		if i < len(fields) && fields[i] != ' ' {
@@ -124,38 +123,46 @@ func parseMetaDebugFields(fields []byte, item *MetaItemDebug) {
 		}
 		if i == start {
 			if i == len(fields) {
-				return
+				return nil
 			}
 			start = i + 1
 			continue
 		}
-		applyMetaDebugField(fields[start:i], item)
+		if err := applyMetaDebugField(fields[start:i], item); err != nil {
+			return err
+		}
 		start = i + 1
 	}
+	return nil
 }
 
-func applyMetaDebugField(tok []byte, item *MetaItemDebug) {
+func applyMetaDebugField(tok []byte, item *MetaItemDebug) error {
 	before, after, ok := bytes.Cut(tok, []byte{'='})
 	if !ok {
-		return
+		return nil
 	}
 	key, val := before, after
+	var err error
 	switch {
 	case bytes.Equal(key, _expBytes):
-		item.TTL, _ = parseIntFromBytes(val)
+		item.TTL, err = parseIntFromBytes(val)
 	case bytes.Equal(key, _laBytes):
-		item.LastAccess, _ = parseIntFromBytes(val)
+		item.LastAccess, err = parseIntFromBytes(val)
 	case bytes.Equal(key, _casBytes):
-		item.CAS, _ = parseUintFromBytes(val)
+		item.CAS, err = parseUintFromBytes(val)
 	case bytes.Equal(key, _fetchBytes):
 		item.HitBefore = bytes.Equal(val, _yesBytes)
 	case bytes.Equal(key, _clsBytes):
-		item.SlabClassID, _ = parseUintFromBytes(val)
+		item.SlabClassID, err = parseUintFromBytes(val)
 	case bytes.Equal(key, _sizeBytes):
-		item.Size, _ = parseUintFromBytes(val)
+		item.Size, err = parseUintFromBytes(val)
 	default:
 		item.Fields = appendStatField(item.Fields, key, val)
 	}
+	if err != nil {
+		return fmt.Errorf("invalid meta debug field %s: %w", key, ErrMalformedResponse)
+	}
+	return nil
 }
 
 func appendStatField(dst []DebugField, key, val []byte) []DebugField {
