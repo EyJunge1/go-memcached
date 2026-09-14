@@ -63,14 +63,32 @@ func mustStore(t testing.TB, c *Client, ctx context.Context, key, value []byte) 
 	noError(t, c.Store(ctx, Item{Mode: StoreSet, Key: key, Value: value}))
 }
 
-func mustGet(t *testing.T, c *Client, ctx context.Context, key []byte) Item {
+func mustGet(t *testing.T, c *Client, ctx context.Context, key []byte) GetResult {
 	t.Helper()
-	items, err := c.Get(ctx, [][]byte{key}, GetOpts{})
+	got, err := c.GetOne(ctx, key, GetOpts{})
 	noError(t, err)
-	if len(items) == 0 {
+	if !got.Found {
 		t.Fatalf("get miss for %q", key)
 	}
-	return items[0]
+	return got
+}
+
+func doGet(c *Client, ctx context.Context, keys [][]byte, opts GetOpts) ([]GetResult, error) {
+	dst := make([]GetResult, len(keys))
+	err := c.Get(ctx, keys, dst, opts)
+	return dst, err
+}
+
+func doMetaGet(c *Client, ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
+	var dst MetaResult
+	err := c.Meta().Get(ctx, key, f, &dst)
+	return dst, err
+}
+
+func doMetaPipeline(c *Client, ctx context.Context, ops []MetaOp) ([]MetaResult, error) {
+	dst := make([]MetaResult, len(ops))
+	err := c.Meta().Pipeline(ctx, ops, dst)
+	return dst, err
 }
 
 func expectStore(want error) func(error) error {

@@ -16,7 +16,7 @@ func TestMetaQuietHitReturnsValue(t *testing.T) {
 	_, err := client.Meta().Set(ctx, []byte("k"), []byte("hello\nworld"), MetaSet{})
 	noError(t, err)
 
-	item, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
+	item, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("hello\nworld"), item.Item.Value)
 }
@@ -25,13 +25,13 @@ func TestMetaQuietMissWithValueIsNotFound(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 
-	res, err := client.Meta().Get(context.Background(), []byte("missing"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
+	res, err := doMetaGet(client, context.Background(), []byte("missing"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 
 	_, err = client.Meta().Set(context.Background(), []byte("k"), []byte("v"), MetaSet{})
 	noError(t, err)
-	item, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	item, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), item.Item.Value)
 }
@@ -43,27 +43,27 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	ctx := context.Background()
 	_, err := client.Meta().Set(ctx, []byte("k"), []byte("v"), MetaSet{ReturnCAS: true})
 	noError(t, err)
-	item, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true, Value: true}})
+	item, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true, Value: true}})
 	noError(t, err)
 	cas := item.Item.CAS
-	matched, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}, CompareCAS: &cas})
+	matched, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}, CompareCAS: &cas})
 	noError(t, err)
 	isTrue(t, matched.Item.CASMatched)
 	isNil(t, matched.Item.Value)
 
-	noValue, err := client.Meta().Get(ctx, []byte("k"), MetaGet{CompareCAS: &cas})
+	noValue, err := doMetaGet(client, ctx, []byte("k"), MetaGet{CompareCAS: &cas})
 	noError(t, err)
 	isFalse(t, noValue.Item.CASMatched)
 
 	wrong := cas + 1
-	changed, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}, CompareCAS: &wrong})
+	changed, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}, CompareCAS: &wrong})
 	noError(t, err)
 	equal(t, []byte("v"), changed.Item.Value)
 	isFalse(t, changed.Item.CASMatched)
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a"), Value: []byte("1")}))
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("b"), Value: []byte("2")}))
-	items, err := client.Meta().Pipeline(ctx, []MetaOp{
+	items, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Key: []byte("b"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 	})
@@ -72,13 +72,37 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	equal(t, []byte("1"), items[0].Item.Value)
 	equal(t, []byte("2"), items[1].Item.Value)
 
-	piped, err := client.Meta().Pipeline(ctx, []MetaOp{
+	piped, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("k"), Get: &MetaGet{Return: MetaGetReturn{Value: true}, CompareCAS: &cas}},
 	})
 	noError(t, err)
 	hasLen(t, piped, 1)
 	isTrue(t, piped[0].Item.CASMatched)
 	isNil(t, piped[0].Item.Value)
+}
+
+func TestMetaPipelineReusesValueCap(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("a"), []byte("v"))
+	mustStore(t, client, ctx, []byte("b"), []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
+
+	buf := make([]byte, 0, 32)
+	dst := []MetaResult{{Item: MetaItem{Value: buf}}}
+	ops := []MetaOp{{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}}}
+	noError(t, client.Meta().Pipeline(ctx, ops, dst))
+	noError(t, dst[0].Err())
+	equal(t, []byte("v"), dst[0].Item.Value)
+	equal(t, 32, cap(dst[0].Item.Value))
+	same(t, buf[:1], dst[0].Item.Value[:1])
+
+	ops[0].Key = []byte("b")
+	noError(t, client.Meta().Pipeline(ctx, ops, dst))
+	noError(t, dst[0].Err())
+	equal(t, []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"), dst[0].Item.Value)
+	equal(t, 32, cap(dst[0].Item.Value))
+	same(t, buf[:1], dst[0].Item.Value[:1])
 }
 
 func TestMetaQuietClientErrorThenMN(t *testing.T) {
@@ -90,7 +114,7 @@ func TestMetaQuietClientErrorThenMN(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, err := client.Meta().Get(context.Background(), []byte("cerr"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
+	_, err := doMetaGet(client, context.Background(), []byte("cerr"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
 	isErrorIs(t, err, ErrClientError)
 	_, err = client.Version(context.Background())
 	noError(t, err)
@@ -102,7 +126,7 @@ func TestMetaGetReturnsWireKey(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("foo"), Value: []byte("v")}))
-	got, err := client.Meta().Get(ctx, []byte("foo"), MetaGet{Return: MetaGetReturn{Key: true, Value: true}})
+	got, err := doMetaGet(client, ctx, []byte("foo"), MetaGet{Return: MetaGetReturn{Key: true, Value: true}})
 	noError(t, err)
 	equal(t, []byte("foo"), got.Item.WireKey)
 	equal(t, []byte("foo"), got.Item.Key)
@@ -113,9 +137,9 @@ func TestMetaPipelineRejectsInvalidOp(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	_, err := client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k")}})
+	_, err := doMetaPipeline(client, ctx, []MetaOp{{Key: []byte("k")}})
 	isErrorIs(t, err, ErrInvalidArgument)
-	_, err = client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}, Set: &MetaSet{}}})
+	_, err = doMetaPipeline(client, ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}, Set: &MetaSet{}}})
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -125,7 +149,7 @@ func TestMetaPipelineArithmetic(t *testing.T) {
 	ctx := context.Background()
 	mustStore(t, client, ctx, []byte("n"), []byte("10"))
 
-	got, err := client.Meta().Pipeline(ctx, []MetaOp{
+	got, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("n"), Delta: 3, Arith: &MetaArithmetic{ReturnValue: true}},
 	})
 	noError(t, err)
@@ -145,7 +169,7 @@ func TestMetaPipelineAcrossNodes(t *testing.T) {
 	mustStore(t, client, ctx, []byte("a-one"), []byte("1"))
 	mustStore(t, client, ctx, []byte("b-two"), []byte("2"))
 
-	got, err := client.Meta().Pipeline(ctx, []MetaOp{
+	got, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("a-one"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Key: []byte("b-two"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 	})
@@ -159,13 +183,13 @@ func TestMetaPipelineEmptyAndCanceled(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 
-	got, err := client.Meta().Pipeline(context.Background(), nil)
+	got, err := doMetaPipeline(client, context.Background(), nil)
 	noError(t, err)
 	hasLen(t, got, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
+	_, err = doMetaPipeline(client, ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
 	isErrorIs(t, err, context.Canceled)
 }
 
@@ -198,7 +222,7 @@ func TestMetaPipelineValidateRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := client.Meta().Pipeline(ctx, []MetaOp{tt.op})
+			_, err := doMetaPipeline(client, ctx, []MetaOp{tt.op})
 			isErrorIs(t, err, ErrInvalidArgument)
 		})
 	}
@@ -209,7 +233,7 @@ func TestMetaGetVivifyRoundTrip(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	newCAS := uint64(42)
 
-	res, err := client.Meta().Get(context.Background(), []byte("missing"), MetaGet{
+	res, err := doMetaGet(client, context.Background(), []byte("missing"), MetaGet{
 		Vivify: delayPtr(Rel(time.Second)),
 		NewCAS: &newCAS,
 	})

@@ -250,7 +250,6 @@ func TestNamespacePrefixesWireKey(t *testing.T) {
 
 	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, []byte("v"), item.Value)
-	equal(t, []byte("k"), item.Key)
 }
 
 func TestMinIdleWarmsPool(t *testing.T) {
@@ -443,10 +442,10 @@ func TestCloseDuringGet(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+		_, _ = doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	}()
 	wg.Wait()
 
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrClosed)
 }

@@ -127,7 +127,7 @@ func TestCommandErrorHeldOnGet(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrCommandError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "bad args")
@@ -236,7 +236,7 @@ func TestDumpMidStreamCommandError(t *testing.T) {
 func TestMetaPipelineQuietSetIsHD(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	got, err := client.Meta().Pipeline(context.Background(), []MetaOp{
+	got, err := doMetaPipeline(client, context.Background(), []MetaOp{
 		{Key: []byte("k"), Body: []byte("v"), Set: &MetaSet{}},
 	})
 	noError(t, err)
@@ -257,7 +257,7 @@ func TestGetAcceptsLFOnlyEND(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
 	ver, err := client.Version(context.Background())
 	noError(t, err)
@@ -279,7 +279,7 @@ func TestMetaQuietBarrierAcceptsLFOnlyMN(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	res, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Quiet: true})
+	res, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Quiet: true})
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
@@ -321,7 +321,7 @@ func TestMetaPipelineChargeKeepsSiblingHD(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	got, err := client.Meta().Pipeline(context.Background(), []MetaOp{
+	got, err := doMetaPipeline(client, context.Background(), []MetaOp{
 		{Key: []byte("k"), Del: &MetaDelete{}},
 	})
 	isErrorIs(t, err, ErrClientError)
@@ -415,7 +415,7 @@ func TestMetaPipelineChargeOnlyDoesNotInventHD(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	got, err := client.Meta().Pipeline(context.Background(), []MetaOp{
+	got, err := doMetaPipeline(client, context.Background(), []MetaOp{
 		{Key: []byte("k"), Del: &MetaDelete{}},
 	})
 	isErrorIs(t, err, ErrClientError)
@@ -437,7 +437,7 @@ func TestGetNonexistentCommandHeld(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrNonexistentCommand)
 	isFalse(t, shouldDiscardConn(err))
 	ver, err := client.Version(context.Background())
@@ -458,7 +458,7 @@ func TestGetClientErrorHeld(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad flags")
 	isFalse(t, shouldDiscardConn(err))
@@ -482,7 +482,7 @@ func TestGetAndStoreServerErrorDiscards(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrServerError)
 	isTrue(t, shouldDiscardConn(err))
 	err = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})

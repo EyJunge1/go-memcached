@@ -22,17 +22,8 @@ type metaDeleteFlags struct {
 	L         string
 }
 
-// buildMetaDeleteCommand encodes md <key> <flags>*\r\n.
-func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
-	}
-
-	b := newProtocolBuilder().
-		AddString("md").
-		AddBytes(key)
-	defer b.release()
-
+func writeMetaDelete(b *protocolBuilder, key []byte, flags *metaDeleteFlags) {
+	b.AddString("md").AddBytes(key)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)
@@ -44,8 +35,29 @@ func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *resp
 	b.AddFlagBool("x", flags.x)
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
+	b.AddCRLF()
+}
 
-	req := b.AddCRLF().request(_MdBytes, key)
+func encodeMetaDeleteOwned(key []byte, flags *metaDeleteFlags) (line []byte, box *[]byte) {
+	if flags.b {
+		key = base64Encode(key)
+	}
+	b := newProtocolBuilder()
+	defer b.release()
+	writeMetaDelete(b, key, flags)
+	return b.takeBytes()
+}
+
+// buildMetaDeleteCommand encodes md <key> <flags>*\r\n.
+func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *response) {
+	if flags.b {
+		key = base64Encode(key)
+	}
+
+	b := newProtocolBuilder()
+	defer b.release()
+	writeMetaDelete(b, key, flags)
+	req := b.request(_MdBytes, key)
 
 	var resp *response
 	if flags.q {

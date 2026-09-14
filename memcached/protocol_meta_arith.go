@@ -47,18 +47,8 @@ func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 	}
 }
 
-// buildMetaArithmeticCommand encodes ma <key> <flags>*\r\n. Quiet appends mn.
-func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
-	}
-	flags.D = delta
-
-	b := newProtocolBuilder().
-		AddString("ma").
-		AddBytes(key)
-	defer b.release()
-
+func writeMetaArithmetic(b *protocolBuilder, key []byte, flags *metaArithmeticFlags) {
+	b.AddString("ma").AddBytes(key)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)
@@ -77,8 +67,31 @@ func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticF
 	b.AddFlagBool("k", flags.k)
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
+	b.AddCRLF()
+}
 
-	req := b.AddCRLF().request(_MaBytes, key)
+func encodeMetaArithmeticOwned(key []byte, delta uint64, flags *metaArithmeticFlags) (line []byte, box *[]byte) {
+	if flags.b {
+		key = base64Encode(key)
+	}
+	flags.D = delta
+	b := newProtocolBuilder()
+	defer b.release()
+	writeMetaArithmetic(b, key, flags)
+	return b.takeBytes()
+}
+
+// buildMetaArithmeticCommand encodes ma <key> <flags>*\r\n. Quiet appends mn.
+func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticFlags) (*request, *response) {
+	if flags.b {
+		key = base64Encode(key)
+	}
+	flags.D = delta
+
+	b := newProtocolBuilder()
+	defer b.release()
+	writeMetaArithmetic(b, key, flags)
+	req := b.request(_MaBytes, key)
 
 	var resp *response
 	if flags.q {

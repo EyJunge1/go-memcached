@@ -184,6 +184,7 @@ type setGetter interface {
 type oursSG struct {
 	c   *ours.Client
 	one [1][]byte
+	dst [1]ours.GetResult
 }
 
 func (s *oursSG) set(ctx context.Context, key string, value []byte) error {
@@ -193,11 +194,13 @@ func (s *oursSG) set(ctx context.Context, key string, value []byte) error {
 
 func (s *oursSG) get(ctx context.Context, key string) error {
 	s.one[0] = append(s.one[0][:0], key...)
-	items, err := s.c.Get(ctx, s.one[:], ours.GetOpts{})
-	if err != nil {
+	if cap(s.dst[0].Value) < 4096 {
+		s.dst[0].Value = make([]byte, 0, 4096)
+	}
+	if err := s.c.Get(ctx, s.one[:], s.dst[:], ours.GetOpts{}); err != nil {
 		return err
 	}
-	if len(items) == 0 {
+	if !s.dst[0].Found {
 		return errMiss
 	}
 	return nil

@@ -1,8 +1,20 @@
 package memcached
 
-// Item is a Get hit and the Store / Pipeline.Store payload.
-// Get fills Key, Value, Flags, and CAS; Mode and Quiet stay zero.
-// Get strips Config.Cluster.Namespace from Key.
+// GetResult is one index-aligned Get slot.
+// Found distinguishes a hit from a miss; an empty stored value is Found with
+// len(Value)==0. Get does not copy the key — use keys[i].
+//
+// Reusing the same slot is intended. Value stays valid until this slot is
+// filled again. If Value has enough cap, Get writes into that buffer and the
+// previous slice header that shared it becomes invalid.
+type GetResult struct {
+	Found bool
+	Value []byte
+	Flags uint32
+	CAS   uint64
+}
+
+// Item is the Store / Pipeline.Store payload.
 type Item struct {
 	Mode  StoreMode
 	Key   []byte

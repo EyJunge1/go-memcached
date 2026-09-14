@@ -20,14 +20,14 @@ func TestClassicReadCommandsRoundTrip(t *testing.T) {
 	noError(t, client.Store(ctx, memcached.Item{Mode: memcached.StoreSet, Key: key1, Value: value, Flags: flag}))
 	noError(t, client.Store(ctx, memcached.Item{Mode: memcached.StoreSet, Key: key2, Value: value, Flags: flag}))
 
-	assertItem := func(item memcached.Item) {
+	assertItem := func(item memcached.GetResult) {
 		equal(t, value, item.Value)
 		equal(t, flag, item.Flags)
 	}
 
 	assertItem(mustGet(t, client, ctx, key1))
 
-	items, err := client.Get(ctx, [][]byte{key1, key2}, memcached.GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{key1, key2}, memcached.GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -36,12 +36,12 @@ func TestClassicReadCommandsRoundTrip(t *testing.T) {
 	}
 
 	exp := memcached.Rel(time.Second)
-	items, err = client.Get(ctx, [][]byte{key1}, memcached.GetOpts{Touch: &exp})
+	items, err = doGet(client, ctx, [][]byte{key1}, memcached.GetOpts{Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 1)
 	assertItem(items[0])
 
-	items, err = client.Get(ctx, [][]byte{key1, key2}, memcached.GetOpts{CAS: true, Touch: &exp})
+	items, err = doGet(client, ctx, [][]byte{key1, key2}, memcached.GetOpts{CAS: true, Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -62,7 +62,7 @@ func TestMetaReadRoundTrip(t *testing.T) {
 	noError(t, err)
 	equal(t, flag, stored.Item.Flags)
 
-	item, err := client.Meta().Get(ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true}})
+	item, err := doMetaGet(client, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true}})
 	noError(t, err)
 	equal(t, value, item.Item.Value)
 	equal(t, flag, item.Item.Flags)

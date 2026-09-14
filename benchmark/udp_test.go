@@ -20,16 +20,17 @@ func BenchmarkUDPGet(b *testing.B) {
 		b.Run("ours/"+size.name, func(b *testing.B) {
 			c := newOursUDP(b)
 			ctx := context.Background()
+			var one [1][]byte
+			dst := [1]ours.GetResult{{Value: make([]byte, 0, len(size.val)+8)}}
 			b.ReportAllocs()
 			b.ResetTimer()
 			i := 0
 			for b.Loop() {
-				key := []byte(keys[i%len(keys)])
-				items, err := c.Get(ctx, [][]byte{key}, ours.GetOpts{})
-				if err != nil {
+				one[0] = []byte(keys[i%len(keys)])
+				if err := c.Get(ctx, one[:], dst[:], ours.GetOpts{}); err != nil {
 					b.Fatal(err)
 				}
-				if len(items) == 0 {
+				if !dst[0].Found {
 					b.Fatal(errMiss)
 				}
 				i++
@@ -71,12 +72,13 @@ func BenchmarkUDPMetaGet(b *testing.B) {
 		c := newOursUDP(b)
 		ctx := context.Background()
 		mg := ours.MetaGet{Return: ours.MetaGetReturn{Value: true}}
+		var res ours.MetaResult
+		res.Item.Value = make([]byte, 0, 64)
 		b.ReportAllocs()
 		b.ResetTimer()
 		i := 0
 		for b.Loop() {
-			res, err := c.Meta().Get(ctx, keyBytes[i%len(keyBytes)], mg)
-			if err != nil {
+			if err := c.Meta().Get(ctx, keyBytes[i%len(keyBytes)], mg, &res); err != nil {
 				b.Fatal(err)
 			}
 			if err := res.Err(); err != nil {

@@ -221,12 +221,12 @@ func Test_selectProximateDeadline(t *testing.T) {
 
 func Test_readRetrievalValueContainsCRLFAndEND(t *testing.T) {
 	payload := []byte("VALUE k 0 11\r\nhello\nworld\r\nEND\r\n")
-	resp := buildRetrievalResponse(1, false)
+	dst := make([]GetResult, 1)
+	resp := buildRetrievalResponse([][]byte{[]byte("k")}, nil, dst, false)
 	defer resp.release()
 	noError(t, resp.readRetrieval(newPayloadReader(payload)))
-	hasLen(t, resp.items, 1)
-	equal(t, []byte("hello\nworld"), resp.items[0].Value)
-	equal(t, []byte("k"), resp.items[0].Key)
+	isTrue(t, dst[0].Found)
+	equal(t, []byte("hello\nworld"), dst[0].Value)
 }
 
 func Test_read2ValueContainsCRLFAndEND(t *testing.T) {

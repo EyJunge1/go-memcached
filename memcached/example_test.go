@@ -24,11 +24,11 @@ func Example() {
 	if err := client.Store(ctx, memcached.Item{Key: []byte("key"), Value: []byte("value")}); err != nil {
 		log.Fatal(err)
 	}
-	items, err := client.Get(ctx, [][]byte{[]byte("key")}, memcached.GetOpts{})
+	got, err := client.GetOne(ctx, []byte("key"), memcached.GetOpts{})
 	if err != nil {
 		log.Fatal(err)
 	}
-	_ = items
+	_ = got
 }
 
 func ExampleNew() {
@@ -75,11 +75,12 @@ func ExampleClient_Get() {
 	}
 	defer func() { _ = client.Close() }()
 
-	items, err := client.Get(context.Background(), [][]byte{[]byte("key")}, memcached.GetOpts{})
+	dst := make([]memcached.GetResult, 1)
+	err = client.Get(context.Background(), [][]byte{[]byte("key")}, dst, memcached.GetOpts{})
 	if err != nil {
 		log.Fatal(err)
 	}
-	_ = items
+	_ = dst[0]
 }
 
 func ExampleClient_Close() {
@@ -325,9 +326,10 @@ func ExampleMetaClient_Get() {
 	}
 	defer func() { _ = client.Close() }()
 
-	res, err := client.Meta().Get(context.Background(), []byte("key"), memcached.MetaGet{
+	var res memcached.MetaResult
+	err = client.Meta().Get(context.Background(), []byte("key"), memcached.MetaGet{
 		Return: memcached.MetaGetReturn{Value: true},
-	})
+	}, &res)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -348,11 +350,12 @@ func ExampleMetaClient_Get_recache() {
 
 	ctx := context.Background()
 	vivify := memcached.Rel(30 * time.Second)
-	res, err := client.Meta().Get(ctx, []byte("key"), memcached.MetaGet{
+	var res memcached.MetaResult
+	err = client.Meta().Get(ctx, []byte("key"), memcached.MetaGet{
 		Vivify:  &vivify,
 		Recache: 10 * time.Second,
 		Return:  memcached.MetaGetReturn{Value: true},
-	})
+	}, &res)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -370,10 +373,12 @@ func ExampleMetaClient_Pipeline() {
 	}
 	defer func() { _ = client.Close() }()
 
-	got, err := client.Meta().Pipeline(context.Background(), []memcached.MetaOp{
+	ops := []memcached.MetaOp{
 		{Key: []byte("a"), Get: &memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true}}},
 		{Key: []byte("b"), Set: &memcached.MetaSet{}, Body: []byte("v")},
-	})
+	}
+	got := make([]memcached.MetaResult, len(ops))
+	err = client.Meta().Pipeline(context.Background(), ops, got)
 	if err != nil {
 		log.Fatal(err)
 	}

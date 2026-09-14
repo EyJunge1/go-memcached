@@ -13,13 +13,13 @@ func TestMetaSetModesAndStatus(t *testing.T) {
 	ctx := context.Background()
 	key := liveKey(t, "k")
 
-	res, err := c.Meta().Get(ctx, key, memcached.MetaGet{})
+	res, err := doMetaGet(c, ctx, key, memcached.MetaGet{})
 	noError(t, err)
 	isErrorIs(t, res.Err(), memcached.ErrNotFound)
 
 	_, err = c.Meta().Set(ctx, key, []byte("v"), memcached.MetaSet{Flags: 0x11, ReturnCAS: true})
 	noError(t, err)
-	got, err := c.Meta().Get(ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true, CAS: true, Key: true}})
+	got, err := doMetaGet(c, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true, CAS: true, Key: true}})
 	noError(t, err)
 	noError(t, got.Err())
 	equal(t, []byte("v"), got.Item.Value)
@@ -37,7 +37,7 @@ func TestMetaSetModesAndStatus(t *testing.T) {
 	noError(t, err)
 	_, err = c.Meta().Set(ctx, key, []byte("Y"), memcached.MetaSet{Mode: memcached.MetaSetModeAppend})
 	noError(t, err)
-	got, err = c.Meta().Get(ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, CAS: true}})
+	got, err = doMetaGet(c, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, CAS: true}})
 	noError(t, err)
 	noError(t, got.Err())
 	equal(t, []byte("XvY"), got.Item.Value)
@@ -107,7 +107,7 @@ func TestMetaVivifyRecacheInvalidate(t *testing.T) {
 	key := liveKey(t, "r")
 
 	vivify := memcached.Rel(time.Minute)
-	res, err := c.Meta().Get(ctx, key, memcached.MetaGet{
+	res, err := doMetaGet(c, ctx, key, memcached.MetaGet{
 		Vivify: &vivify,
 		Return: memcached.MetaGetReturn{Value: true, CAS: true},
 	})
@@ -115,7 +115,7 @@ func TestMetaVivifyRecacheInvalidate(t *testing.T) {
 	noError(t, res.Err())
 
 	mustStore(t, c, ctx, key, []byte("fresh"))
-	res, err = c.Meta().Get(ctx, key, memcached.MetaGet{
+	res, err = doMetaGet(c, ctx, key, memcached.MetaGet{
 		Recache: 30 * time.Second,
 		Return:  memcached.MetaGetReturn{Value: true},
 	})

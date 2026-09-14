@@ -109,15 +109,15 @@ func main() {
 	if err := client.Store(ctx, memcached.Item{Key: []byte("key"), Value: []byte("value")}); err != nil {
 		log.Fatal(err)
 	}
-	items, err := client.Get(ctx, [][]byte{[]byte("key")}, memcached.GetOpts{})
+	got, err := client.GetOne(ctx, []byte("key"), memcached.GetOpts{})
 	if err != nil {
 		log.Fatal(err)
 	}
-	_ = items
+	_ = got
 }
 ```
 
-CAS or touch is an option on `Get`, not a second verb: `Get(ctx, keys, memcached.GetOpts{CAS: true})`.
+CAS or touch is an option on `Get`, not a second verb: `Get(ctx, keys, dst, memcached.GetOpts{CAS: true})`.
 
 Address lists with unix/udp/weight use `ParseServers` (not required for the happy path above):
 
@@ -131,11 +131,11 @@ Meta recache (`Vivify` / `Recache` / `Won`) is shown in `ExampleMetaClient_Get_r
 
 The client stores and returns `[]byte` and a `uint32` flags field as-is. Encode (JSON, Protobuf, …) or compress in your application before `Store`; decode after `Get`. The library does not pull serialization or compression dependencies.
 
-Keys are `[]byte` (1–250 bytes, no whitespace or control characters). Meta commands with a binary-key flag skip the whitespace check; the Base64 form on the wire must still be ≤250 bytes. After a get, `Item.Key` is the **caller key**; `Config.Cluster.Namespace` is stripped.
+Keys are `[]byte` (1–250 bytes, no whitespace or control characters). Meta commands with a binary-key flag skip the whitespace check; the Base64 form on the wire must still be ≤250 bytes. `Get` does not copy keys into `GetResult`; use `keys[i]`. `Config.Cluster.Namespace` is applied on the wire only.
 
 Expiration is `Exptime`: `0` never expires; 1..2592000 are relative seconds; larger values are Unix timestamps (32-bit; `UnixExp` rejects values above `MaxInt32`). Negative values are a **client convention** (wire `-1`) that expire immediately; they are not in protocol.txt. Use `Rel(d)` or `UnixExp(t)`. `flush_all` `FlushOpts.Delay` nil omits the token (immediate) and is not the same as item `0` (never). Recache window `R` is remaining TTL seconds (`time.Duration`), not an item `Exptime` and not capped at 30 days. `MetaGet.Recache==0` omits `R`.
 
-`Get` omits missing keys and never returns `ErrNotFound` for an empty result.
+`Get` fills `dst[i]` for `keys[i]`. A miss leaves `Found` false and is not `ErrNotFound`. An empty stored value is `Found` with `len(Value)==0`. Reuse `dst` and a Value buffer with enough cap for the zero-allocation path; `GetOne` is the single-key helper.
 
 `Get` splits keys across cluster nodes and fetches in parallel. `GetOpts.CAS` selects `gets`/`gats`; `GetOpts.Touch` selects `gat`/`gats`. `Store` returns `ErrNotStored` / `ErrExists` / `ErrNotFound` via `errors.Is`. Text `noreply` (`Item.Quiet`, `MutateOpts.Quiet` on Delete/Touch, `FlushOpts.Quiet`) discards the connection and still returns `CLIENT_ERROR`/`SERVER_ERROR` when the server already replied. Text `Incr`/`Decr` always return the new value; quiet arithmetic is `Meta().Arithmetic` plus `q`. `AdminOpts.Quiet` is send-ok only (the server sends nothing once `noreply` is parsed). `Pipeline()` writes every text frame, then reads every reply (`Run`; no text `noreply`; `Item.Quiet` is `ErrInvalidArgument`). Quiet meta stays on `Meta().Pipeline` (`q` plus `mn`). Meta structs accept proxy hints `P`/`L` (`mn` included; a `MetaOp` with `Noop` can put `P`/`L` on the pipeline barrier). Health is `Version` / `VersionAll` plus the error. `SetServers` replaces the node list when `AllowSetServers` is set.
 
@@ -149,7 +149,7 @@ are **not** implemented.
 | ------------------------------------------- | ------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `set` / `add` / `replace` / `cas`           | ✅      | `Store` + `Item.Mode`                                                                    | flags, `Exptime`, bytes; `noreply` via `Item.Quiet`                                                                                                                             |
 | `append` / `prepend`                        | ✅      | `Store` + `StoreAppend` / `StorePrepend`                                                 | wire still has Storage-grammar `0 0` (server ignores them)                                                                                                                      |
-| `get` / `gets` / `gat` / `gats`             | ✅      | `Get` + `GetOpts`                                                                        | multi-key in one request per node; miss omitted; `CAS` → `gets`/`gats`; `Touch` → `gat`/`gats` (TCP-only)                                                                       |
+| `get` / `gets` / `gat` / `gats`             | ✅      | `Get` / `GetOne` + `GetOpts`                                                             | `Get` fills `dst` index-aligned; miss is `!Found`; `CAS` → `gets`/`gats`; `Touch` → `gat`/`gats` (TCP-only)                                                                     |
 | `delete` / `incr` / `decr` / `touch`        | ✅      | typed; `MutateOpts.Quiet` on delete/touch                                                | `Quiet` → `noreply`; Incr/Decr always return the number; quiet arith via `Meta().Arithmetic` + `q`                                                                              |
 | `mg` / `ms` / `md` / `ma` / `me` / `mn`     | ✅      | `Meta().Get` / `Set` / `Delete` / `Arithmetic` / `Debug` / `Noop`                        | every documented request flag (`b c C f F h k l O q s t u v E N R T I M J D x P L`) and response extras (`W X Z`); statuses HD/VA/EN/NF/NS/EX/MN/ME; `q` always pairs with `mn` |
 | Recache                                     | ✅      | `MetaGet.Vivify` / `MetaGet.Recache` / `MetaDelete.Invalidate`                           | `mg N` / `mg R` (Duration, no 30-day cap) / `md I T`                                                                                                                            |

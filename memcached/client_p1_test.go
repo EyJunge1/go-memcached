@@ -160,7 +160,7 @@ func TestCancelDuringValueBodyDiscardsConn(t *testing.T) {
 		cfg.Transport.ReadTimeout = time.Second
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
-	_, err = client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
+	_, err = doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	cancel()
 	isError(t, err)
 	_, err = client.Version(context.Background())
@@ -222,7 +222,7 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a"), Value: []byte("1")}))
-	got, err := client.Meta().Pipeline(ctx, []MetaOp{
+	got, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Noop: &MetaNoop{P: "hint", L: "/path"}},
 	})
@@ -359,9 +359,10 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 	err = client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v"), Quiet: true})
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad command line")
-	items, err := client.Get(ctx, [][]byte{[]byte("missing")}, GetOpts{})
+	items, err := doGet(client, ctx, [][]byte{[]byte("missing")}, GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
+	hasLen(t, items, 1)
+	isFalse(t, items[0].Found)
 	ver, err := client.Version(ctx)
 	noError(t, err)
 	equal(t, "after-quiet", ver)
@@ -373,7 +374,7 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 func TestMetaPipelineRejectsDuplicateOpaque(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	_, err := client.Meta().Pipeline(context.Background(), []MetaOp{
+	_, err := doMetaPipeline(client, context.Background(), []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Opaque: "same"}},
 		{Key: []byte("b"), Get: &MetaGet{Opaque: "same"}},
 	})

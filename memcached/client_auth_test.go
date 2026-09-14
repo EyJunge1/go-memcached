@@ -42,7 +42,7 @@ func TestOpaqueTokenRejectedAndAuth(t *testing.T) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
 
-	_, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
+	_, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
@@ -73,9 +73,10 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 		}
 	}
 	srv.mu.Unlock()
-	items, err := plain.Get(context.Background(), [][]byte{[]byte("__mc_auth")}, GetOpts{})
+	items, err := doGet(plain, context.Background(), [][]byte{[]byte("__mc_auth")}, GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
+	hasLen(t, items, 1)
+	isFalse(t, items[0].Found)
 }
 
 func TestAuthLeavesUnrelatedProbeKey(t *testing.T) {

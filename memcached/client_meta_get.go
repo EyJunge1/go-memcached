@@ -5,43 +5,97 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"sync"
 )
 
-// stripTrailingMN removes a trailing mn\r\n so a pipelined command can share one barrier.
-func stripTrailingMN(raw []byte) []byte {
-	return bytes.TrimSuffix(raw, _MnCRLFBytes)
-}
-
-// Get sends mg for key using flags f.
-func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
+// Get sends mg for key using flags f and writes the outcome into dst.
+// dst must be non-nil. If dst.Item.Value has enough cap, a VA body is written
+// there. Key is copied only when f.Return.Key is set.
+func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet, dst *MetaResult) error {
+	if dst == nil {
+		return fmt.Errorf("meta get dst: %w", ErrInvalidArgument)
+	}
 	c := m.c
 	if err := f.validate(); err != nil {
-		return MetaResult{}, err
+		return err
 	}
 	mgFlags := f.toFlags()
 	key = c.nsBytes(key)
 	if err := c.checkKeyValueFlags(key, nil, mgFlags.b); err != nil {
-		return MetaResult{}, err
+		return err
 	}
 	if mgFlags.OtokenSet {
 		if err := validOpaqueToken(mgFlags.Otoken); err != nil {
-			return MetaResult{}, err
+			return err
 		}
 	}
 
+	keep := dst.Item.Value
+	*dst = MetaResult{}
+	item := MetaItem{Value: keep}
 	req, resp := buildMetaGetCommand(key, &mgFlags)
+	resp.metaItem = &item
 	defer releaseReqAndResp(req, resp)
 
-	item := MetaItem{Key: key}
-	res, err := finishMetaParse(&item, c.dispatchRequest(ctx, req, resp), parseMetaItem(resp.rawLines, &item, mgFlags.q, true))
+	dispatchErr := c.dispatchRequest(ctx, req, resp)
+	parseErr := error(nil)
+	if resp.metaFilled {
+		parseErr = metaItemStatusErr(&item, mgFlags.q, true)
+	} else {
+		parseErr = parseMetaItem(resp.rawLines, &item, mgFlags.q, true)
+	}
+	res, err := finishMetaParse(&item, dispatchErr, parseErr)
 	if err != nil {
-		return MetaResult{}, err
+		*dst = MetaResult{}
+		dst.Item.Value = keep
+		return err
 	}
 	applyCheckCAS(&item, &mgFlags)
 	res.Item.CASMatched = item.CASMatched
-	return res, nil
+	if !f.Return.Key {
+		res.Item.Key = nil
+		res.Item.WireKey = nil
+	} else if len(res.Item.Key) == 0 {
+		res.Item.Key = append([]byte(nil), c.stripNS(key)...)
+	} else if c.hasNS() {
+		res.Item.Key = c.stripNS(res.Item.Key)
+	}
+	*dst = res
+	return nil
+}
+
+func metaItemStatusErr(item *MetaItem, noReply, quietMissAsNotFound bool) error {
+	if item == nil {
+		return fmt.Errorf("missing response: %w", ErrMalformedResponse)
+	}
+	switch item.status {
+	case MetaStatusNF, MetaStatusEN:
+		return ErrNotFound
+	case MetaStatusNS:
+		return ErrNotStored
+	case MetaStatusEX:
+		return ErrExists
+	case MetaStatusHD:
+		item.gotHD = true
+		return nil
+	case MetaStatusVA, MetaStatusMN, MetaStatusME:
+		return nil
+	case MetaStatusUnknown:
+		if noReply && len(item.Value) == 0 && !item.gotHD {
+			if quietMissAsNotFound {
+				item.status = MetaStatusEN
+				return ErrNotFound
+			}
+			item.status = MetaStatusHD
+			item.gotHD = true
+			return nil
+		}
+		return fmt.Errorf("missing response: %w", ErrMalformedResponse)
+	default:
+		return nil
+	}
 }
 
 // applyCheckCAS sets CASMatched when mg used C and the server returned HD without a value.
@@ -54,18 +108,21 @@ func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
 
 // preparedMetaOp is one encoded Meta().Pipeline step plus its opaque token.
 type preparedMetaOp struct {
-	idx      int
-	key      []byte
-	cmd      []byte
-	line     []byte
-	lineBox  *[]byte
-	tok      string
-	tokNum   uint64
-	hasTok   bool
-	getFlags metaGetFlags
-	hasGet   bool
-	noop     bool
-	barrier  MetaNoop
+	idx       int
+	key       []byte
+	cmd       []byte
+	line      []byte
+	body      []byte
+	tail      []byte
+	lineBox   *[]byte
+	tok       string
+	tokNum    uint64
+	hasTok    bool
+	getFlags  metaGetFlags
+	hasGet    bool
+	returnKey bool
+	noop      bool
+	barrier   MetaNoop
 }
 
 // metaOpKinds counts how many of Get, Set, Del, Arith, and Noop are set on op.
@@ -122,6 +179,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.hasTok = mg.Oset || mg.OtokenSet
 		prep.getFlags = mg
 		prep.hasGet = true
+		prep.returnKey = f.Return.Key
 	case op.Set != nil:
 		f := *op.Set
 		ms := f.toFlags()
@@ -138,15 +196,17 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if err := ensureSetOpaque(&ms, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		req, resp := buildMetaSetCommand(key, op.Body, &ms)
-		line := stripTrailingMN(append([]byte(nil), req.wire()...))
-		releaseReqAndResp(req, resp)
+		header, box, body, tail := encodeMetaSetOwned(key, op.Body, &ms)
 		prep.cmd = _MsBytes
-		prep.line = line
+		prep.line = header
+		prep.lineBox = box
+		prep.body = body
+		prep.tail = tail
 		prep.tok = opaqueToken(ms.Otoken, ms.O, ms.OtokenSet)
 		prep.tokNum = ms.O
 		prep.hasTok = ms.Oset || ms.OtokenSet
 		prep.key = key
+		prep.returnKey = f.ReturnKey
 	case op.Del != nil:
 		f := *op.Del
 		if err := f.validate(); err != nil {
@@ -160,14 +220,14 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if err := ensureDeleteOpaque(&md, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		req, resp := buildMetaDeleteCommand(key, &md)
-		line := stripTrailingMN(append([]byte(nil), req.raw...))
-		releaseReqAndResp(req, resp)
+		line, box := encodeMetaDeleteOwned(key, &md)
 		prep.cmd = _MdBytes
 		prep.line = line
+		prep.lineBox = box
 		prep.tok = opaqueToken(md.Otoken, md.O, md.OtokenSet)
 		prep.tokNum = md.O
 		prep.hasTok = md.Oset || md.OtokenSet
+		prep.returnKey = f.ReturnKey
 	case op.Arith != nil:
 		f := *op.Arith
 		if err := f.validate(); err != nil {
@@ -186,14 +246,14 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		if err := ensureArithOpaque(&ma, idx); err != nil {
 			return preparedMetaOp{}, err
 		}
-		req, resp := buildMetaArithmeticCommand(key, op.Delta, &ma)
-		line := stripTrailingMN(append([]byte(nil), req.raw...))
-		releaseReqAndResp(req, resp)
+		line, box := encodeMetaArithmeticOwned(key, op.Delta, &ma)
 		prep.cmd = _MaBytes
 		prep.line = line
+		prep.lineBox = box
 		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.OtokenSet)
 		prep.tokNum = ma.O
 		prep.hasTok = ma.Oset || ma.OtokenSet
+		prep.returnKey = f.ReturnKey
 	case op.Noop != nil:
 		// The batch already ends with mn; another mn would make the barrier reader stop early.
 		f := *op.Noop
@@ -272,56 +332,64 @@ func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
 }
 
 // Pipeline runs mixed meta ops, assigns O when missing, appends mn, and fans out by node.
-func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, error) {
+// len(dst) must equal len(ops). Each dst[i] is filled for ops[i]. Value buffers
+// with enough cap are reused.
+func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResult) error {
 	c := m.c
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
+	}
+	if len(ops) != len(dst) {
+		return fmt.Errorf("meta pipeline dst length %d != ops %d: %w", len(dst), len(ops), ErrInvalidArgument)
 	}
 	if len(ops) == 0 {
-		return []MetaResult{}, nil
+		return nil
+	}
+	for i := range dst {
+		keep := dst[i].Item.Value
+		dst[i] = MetaResult{}
+		if keep != nil {
+			dst[i].Item.Value = keep[:0]
+		}
 	}
 
 	prepared := make([]preparedMetaOp, 0, len(ops))
-	out := make([]MetaResult, len(ops))
+	out := dst
 	for i, op := range ops {
 		p, err := encodeMetaPipelineOp(c, op, i)
 		if err != nil {
 			for _, prev := range prepared {
 				putBuilderBox(prev.lineBox)
 			}
-			return nil, err
+			return err
 		}
 		prepared = append(prepared, p)
-		out[i] = MetaResult{Item: MetaItem{Key: p.key}}
+		if p.returnKey {
+			out[i].Item.Key = p.key
+		}
 	}
 
 	addrs, picker := c.snapshotCluster()
 	if picker == nil || len(addrs) == 0 {
-		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
+		return fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
 	addrs = c.liveAddrs(addrs)
 	if len(addrs) == 1 {
-		if err := c.metaPipelineDispatch(ctx, addrs[0], prepared, out); err != nil {
-			return out, err
-		}
-		return out, nil
+		return c.metaPipelineDispatch(ctx, addrs[0], prepared, out)
 	}
 
 	groups := make(map[*addr][]preparedMetaOp, len(addrs))
 	for _, p := range prepared {
 		addr, err := picker.Pick(addrs, p.key)
 		if err != nil {
-			return nil, fmt.Errorf("pick node failed: %w", err)
+			return fmt.Errorf("pick node failed: %w", err)
 		}
 		groups[addr] = append(groups[addr], p)
 	}
 
 	if len(groups) == 1 {
 		for addr, group := range groups {
-			if err := c.metaPipelineDispatch(ctx, addr, group, out); err != nil {
-				return out, err
-			}
-			return out, nil
+			return c.metaPipelineDispatch(ctx, addr, group, out)
 		}
 	}
 
@@ -340,7 +408,7 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp) ([]MetaResult, 
 		})
 	}
 	wg.Wait()
-	return out, errors.Join(errs...)
+	return errors.Join(errs...)
 }
 
 // metaPipelineDispatch writes a node's quiet meta batch, then maps replies onto out by opaque.
@@ -351,6 +419,8 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	for i := range group {
 		p := &group[i]
 		raw = append(raw, p.line...)
+		raw = append(raw, p.body...)
+		raw = append(raw, p.tail...)
 		putBuilderBox(p.lineBox)
 		p.lineBox = nil
 		if p.noop {
@@ -371,56 +441,110 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 
 	req := buildRequest(group[0].cmd, group[0].key, raw)
 	resp := buildQuietBarrierResponse()
+	resp.metaPipeC = c
+	resp.metaPipeDst = out
+	resp.metaPipeGroup = group
+	resp.metaPipeByOpaque = byOpaque
 	defer releaseReqAndResp(req, resp)
 
 	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
-	if dispatchErr != nil && len(resp.rawLines) == 0 {
+	if dispatchErr != nil && !resp.metaSawReply && !isChargeMetaFault(dispatchErr) {
 		return dispatchErr
-	}
-	parsed, parseErr := parseMetaPipeline(resp.rawLines)
-	if parseErr != nil && dispatchErr == nil {
-		dispatchErr = parseErr
 	}
 	for _, p := range group {
 		if p.noop {
-			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key}}
+			storeMetaPipelineResult(c, out, p.idx, &p, MetaResult{Status: MetaStatusMN})
 		}
-	}
-	for i := range parsed {
-		item := &parsed[i]
-		idx, ok := matchMetaPipelineOp(item, group, byOpaque)
-		if !ok {
-			continue
-		}
-		if len(item.Key) == 0 {
-			item.Key = out[idx].Item.Key
-		}
-		for _, p := range group {
-			if p.idx == idx && p.hasGet {
-				applyCheckCAS(item, &p.getFlags)
-				break
-			}
-		}
-		out[idx] = metaResultFrom(item, item.status)
 	}
 	for _, p := range group {
 		if out[p.idx].Status != MetaStatusUnknown {
 			continue
 		}
 		if isChargeMetaFault(dispatchErr) {
-			out[p.idx] = metaResultWithErr(&MetaItem{Key: p.key}, MetaStatusUnknown, dispatchErr)
+			storeMetaPipelineResult(c, out, p.idx, &p, metaResultWithErr(nil, MetaStatusUnknown, dispatchErr))
 			continue
 		}
 		switch {
 		case p.noop:
-			out[p.idx] = MetaResult{Status: MetaStatusMN, Item: MetaItem{Key: p.key}}
+			storeMetaPipelineResult(c, out, p.idx, &p, MetaResult{Status: MetaStatusMN})
 		case bytes.Equal(p.cmd, _MgBytes):
-			out[p.idx] = MetaResult{Status: MetaStatusEN, Item: MetaItem{Key: p.key}}
+			storeMetaPipelineResult(c, out, p.idx, &p, MetaResult{Status: MetaStatusEN})
 		default:
-			out[p.idx] = MetaResult{Status: MetaStatusHD, Item: MetaItem{Key: p.key}}
+			storeMetaPipelineResult(c, out, p.idx, &p, MetaResult{Status: MetaStatusHD})
 		}
 	}
 	return dispatchErr
+}
+
+func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
+	if resp == nil || resp.metaPipeDst == nil {
+		return fmt.Errorf("missing meta pipeline dest: %w", ErrMalformedResponse)
+	}
+	resp.metaSawReply = true
+	var item MetaItem
+	_, size, hasSize, err := parseMetaHeader(header, &item)
+	if err != nil {
+		return err
+	}
+	if item.status == MetaStatusHD {
+		item.gotHD = true
+	}
+	idx, ok := matchMetaPipelineOp(&item, resp.metaPipeGroup, resp.metaPipeByOpaque)
+	if item.status == MetaStatusVA {
+		if !hasSize {
+			return fmt.Errorf("missing value size: %w", ErrMalformedResponse)
+		}
+		limit := resp.maxValueBytes
+		if limit <= 0 {
+			limit = defaultMaxValueBytes
+		}
+		if size > uint64(limit) {
+			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
+		}
+		n := int(size) //nolint:gosec // G115: size is bounded above
+		if ok {
+			keep := resp.metaPipeDst[idx].Item.Value
+			buf := takeValueBuffer(keep, n)
+			if err = readFramedValueInto(rr, buf); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					return fmt.Errorf("short data block: %w", ErrMalformedResponse)
+				}
+				return fmt.Errorf("read data block: %w", err)
+			}
+			item.Value = buf
+		} else if err = discardFramedValue(rr, n); err != nil {
+			return err
+		}
+	}
+	if !ok {
+		return nil
+	}
+	var prep *preparedMetaOp
+	for i := range resp.metaPipeGroup {
+		if resp.metaPipeGroup[i].idx == idx {
+			prep = &resp.metaPipeGroup[i]
+			if prep.hasGet {
+				applyCheckCAS(&item, &prep.getFlags)
+			}
+			break
+		}
+	}
+	storeMetaPipelineResult(resp.metaPipeC, resp.metaPipeDst, idx, prep, metaResultFrom(&item, item.status))
+	return nil
+}
+
+func storeMetaPipelineResult(c *Client, out []MetaResult, idx int, p *preparedMetaOp, res MetaResult) {
+	keep := out[idx].Item.Value
+	if p == nil || !p.returnKey {
+		res.Item.Key = nil
+		res.Item.WireKey = nil
+	} else if len(res.Item.Key) == 0 {
+		res.Item.Key = append([]byte(nil), c.stripNS(p.key)...)
+	} else if c.hasNS() {
+		res.Item.Key = c.stripNS(res.Item.Key)
+	}
+	res.Item.Value = ownValue(keep, res.Item.Value)
+	out[idx] = res
 }
 
 func matchMetaPipelineOp(item *MetaItem, group []preparedMetaOp, byOpaque map[string]int) (int, bool) {

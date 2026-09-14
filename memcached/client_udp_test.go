@@ -24,13 +24,13 @@ func TestUDPRejectsMutation(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	err := client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = client.Meta().Get(context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
+	_, err = doMetaGet(client, context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.StatsAll(context.Background())
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = client.Stats(context.Background())
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = client.Meta().Pipeline(context.Background(), []MetaOp{
+	_, err = doMetaPipeline(client, context.Background(), []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Key: []byte("b"), Body: []byte("v"), Set: &MetaSet{}},
 	})
@@ -43,7 +43,7 @@ func TestUDPMetaGetAndVersionAllAllowed(t *testing.T) {
 	srv.items["k"] = []byte("v")
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	got, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	got, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), got.Item.Value)
 	_, errVer := client.VersionAll(context.Background())
@@ -87,7 +87,7 @@ func TestUDPReservedIsMalformed(t *testing.T) {
 	srv.reserved = true
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	_, err := client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 

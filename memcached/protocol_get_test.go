@@ -418,6 +418,18 @@ func Test_buildGetAndTouchesCommand_setsPickKey(t *testing.T) {
 	isNil(t, req.key)
 }
 
+func Test_takeValueBufferKeepsCap(t *testing.T) {
+	buf := make([]byte, 0, 32)
+	got := takeValueBuffer(buf, 1)
+	equal(t, 1, len(got))
+	equal(t, 32, cap(got))
+	same(t, buf[:1], got[:1])
+
+	owned := ownValue(buf[:0], got)
+	same(t, got[:1], owned[:1])
+	equal(t, 32, cap(owned))
+}
+
 func Test_dataBlockValueUsesDeclaredLength(t *testing.T) {
 	raw := []byte("ab\r\n")
 	got, err := dataBlockValue(raw, 2)

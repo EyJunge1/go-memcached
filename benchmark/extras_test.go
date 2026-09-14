@@ -17,15 +17,23 @@ func BenchmarkTCPMultiGet(b *testing.B) {
 		b.Run("ours/"+strconv.Itoa(n), func(b *testing.B) {
 			c := newOursTCP(b)
 			ctx := context.Background()
+			dst := make([]ours.GetResult, n)
+			for i := range dst {
+				dst[i].Value = make([]byte, 0, 64)
+			}
+			if err := c.Get(ctx, keyBytes, dst, ours.GetOpts{}); err != nil {
+				b.Fatal(err)
+			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				items, err := c.Get(ctx, keyBytes, ours.GetOpts{})
-				if err != nil {
+				if err := c.Get(ctx, keyBytes, dst, ours.GetOpts{}); err != nil {
 					b.Fatal(err)
 				}
-				if len(items) != n {
-					b.Fatalf("got %d items", len(items))
+				for i := range dst {
+					if !dst[i].Found {
+						b.Fatalf("miss at %d", i)
+					}
 				}
 			}
 		})
@@ -85,16 +93,16 @@ func BenchmarkTCPGetCAS(b *testing.B) {
 		c := newOursTCP(b)
 		ctx := context.Background()
 		var one [1][]byte
+		dst := [1]ours.GetResult{{Value: make([]byte, 0, 64)}}
 		b.ReportAllocs()
 		b.ResetTimer()
 		i := 0
 		for b.Loop() {
 			one[0] = keyBytes[i%len(keyBytes)]
-			items, err := c.Get(ctx, one[:], casOpts)
-			if err != nil {
+			if err := c.Get(ctx, one[:], dst[:], casOpts); err != nil {
 				b.Fatal(err)
 			}
-			if len(items) == 0 || items[0].CAS == 0 {
+			if !dst[0].Found || dst[0].CAS == 0 {
 				b.Fatal("missing CAS")
 			}
 			i++
@@ -157,6 +165,8 @@ func BenchmarkTCPMetaSetGet(b *testing.B) {
 			c := newOursTCP(b)
 			ctx := context.Background()
 			mg := ours.MetaGet{Return: ours.MetaGetReturn{Value: true}}
+			var res ours.MetaResult
+			res.Item.Value = make([]byte, 0, len(size.val)+8)
 			b.ReportAllocs()
 			b.ResetTimer()
 			i := 0
@@ -165,8 +175,7 @@ func BenchmarkTCPMetaSetGet(b *testing.B) {
 				if _, err := c.Meta().Set(ctx, key, size.val, ours.MetaSet{}); err != nil {
 					b.Fatal(err)
 				}
-				res, err := c.Meta().Get(ctx, key, mg)
-				if err != nil {
+				if err := c.Meta().Get(ctx, key, mg, &res); err != nil {
 					b.Fatal(err)
 				}
 				if err := res.Err(); err != nil {
@@ -206,15 +215,15 @@ func BenchmarkTCPMetaPipeline(b *testing.B) {
 
 	c := newOursTCP(b)
 	ctx := context.Background()
+	got := make([]ours.MetaResult, len(ops))
+	for i := range got {
+		got[i].Item.Value = make([]byte, 0, 64)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		got, err := c.Meta().Pipeline(ctx, ops)
-		if err != nil {
+		if err := c.Meta().Pipeline(ctx, ops, got); err != nil {
 			b.Fatal(err)
-		}
-		if len(got) != len(keys) {
-			b.Fatalf("got %d results", len(got))
 		}
 		for i := range got {
 			if err := got[i].Err(); err != nil {
@@ -229,11 +238,11 @@ func BenchmarkTCPPipelineStore(b *testing.B) {
 	c := newOursTCP(b)
 	ctx := context.Background()
 	const batch = 8
+	p := c.Pipeline()
 	b.ReportAllocs()
 	b.ResetTimer()
 	i := 0
 	for b.Loop() {
-		p := c.Pipeline()
 		for j := range batch {
 			key := []byte(benchKey(b.Name(), uint64(i*batch+j)))
 			p.Store(ours.Item{Key: key, Value: smallValue})

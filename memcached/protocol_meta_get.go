@@ -186,8 +186,12 @@ func parseMetaItem(lines [][]byte, item *MetaItem, noReply, quietMissAsNotFound 
 	if body == nil {
 		return fmt.Errorf("missing value: %w", ErrMalformedResponse)
 	}
-	item.Value, err = dataBlockValue(body, size)
-	return err
+	body, err = dataBlockValue(body, size)
+	if err != nil {
+		return err
+	}
+	item.Value = ownValue(item.Value, body)
+	return nil
 }
 
 // forecastCollectedMeta returns the first meta fault that must abort parsing.

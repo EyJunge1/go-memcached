@@ -42,7 +42,7 @@ func TestGetAndTouch(t *testing.T) {
 	mustStore(t, c, ctx, key, []byte("v"))
 
 	exp := memcached.Rel(time.Hour)
-	items, err := c.Get(ctx, [][]byte{key}, memcached.GetOpts{Touch: &exp, CAS: true})
+	items, err := doGet(c, ctx, [][]byte{key}, memcached.GetOpts{Touch: &exp, CAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	equal(t, []byte("v"), items[0].Value)

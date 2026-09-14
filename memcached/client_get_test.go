@@ -20,25 +20,32 @@ func TestGetAcrossNodes(t *testing.T) {
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-one"), Value: []byte("1")}))
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("b-two"), Value: []byte("2")}))
 
-	items, err := client.Get(ctx, [][]byte{[]byte("a-one"), []byte("b-two")}, GetOpts{CAS: true})
+	keys := [][]byte{[]byte("a-one"), []byte("b-two")}
+	items, err := doGet(client, ctx, keys, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 2)
+	isTrue(t, items[0].Found)
+	isTrue(t, items[1].Found)
 
-	got := itemsByKey(items)
+	got := itemsByKey(keys, items)
 	equal(t, []byte("1"), got["a-one"].Value)
 	equal(t, []byte("2"), got["b-two"].Value)
 	notZero(t, got["a-one"].CAS)
 
 	exp := Rel(time.Second)
-	items, err = client.Get(ctx, [][]byte{[]byte("a-one"), []byte("b-two")}, GetOpts{CAS: true, Touch: &exp})
+	items, err = doGet(client, ctx, keys, GetOpts{CAS: true, Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 2)
+	isTrue(t, items[0].Found)
+	isTrue(t, items[1].Found)
 }
 
-func itemsByKey(items []Item) map[string]Item {
-	out := make(map[string]Item, len(items))
-	for _, item := range items {
-		out[string(item.Key)] = item
+func itemsByKey(keys [][]byte, items []GetResult) map[string]GetResult {
+	out := make(map[string]GetResult, len(keys))
+	for i, key := range keys {
+		if i < len(items) && items[i].Found {
+			out[string(key)] = items[i]
+		}
 	}
 	return out
 }
@@ -86,9 +93,10 @@ func TestClusterGetFollowsSetNode(t *testing.T) {
 	equal(t, []byte("2"), item.Value)
 
 	exp := Rel(time.Second)
-	items, err := client.Get(ctx, [][]byte{[]byte("b-two")}, GetOpts{Touch: &exp})
+	items, err := doGet(client, ctx, [][]byte{[]byte("b-two")}, GetOpts{Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 1)
+	isTrue(t, items[0].Found)
 	equal(t, []byte("2"), items[0].Value)
 }
 
@@ -117,7 +125,7 @@ func TestGetMalformedValueDiscardsConnection(t *testing.T) {
 		}
 	})
 
-	_, err = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err = doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrMalformedResponse)
 	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	equal(t, int32(2), dials.Load())
@@ -143,11 +151,13 @@ func TestGetPartialNodeFailure(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-good"), Value: []byte("v")}))
-	items, err := client.Get(ctx, [][]byte{[]byte("a-good"), []byte("b-dead")}, GetOpts{CAS: true})
+	keys := [][]byte{[]byte("a-good"), []byte("b-dead")}
+	items, err := doGet(client, ctx, keys, GetOpts{CAS: true})
 	isError(t, err)
-	got := itemsByKey(items)
+	got := itemsByKey(keys, items)
 	notNil(t, got["a-good"])
 	equal(t, []byte("v"), got["a-good"].Value)
+	isFalse(t, items[1].Found)
 }
 
 func TestGetValueContainsEmbeddedCRLF(t *testing.T) {
@@ -165,17 +175,18 @@ func TestGetValueContainsEmbeddedCRLF(t *testing.T) {
 	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, want, item.Value)
 
-	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
+	isTrue(t, items[0].Found)
 	equal(t, want, items[0].Value)
 
-	got, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
+	got, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, got, 1)
 	equal(t, want, got[0].Value)
 
-	meta, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	meta, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, want, meta.Item.Value)
 
@@ -184,16 +195,59 @@ func TestGetValueContainsEmbeddedCRLF(t *testing.T) {
 	equal(t, int32(1), dials.Load())
 }
 
-func TestGetMissOmitsMissingKeys(t *testing.T) {
+func TestGetDestinationContract(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	items, err := client.Get(ctx, [][]byte{[]byte("missing-a"), []byte("missing-b")}, GetOpts{})
+	mustStore(t, client, ctx, []byte("k"), []byte("v"))
+
+	isErrorIs(t, client.Get(ctx, [][]byte{[]byte("k")}, nil, GetOpts{}), ErrInvalidArgument)
+	isErrorIs(t, client.Get(ctx, [][]byte{[]byte("k")}, make([]GetResult, 2), GetOpts{}), ErrInvalidArgument)
+	noError(t, client.Get(ctx, nil, nil, GetOpts{}))
+
+	want := []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+	mustStore(t, client, ctx, []byte("k32"), want)
+	buf := make([]byte, 0, 32)
+	dst := []GetResult{{Value: buf}}
+	noError(t, client.Get(ctx, [][]byte{[]byte("k")}, dst, GetOpts{}))
+	isTrue(t, dst[0].Found)
+	equal(t, []byte("v"), dst[0].Value)
+	equal(t, 32, cap(dst[0].Value))
+	same(t, buf[:1], dst[0].Value[:1])
+
+	noError(t, client.Get(ctx, [][]byte{[]byte("k32")}, dst, GetOpts{}))
+	isTrue(t, dst[0].Found)
+	equal(t, want, dst[0].Value)
+	same(t, buf[:1], dst[0].Value[:1])
+	equal(t, 32, cap(dst[0].Value))
+
+	noError(t, client.Get(ctx, [][]byte{[]byte("missing")}, dst, GetOpts{}))
+	isFalse(t, dst[0].Found)
+	equal(t, 32, cap(dst[0].Value))
+
+	mustStore(t, client, ctx, []byte("empty"), nil)
+	empty, err := client.GetOne(ctx, []byte("empty"), GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
-	items, err = client.Get(ctx, [][]byte{[]byte("missing-a")}, GetOpts{})
+	isTrue(t, empty.Found)
+	equal(t, 0, len(empty.Value))
+
+	isErrorIs(t, client.Meta().Get(ctx, []byte("k"), MetaGet{}, nil), ErrInvalidArgument)
+	isErrorIs(t, client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}}, nil), ErrInvalidArgument)
+}
+
+func TestGetMissIsIndexAligned(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	items, err := doGet(client, ctx, [][]byte{[]byte("missing-a"), []byte("missing-b")}, GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
+	hasLen(t, items, 2)
+	isFalse(t, items[0].Found)
+	isFalse(t, items[1].Found)
+	items, err = doGet(client, ctx, [][]byte{[]byte("missing-a")}, GetOpts{})
+	noError(t, err)
+	hasLen(t, items, 1)
+	isFalse(t, items[0].Found)
 }
 
 func TestGetStoreHotPathAllocs(t *testing.T) {
@@ -205,17 +259,26 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	mustStore(t, client, ctx, key, val)
 	keys := [][]byte{key}
 
-	_, err := client.Get(ctx, keys, GetOpts{})
-	noError(t, err)
+	reused := []GetResult{{Value: make([]byte, 0, 64)}}
+	noError(t, client.Get(ctx, keys, reused, GetOpts{}))
 
-	getAllocs := testing.AllocsPerRun(200, func() {
-		items, err := client.Get(ctx, keys, GetOpts{})
-		if err != nil || len(items) != 1 {
-			t.Fatalf("get: %v n=%d", err, len(items))
+	getReuseAllocs := testing.AllocsPerRun(200, func() {
+		if err := client.Get(ctx, keys, reused, GetOpts{}); err != nil || !reused[0].Found {
+			t.Fatalf("get reused: %v found=%v", err, reused[0].Found)
 		}
 	})
-	if getAllocs > 12 {
-		t.Fatalf("Get allocs/op = %.1f, want <= 12 (includes in-process fake server)", getAllocs)
+	if getReuseAllocs > 8 {
+		t.Fatalf("Get reused allocs/op = %.1f, want <= 8 (includes in-process fake server)", getReuseAllocs)
+	}
+
+	getOnceAllocs := testing.AllocsPerRun(200, func() {
+		dst := make([]GetResult, 1)
+		if err := client.Get(ctx, keys, dst, GetOpts{}); err != nil || !dst[0].Found {
+			t.Fatalf("get one-shot: %v", err)
+		}
+	})
+	if getOnceAllocs > 12 {
+		t.Fatalf("Get one-shot allocs/op = %.1f, want <= 12 (includes in-process fake server)", getOnceAllocs)
 	}
 
 	storeAllocs := testing.AllocsPerRun(200, func() {
@@ -229,17 +292,17 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 
 	meta := client.Meta()
 	mg := MetaGet{Return: MetaGetReturn{Value: true}}
-	_, err = meta.Set(ctx, key, val, MetaSet{})
+	_, err := meta.Set(ctx, key, val, MetaSet{})
 	noError(t, err)
-	_, err = meta.Get(ctx, key, mg)
-	noError(t, err)
+	var metaDst MetaResult
+	metaDst.Item.Value = make([]byte, 0, 64)
+	noError(t, meta.Get(ctx, key, mg, &metaDst))
 	metaAllocs := testing.AllocsPerRun(200, func() {
 		if _, err := meta.Set(ctx, key, val, MetaSet{}); err != nil {
 			t.Fatalf("meta set: %v", err)
 		}
-		res, err := meta.Get(ctx, key, mg)
-		if err != nil || res.Err() != nil {
-			t.Fatalf("meta get: %v %v", err, res.Err())
+		if err := meta.Get(ctx, key, mg, &metaDst); err != nil || metaDst.Err() != nil {
+			t.Fatalf("meta get: %v %v", err, metaDst.Err())
 		}
 	})
 	if metaAllocs > 24 {
@@ -247,20 +310,25 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	}
 
 	multiKeys := make([][]byte, 8)
+	multiDst := make([]GetResult, 8)
 	for i := range multiKeys {
 		multiKeys[i] = []byte{byte('m'), byte('0' + i)}
 		mustStore(t, client, ctx, multiKeys[i], val)
+		multiDst[i].Value = make([]byte, 0, 64)
 	}
-	_, err = client.Get(ctx, multiKeys, GetOpts{})
-	noError(t, err)
+	noError(t, client.Get(ctx, multiKeys, multiDst, GetOpts{}))
 	multiAllocs := testing.AllocsPerRun(100, func() {
-		items, err := client.Get(ctx, multiKeys, GetOpts{})
-		if err != nil || len(items) != 8 {
-			t.Fatalf("multiget: %v n=%d", err, len(items))
+		if err := client.Get(ctx, multiKeys, multiDst, GetOpts{}); err != nil {
+			t.Fatalf("multiget: %v", err)
+		}
+		for i := range multiDst {
+			if !multiDst[i].Found {
+				t.Fatalf("multiget miss at %d", i)
+			}
 		}
 	})
 	if multiAllocs > 40 {
-		t.Fatalf("MultiGet8 allocs/op = %.1f, want <= 40 (includes in-process fake server)", multiAllocs)
+		t.Fatalf("MultiGet8 reused allocs/op = %.1f, want <= 40 (includes in-process fake server)", multiAllocs)
 	}
 
 	pipeKeys := make([][]byte, 8)
@@ -273,7 +341,6 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	}
 	noError(t, p.Run(ctx))
 	pipeAllocs := testing.AllocsPerRun(100, func() {
-		p := client.Pipeline()
 		for _, k := range pipeKeys {
 			p.Store(Item{Key: k, Value: val})
 		}
@@ -284,6 +351,41 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	if pipeAllocs > 96 {
 		t.Fatalf("Pipeline Store x8 allocs/op = %.1f, want <= 96 (includes in-process fake server)", pipeAllocs)
 	}
+
+	large := make([]byte, 4096)
+	for i := range large {
+		large[i] = 'x'
+	}
+	mustStore(t, client, ctx, key, large)
+	reused4k := []GetResult{{Value: make([]byte, 0, 4096)}}
+	noError(t, client.Get(ctx, keys, reused4k, GetOpts{}))
+	get4kReuse := testing.AllocsPerRun(100, func() {
+		if err := client.Get(ctx, keys, reused4k, GetOpts{}); err != nil || !reused4k[0].Found {
+			t.Fatalf("get 4k reused: %v", err)
+		}
+	})
+	get4kOnce := testing.AllocsPerRun(100, func() {
+		dst := []GetResult{{Value: make([]byte, 0, 4096)}}
+		if err := client.Get(ctx, keys, dst, GetOpts{}); err != nil || !dst[0].Found {
+			t.Fatalf("get 4k one-shot: %v", err)
+		}
+	})
+
+	multiOnce := testing.AllocsPerRun(100, func() {
+		dst := make([]GetResult, 8)
+		if err := client.Get(ctx, multiKeys, dst, GetOpts{}); err != nil {
+			t.Fatalf("multiget one-shot: %v", err)
+		}
+	})
+
+	metaGetOnly := testing.AllocsPerRun(200, func() {
+		if err := meta.Get(ctx, key, mg, &metaDst); err != nil || metaDst.Err() != nil {
+			t.Fatalf("meta get: %v %v", err, metaDst.Err())
+		}
+	})
+
+	t.Logf("allocs/op (fake server included): Get reused=%.1f one-shot=%.1f 4k reused=%.1f 4k one-shot=%.1f Store=%.1f Set+Get~Store+Get reused=%.1f Meta Set+Get=%.1f Meta Get reused=%.1f MultiGet8 reused=%.1f one-shot=%.1f Pipeline8=%.1f",
+		getReuseAllocs, getOnceAllocs, get4kReuse, get4kOnce, storeAllocs, storeAllocs+getReuseAllocs, metaAllocs, metaGetOnly, multiAllocs, multiOnce, pipeAllocs)
 }
 
 func BenchmarkClientGetSmall(b *testing.B) {
@@ -293,15 +395,14 @@ func BenchmarkClientGetSmall(b *testing.B) {
 	key := []byte("alloc-key")
 	mustStore(b, client, ctx, key, []byte("test_value"))
 	keys := [][]byte{key}
-	_, err := client.Get(ctx, keys, GetOpts{})
-	if err != nil {
+	dst := []GetResult{{Value: make([]byte, 0, 64)}}
+	if err := client.Get(ctx, keys, dst, GetOpts{}); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		items, err := client.Get(ctx, keys, GetOpts{})
-		if err != nil || len(items) != 1 {
+		if err := client.Get(ctx, keys, dst, GetOpts{}); err != nil || !dst[0].Found {
 			b.Fatal(err)
 		}
 	}

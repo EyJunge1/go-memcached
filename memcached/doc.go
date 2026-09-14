@@ -3,8 +3,8 @@
 // Application surface:
 //   - Store sends set, add, replace, append, prepend, or cas (zero Mode is set).
 //     Check NOT_STORED, EXISTS, and NOT_FOUND with errors.Is.
-//   - Get and GetOpts issue get, gets, gat, and gats. Missing keys are omitted,
-//     not returned as errors.
+//   - Get fills a caller-provided []GetResult aligned with the keys. A miss
+//     leaves Found false and is not ErrNotFound. GetOne is the single-key form.
 //   - Quiet on Item, MutateOpts, and FlushOpts adds noreply. The connection is
 //     discarded after send; CLIENT_ERROR is still returned. AdminOpts.Quiet
 //     means only that the write was sent.

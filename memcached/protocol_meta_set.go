@@ -53,18 +53,8 @@ func validMetaSetMode(m MetaSetMode) bool {
 	}
 }
 
-// buildMetaSetCommand encodes ms <key> <datalen> <flags>*\r\n plus the body.
-func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
-	}
-
-	b := newProtocolBuilder().
-		AddString("ms").
-		AddBytes(key).
-		AddInt(len(value))
-	defer b.release()
-
+func writeMetaSet(b *protocolBuilder, key []byte, valueLen int, flags *metaSetFlags) {
+	b.AddString("ms").AddBytes(key).AddInt(valueLen)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagBool("c", flags.c)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
@@ -82,8 +72,30 @@ func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *res
 	b.AddFlagInt64Present("N", flags.N, flags.Nset)
 	b.AddFlagString("P", flags.P)
 	b.AddFlagString("L", flags.L)
+	b.AddCRLF()
+}
 
-	req := b.AddCRLF().request(_MsBytes, key)
+func encodeMetaSetOwned(key, value []byte, flags *metaSetFlags) (header []byte, box *[]byte, body, tail []byte) {
+	if flags.b {
+		key = base64Encode(key)
+	}
+	b := newProtocolBuilder()
+	defer b.release()
+	writeMetaSet(b, key, len(value), flags)
+	header, box = b.takeBytes()
+	return header, box, value, _CRLFBytes
+}
+
+// buildMetaSetCommand encodes ms <key> <datalen> <flags>*\r\n plus the body.
+func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *response) {
+	if flags.b {
+		key = base64Encode(key)
+	}
+
+	b := newProtocolBuilder()
+	defer b.release()
+	writeMetaSet(b, key, len(value), flags)
+	req := b.request(_MsBytes, key)
 	req.body = value
 
 	var resp *response

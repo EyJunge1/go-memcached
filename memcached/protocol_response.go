@@ -36,7 +36,7 @@ const (
 	endIndicatorSpecificEndLine
 	// endIndicatorQuietBarrier reads until MN and keeps quiet error replies.
 	endIndicatorQuietBarrier
-	// endIndicatorRetrieval reads VALUE/data pairs until END into items.
+	// endIndicatorRetrieval reads VALUE/data pairs until END into getDst.
 	endIndicatorRetrieval
 )
 
@@ -59,9 +59,23 @@ type response struct {
 	// afterRecv parses the frame before the socket returns to the pool.
 	afterRecv func(*response) error
 
-	// items is filled by endIndicatorRetrieval.
-	items   []Item
+	// getDst is filled by endIndicatorRetrieval. getKeys are the wired keys
+	// for this node; getIdx maps local key i onto getDst (nil = identity).
+	getDst  []GetResult
+	getKeys [][]byte
+	getIdx  []int
 	withCAS bool
+
+	// metaItem is filled in-place for a single Meta().Get when set.
+	metaItem   *MetaItem
+	metaFilled bool
+
+	// metaPipe* stream Meta().Pipeline replies into dest by opaque (no VA clone).
+	metaPipeC        *Client
+	metaPipeDst      []MetaResult
+	metaPipeGroup    []preparedMetaOp
+	metaPipeByOpaque map[string]int
+	metaSawReply     bool
 
 	maxValueBytes int
 	readTimeout   time.Duration
@@ -128,8 +142,17 @@ func (resp *response) release() {
 	resp.udpEnabled = false
 	resp.udpReqID = 0
 	resp.afterRecv = nil
-	resp.items = nil
+	resp.getDst = nil
+	resp.getKeys = nil
+	resp.getIdx = nil
 	resp.withCAS = false
+	resp.metaItem = nil
+	resp.metaFilled = false
+	resp.metaPipeC = nil
+	resp.metaPipeDst = nil
+	resp.metaPipeGroup = nil
+	resp.metaPipeByOpaque = nil
+	resp.metaSawReply = false
 	resp.maxValueBytes = 0
 	resp.readTimeout = 0
 	resp.readCtx = nil
@@ -137,15 +160,53 @@ func (resp *response) release() {
 	responsePool.Put(resp)
 }
 
-// buildRetrievalResponse returns a pooled response that parses VALUE pairs into items.
-func buildRetrievalResponse(nKeys int, withCAS bool) *response {
+// buildRetrievalResponse returns a pooled response that parses VALUE pairs into dst.
+func buildRetrievalResponse(keys [][]byte, origIdx []int, dst []GetResult, withCAS bool) *response {
 	resp := responsePool.Get().(*response)
 	resp.endIndicator = endIndicatorRetrieval
 	resp.withCAS = withCAS
-	if nKeys > 0 {
-		resp.items = make([]Item, 0, nKeys)
-	}
+	resp.getKeys = keys
+	resp.getIdx = origIdx
+	resp.getDst = dst
 	return resp
+}
+
+func takeValueBuffer(dst []byte, n int) []byte {
+	if n <= 0 {
+		if dst != nil {
+			return dst[:0]
+		}
+		return nil
+	}
+	if cap(dst) >= n {
+		return dst[:n]
+	}
+	return make([]byte, n)
+}
+
+func sameByteArray(a, b []byte) bool {
+	if cap(a) == 0 || cap(b) == 0 {
+		return false
+	}
+	return &a[:cap(a)][0] == &b[:cap(b)][0]
+}
+
+func ownValue(dst, src []byte) []byte {
+	if len(src) == 0 {
+		if dst != nil {
+			return dst[:0]
+		}
+		return src
+	}
+	if cap(dst) >= len(src) {
+		if sameByteArray(dst, src) {
+			return src
+		}
+		dst = dst[:len(src)]
+		copy(dst, src)
+		return dst
+	}
+	return src
 }
 
 // buildQuietBarrierResponse returns a response that reads until MN.
@@ -366,19 +427,35 @@ func (resp *response) appendDataBlock(rr protocolReader, header []byte) (consume
 	return 2, nil
 }
 
+func readProtocolLine(rr protocolReader, sr sliceReader, sliceOK bool) ([]byte, error) {
+	if sliceOK {
+		return sr.readSlice('\n')
+	}
+	return rr.readLine('\n')
+}
+
 // read1 reads limitedLines protocol records. VALUE/VA bodies are length-framed
 // and count as the next record.
 func (resp *response) read1(rr protocolReader) error {
-	read := 0
 	sr, sliceOK := rr.(sliceReader)
-	for read < int(resp.limitedLines) {
-		var line []byte
-		var err error
-		if sliceOK {
-			line, err = sr.readSlice('\n')
-		} else {
-			line, err = rr.readLine('\n')
+	if resp.metaItem != nil {
+		line, err := readProtocolLine(rr, sr, sliceOK)
+		if err != nil {
+			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
+		if err = forecastCommonFaultLine(line); err != nil {
+			return err
+		}
+		if err = resp.fillMetaItem(rr, line); err != nil {
+			return err
+		}
+		resp.metaFilled = true
+		return nil
+	}
+
+	read := 0
+	for read < int(resp.limitedLines) {
+		line, err := readProtocolLine(rr, sr, sliceOK)
 		if err != nil {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
@@ -405,14 +482,22 @@ func (resp *response) read1(rr protocolReader) error {
 // read2 reads until specEndLine. Bodies are length-framed.
 // collectFaults keeps EX/NF/NS/CLIENT_ERROR until MN.
 func (resp *response) read2(rr protocolReader, collectFaults bool) error {
+	sr, sliceOK := rr.(sliceReader)
+	metaFilled := false
+	var charge error
 	for {
-		line, err := rr.readLine('\n')
+		line, err := readProtocolLine(rr, sr, sliceOK)
 		if err != nil {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 
 		if bytes.Equal(trimCRLF(line), trimCRLF(resp.specEndLine)) {
-			resp.rawLines = append(resp.rawLines, line)
+			if resp.metaItem == nil && resp.metaPipeDst == nil {
+				if sliceOK {
+					line = bytes.Clone(line)
+				}
+				resp.rawLines = append(resp.rawLines, line)
+			}
 			break
 		}
 
@@ -420,13 +505,72 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 			if !collectFaults || errors.Is(err, ErrServerError) {
 				return err
 			}
+			if charge == nil {
+				charge = err
+			}
+			if resp.metaItem != nil || resp.metaPipeDst != nil {
+				continue
+			}
+		} else if resp.metaPipeDst != nil {
+			if !isMetaNoopLine(line) {
+				if err = resp.fillMetaPipe(rr, line); err != nil {
+					return err
+				}
+			}
+			continue
+		} else if resp.metaItem != nil && !metaFilled && !isMetaNoopLine(line) {
+			if err = resp.fillMetaItem(rr, line); err != nil {
+				return err
+			}
+			metaFilled = true
+			resp.metaFilled = true
+			continue
 		}
 
+		if resp.metaItem != nil {
+			continue
+		}
+		if sliceOK {
+			line = bytes.Clone(line)
+		}
 		if _, err = resp.appendDataBlock(rr, line); err != nil {
 			return err
 		}
 	}
 
+	return charge
+}
+
+func (resp *response) fillMetaItem(rr protocolReader, header []byte) error {
+	item := resp.metaItem
+	if item == nil {
+		return fmt.Errorf("missing meta dest: %w", ErrMalformedResponse)
+	}
+	_, size, hasSize, err := parseMetaHeader(header, item)
+	if err != nil {
+		return err
+	}
+	if item.status != MetaStatusVA {
+		return nil
+	}
+	if !hasSize {
+		return fmt.Errorf("missing value size: %w", ErrMalformedResponse)
+	}
+	limit := resp.maxValueBytes
+	if limit <= 0 {
+		limit = defaultMaxValueBytes
+	}
+	if size > uint64(limit) {
+		return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
+	}
+	n := int(size) //nolint:gosec // G115: size is bounded above
+	item.Value = takeValueBuffer(item.Value, n)
+	if err = readFramedValueInto(rr, item.Value); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return fmt.Errorf("short data block: %w", ErrMalformedResponse)
+		}
+		return fmt.Errorf("read data block: %w", err)
+	}
 	return nil
 }
 
@@ -439,22 +583,63 @@ type framedValueIntoReader interface {
 	readFramedValueInto(dst []byte) error
 }
 
-// Combining a small key and value saves one allocation without crossing into
-// a larger allocator size class than the two separate buffers would occupy.
-const maxCombinedRetrievalBytes = 64
-
 func readFramedValueIntoFrom(r io.Reader, dst []byte) error {
+	if br, ok := r.(*bufio.Reader); ok {
+		return readFramedValueIntoBufio(br, dst)
+	}
 	if _, err := io.ReadFull(r, dst); err != nil {
 		return err
 	}
-	var crlf [2]byte
-	if _, err := io.ReadFull(r, crlf[:]); err != nil {
+	return readCRLF(r)
+}
+
+func readFramedValueIntoBufio(r *bufio.Reader, dst []byte) error {
+	for len(dst) > 0 {
+		n, err := r.Read(dst)
+		dst = dst[n:]
+		if err != nil {
+			if errors.Is(err, io.EOF) && len(dst) > 0 {
+				return io.ErrUnexpectedEOF
+			}
+			return err
+		}
+	}
+	b0, err := r.ReadByte()
+	if err != nil {
 		return err
 	}
-	if crlf[0] != '\r' || crlf[1] != '\n' {
+	b1, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+	if b0 != '\r' || b1 != '\n' {
 		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
 	}
 	return nil
+}
+
+func readCRLF(r io.Reader) error {
+	b0, err := readOneByte(r)
+	if err != nil {
+		return err
+	}
+	b1, err := readOneByte(r)
+	if err != nil {
+		return err
+	}
+	if b0 != '\r' || b1 != '\n' {
+		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+	}
+	return nil
+}
+
+func readOneByte(r io.Reader) (byte, error) {
+	if br, ok := r.(*bufio.Reader); ok {
+		return br.ReadByte()
+	}
+	var b [1]byte
+	_, err := io.ReadFull(r, b[:])
+	return b[0], err
 }
 
 func readFramedValueInto(rr protocolReader, dst []byte) error {
@@ -473,29 +658,66 @@ func readFramedValueInto(rr protocolReader, dst []byte) error {
 	return nil
 }
 
-// readRetrieval reads VALUE/data pairs until END without keeping rawLines.
+func discardFramedValue(rr protocolReader, n int) error {
+	if n < 0 {
+		return fmt.Errorf("negative read: %w", ErrMalformedResponse)
+	}
+	switch r := rr.(type) {
+	case *conn:
+		return discardFramedValueFrom(r.rr, n)
+	case *payloadReader:
+		return discardFramedValueFrom(r.r, n)
+	default:
+		buf := make([]byte, n)
+		return readFramedValueInto(rr, buf)
+	}
+}
+
+func discardFramedValueFrom(r io.Reader, n int) error {
+	var buf [256]byte
+	left := n
+	for left > 0 {
+		chunk := buf[:]
+		if left < len(chunk) {
+			chunk = buf[:left]
+		}
+		if _, err := io.ReadFull(r, chunk); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
+			}
+			return fmt.Errorf("read data block: %w", err)
+		}
+		left -= len(chunk)
+	}
+	var crlf [2]byte
+	if _, err := io.ReadFull(r, crlf[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return fmt.Errorf("short data block: %w", ErrMalformedResponse)
+		}
+		return fmt.Errorf("read data block: %w", err)
+	}
+	if crlf[0] != '\r' || crlf[1] != '\n' {
+		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+	}
+	return nil
+}
+
+// readRetrieval reads VALUE/data pairs until END into getDst.
 func (resp *response) readRetrieval(rr protocolReader) error {
-	items := resp.items[:0]
 	limit := resp.maxValueBytes
 	if limit <= 0 {
 		limit = defaultMaxValueBytes
 	}
 	sr, sliceOK := rr.(sliceReader)
+	cursor := 0
 
 	for {
-		var line []byte
-		var err error
-		if sliceOK {
-			line, err = sr.readSlice('\n')
-		} else {
-			line, err = rr.readLine('\n')
-		}
+		line, err := readProtocolLine(rr, sr, sliceOK)
 		if err != nil {
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 		trimmed := trimCRLF(line)
 		if bytes.Equal(trimmed, _EndBytes) {
-			resp.items = items
 			return nil
 		}
 		if !bytes.HasPrefix(trimmed, _ValueSpaceBytes) {
@@ -505,32 +727,42 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 			return fmt.Errorf("unexpected retrieval line: %w", ErrMalformedResponse)
 		}
 
-		var item Item
-		dataLen, err := parseValueLineBorrowed(trimmed, &item, resp.withCAS)
+		var parsed Item
+		dataLen, err := parseValueLineBorrowed(trimmed, &parsed, resp.withCAS)
 		if err != nil {
 			return err
 		}
 		if dataLen > uint64(limit) {
 			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
 		}
-		keyLen, valueLen := len(item.Key), int(dataLen) //nolint:gosec // G115: dataLen is bounded above
-		if keyLen+valueLen <= maxCombinedRetrievalBytes {
-			owned := make([]byte, keyLen+valueLen)
-			copy(owned, item.Key)
-			item.Key = owned[:keyLen:keyLen]
-			item.Value = owned[keyLen:]
-		} else {
-			item.Key = bytes.Clone(item.Key)
-			item.Value = make([]byte, valueLen)
+		local, ok := matchRetrievalKey(resp.getKeys, parsed.Key, &cursor)
+		if !ok {
+			return fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
 		}
-		err = readFramedValueInto(rr, item.Value)
+		dstIdx := local
+		if resp.getIdx != nil {
+			if local < 0 || local >= len(resp.getIdx) {
+				return fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+			}
+			dstIdx = resp.getIdx[local]
+		}
+		if dstIdx < 0 || dstIdx >= len(resp.getDst) {
+			return fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+		}
+
+		valueLen := int(dataLen) //nolint:gosec // G115: dataLen is bounded above
+		slot := &resp.getDst[dstIdx]
+		slot.Found = true
+		slot.Flags = parsed.Flags
+		slot.CAS = parsed.CAS
+		slot.Value = takeValueBuffer(slot.Value, valueLen)
+		err = readFramedValueInto(rr, slot.Value)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
 			}
 			return fmt.Errorf("read data block: %w", err)
 		}
-		items = append(items, item)
 		refreshReadDeadlineIfIdle(resp, rr)
 	}
 }

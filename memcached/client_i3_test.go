@@ -34,9 +34,10 @@ func TestPipelineStoreThenDelete(t *testing.T) {
 		Delete([]byte("k")).
 		Run(ctx)
 	noError(t, err)
-	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
+	hasLen(t, items, 1)
+	isFalse(t, items[0].Found)
 }
 
 func TestPipelineAcrossNodes(t *testing.T) {
@@ -173,11 +174,13 @@ func TestGetCASPartialNodeFailure(t *testing.T) {
 	})
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-good"), Value: []byte("v")}))
-	items, err := client.Get(ctx, [][]byte{[]byte("a-good"), []byte("b-dead")}, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{[]byte("a-good"), []byte("b-dead")}, GetOpts{CAS: true})
 	isError(t, err)
-	hasLen(t, items, 1)
+	hasLen(t, items, 2)
+	isTrue(t, items[0].Found)
 	equal(t, []byte("v"), items[0].Value)
 	notZero(t, items[0].CAS)
+	isFalse(t, items[1].Found)
 }
 
 func TestTouchNotFoundKeepsConnection(t *testing.T) {
@@ -200,7 +203,7 @@ func TestFakeGatStoresExpiry(t *testing.T) {
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	exp := Rel(5 * time.Second)
-	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{Touch: &exp})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 1)
 	srv.mu.Lock()
@@ -216,7 +219,7 @@ func TestMetaPipelineMissIsEmptyItem(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("hit"), Value: []byte("v")}))
-	items, err := client.Meta().Pipeline(ctx, []MetaOp{
+	items, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("hit"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 		{Key: []byte("miss"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
 	})

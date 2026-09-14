@@ -26,7 +26,7 @@ func TestPipelineStoreCAS(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	mustStore(t, client, ctx, []byte("k"), []byte("v"))
-	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	cas := items[0].CAS
@@ -88,6 +88,19 @@ func TestPipelineEmptyRunJoinsQueueErrors(t *testing.T) {
 		Store(Item{Mode: StoreSet, Key: []byte("a\r\nb"), Value: []byte("v")}).
 		Run(context.Background())
 	isErrorIs(t, err, ErrInvalidKey)
+}
+
+func TestPipelineReusableAfterRun(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	p := client.Pipeline()
+	noError(t, p.Store(Item{Key: []byte("a"), Value: []byte("1")}).Run(ctx))
+	equal(t, 0, len(p.ops))
+	greater(t, cap(p.ops), 0)
+	noError(t, p.Store(Item{Key: []byte("b"), Value: []byte("2")}).Run(ctx))
+	equal(t, []byte("1"), mustGet(t, client, ctx, []byte("a")).Value)
+	equal(t, []byte("2"), mustGet(t, client, ctx, []byte("b")).Value)
 }
 
 func TestPipelineRecvErrorDiscardsConn(t *testing.T) {

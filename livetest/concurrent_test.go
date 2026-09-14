@@ -25,12 +25,12 @@ func TestConcurrentGet(t *testing.T) {
 	for range 10 {
 		wg.Go(func() {
 			for range 100 {
-				items, err := client.Get(ctx, [][]byte{key}, memcached.GetOpts{})
+				items, err := doGet(client, ctx, [][]byte{key}, memcached.GetOpts{})
 				if err != nil {
 					t.Errorf("get: %v", err)
 					return
 				}
-				if len(items) != 1 {
+				if len(items) != 1 || !items[0].Found {
 					t.Errorf("get miss for %q", key)
 					return
 				}
@@ -79,7 +79,7 @@ func TestConcurrent(t *testing.T) {
 	wg.Go(func() {
 		counter := 0
 		for counter <= 200 {
-			items, err := client.Get(ctx, [][]byte{key}, memcached.GetOpts{})
+			items, err := doGet(client, ctx, [][]byte{key}, memcached.GetOpts{})
 			if err != nil {
 				t.Errorf("get: %v", err)
 				return

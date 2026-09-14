@@ -98,7 +98,8 @@ func (p *Pipeline) release() {
 	for _, op := range p.ops {
 		releaseReqAndResp(op.req, op.resp)
 	}
-	p.ops = nil
+	p.ops = p.ops[:0]
+	p.errs = p.errs[:0]
 }
 
 // shouldDiscardPipelineConn reports whether a pipeline error must drop the socket.
@@ -123,6 +124,7 @@ func finishPipelineConn(cn wireConn, errp *error) {
 }
 
 // Run writes every queued frame, then reads every reply. Distinct nodes run concurrently.
+// After Run the queue is empty and p may be reused.
 func (p *Pipeline) Run(ctx context.Context) error {
 	if p == nil || p.c == nil {
 		return fmt.Errorf("nil pipeline: %w", ErrInvalidArgument)

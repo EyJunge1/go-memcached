@@ -213,7 +213,8 @@ type MetaArithmetic struct {
 	L           string
 }
 
-// MetaOp is one step in Meta().Pipeline.
+// MetaOp is one step in Meta().Pipeline. Pipeline writes into a caller dst
+// of the same length; Key is copied only when the op asks to return it.
 // Exactly one of Get, Set, Del, Arith, or Noop must be set.
 // Debug (me) cannot be pipelined.
 type MetaOp struct {

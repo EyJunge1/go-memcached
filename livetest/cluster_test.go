@@ -17,7 +17,6 @@ func TestNamespaceRoundTrip(t *testing.T) {
 	mustStore(t, ns, ctx, key, []byte("namespaced"))
 
 	item := mustGet(t, ns, ctx, key)
-	equal(t, key, item.Key)
 	equal(t, []byte("namespaced"), item.Value)
 
 	prefixed := append([]byte("lt:"), key...)

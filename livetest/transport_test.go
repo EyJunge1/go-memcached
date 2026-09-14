@@ -24,12 +24,12 @@ func TestUDPGetAndMeta(t *testing.T) {
 	key := liveKey(t, "udp")
 	mustStore(t, tcp, ctx, key, []byte("via-tcp"))
 
-	items, err := udp.Get(ctx, [][]byte{key}, memcached.GetOpts{})
+	items, err := doGet(udp, ctx, [][]byte{key}, memcached.GetOpts{})
 	noError(t, err)
 	hasLen(t, items, 1)
 	equal(t, []byte("via-tcp"), items[0].Value)
 
-	got, err := udp.Meta().Get(ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true}})
+	got, err := doMetaGet(udp, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true}})
 	noError(t, err)
 	noError(t, got.Err())
 	equal(t, []byte("via-tcp"), got.Item.Value)
@@ -50,7 +50,7 @@ func TestUDPRejectsMutation(t *testing.T) {
 	isErrorIs(t, udp.Store(ctx, memcached.Item{Mode: memcached.StoreSet, Key: key, Value: []byte("x")}), memcached.ErrNotSupported)
 
 	exp := memcached.Rel(time.Second)
-	_, err := udp.Get(ctx, [][]byte{key}, memcached.GetOpts{Touch: &exp})
+	_, err := doGet(udp, ctx, [][]byte{key}, memcached.GetOpts{Touch: &exp})
 	isErrorIs(t, err, memcached.ErrNotSupported)
 
 	_, err = udp.StatsAll(ctx)

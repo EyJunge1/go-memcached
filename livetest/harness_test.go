@@ -127,7 +127,7 @@ func setupUnixClient(t *testing.T) *memcached.Client {
 func liveKey(t *testing.T, suffix string) []byte {
 	t.Helper()
 	name := strings.ReplaceAll(t.Name(), "/", "_")
-	return []byte(fmt.Sprintf("%s/%s/%d", name, suffix, time.Now().UnixNano()))
+	return fmt.Appendf(nil, "%s/%s/%d", name, suffix, time.Now().UnixNano())
 }
 
 func noError(t *testing.T, err error) {
@@ -144,23 +144,41 @@ func isErrorIs(t *testing.T, err, target error) {
 	}
 }
 
-func mustGet(t *testing.T, c *memcached.Client, ctx context.Context, key []byte) memcached.Item {
+func mustGet(t *testing.T, c *memcached.Client, ctx context.Context, key []byte) memcached.GetResult {
 	t.Helper()
-	items, err := c.Get(ctx, [][]byte{key}, memcached.GetOpts{})
+	got, err := c.GetOne(ctx, key, memcached.GetOpts{})
 	noError(t, err)
-	if len(items) == 0 {
+	if !got.Found {
 		t.Fatalf("get miss for %q", key)
 	}
-	return items[0]
+	return got
 }
 
 func mustMiss(t *testing.T, c *memcached.Client, ctx context.Context, key []byte) {
 	t.Helper()
-	items, err := c.Get(ctx, [][]byte{key}, memcached.GetOpts{})
+	got, err := c.GetOne(ctx, key, memcached.GetOpts{})
 	noError(t, err)
-	if len(items) != 0 {
-		t.Fatalf("want miss for %q, got %#v", key, items)
+	if got.Found {
+		t.Fatalf("want miss for %q, got %#v", key, got)
 	}
+}
+
+func doGet(c *memcached.Client, ctx context.Context, keys [][]byte, opts memcached.GetOpts) ([]memcached.GetResult, error) {
+	dst := make([]memcached.GetResult, len(keys))
+	err := c.Get(ctx, keys, dst, opts)
+	return dst, err
+}
+
+func doMetaGet(c *memcached.Client, ctx context.Context, key []byte, f memcached.MetaGet) (memcached.MetaResult, error) {
+	var dst memcached.MetaResult
+	err := c.Meta().Get(ctx, key, f, &dst)
+	return dst, err
+}
+
+func doMetaPipeline(c *memcached.Client, ctx context.Context, ops []memcached.MetaOp) ([]memcached.MetaResult, error) {
+	dst := make([]memcached.MetaResult, len(ops))
+	err := c.Meta().Pipeline(ctx, ops, dst)
+	return dst, err
 }
 
 func mustStore(t *testing.T, c *memcached.Client, ctx context.Context, key, value []byte) {

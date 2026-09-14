@@ -109,7 +109,7 @@ func TestMetaSingleCommandStatusCodes(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 
-	res, err := client.Meta().Get(ctx, []byte("missing"), MetaGet{})
+	res, err := doMetaGet(client, ctx, []byte("missing"), MetaGet{})
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
@@ -121,7 +121,7 @@ func TestMetaSingleCommandStatusCodes(t *testing.T) {
 	isErrorIs(t, res.Err(), ErrNotStored)
 	equal(t, MetaStatusNS, res.Status)
 
-	hit, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true}})
+	hit, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true}})
 	noError(t, err)
 	cas := hit.Item.CAS
 	wrong := cas + 1
@@ -139,7 +139,7 @@ func TestMetaSingleCommandStatusCodes(t *testing.T) {
 func TestMetaHintsRejectWhitespace(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	_, err := client.Meta().Get(context.Background(), []byte("k"), MetaGet{P: "bad token"})
+	_, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{P: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
 	_, err = client.Meta().Noop(context.Background(), MetaNoop{L: "x y"})
 	isErrorIs(t, err, ErrInvalidArgument)
@@ -199,18 +199,18 @@ func TestMetaGetRecacheWindow(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	_, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Recache: -time.Second})
+	_, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Recache: -time.Second})
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
-	_, err = client.Meta().Get(ctx, []byte("k"), MetaGet{Recache: 31 * 24 * time.Hour, Return: MetaGetReturn{Value: true}})
+	_, err = doMetaGet(client, ctx, []byte("k"), MetaGet{Recache: 31 * 24 * time.Hour, Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	srv.mu.Lock()
 	cmd := srv.lastCmd
 	srv.mu.Unlock()
 	contains(t, cmd, "R2678400")
 
-	_, err = client.Meta().Get(ctx, []byte("k"), MetaGet{Recache: 5 * time.Second, Return: MetaGetReturn{Value: true}})
+	_, err = doMetaGet(client, ctx, []byte("k"), MetaGet{Recache: 5 * time.Second, Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	srv.mu.Lock()
 	cmd = srv.lastCmd
@@ -279,7 +279,7 @@ func TestAuthRejectsWrongPassword(t *testing.T) {
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "authentication failure")
 
-	_, err = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err = doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrClientError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	err = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
@@ -350,7 +350,7 @@ func TestCommandErrorFromGet(t *testing.T) {
 		_, _ = cn.Write([]byte("ERROR bad args\r\n"))
 	}()
 	client := testClient(t, ln.Addr().String())
-	_, err = client.Get(context.Background(), [][]byte{[]byte("k")}, GetOpts{})
+	_, err = doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrCommandError)
 	isFalse(t, errors.Is(err, ErrTransport))
 }
@@ -363,12 +363,12 @@ func TestEmptyServersIsInvalidAddress(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowSetServers = true })
 	noError(t, client.SetServers(nil))
 	ctx := context.Background()
-	_, err = client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
+	_, err = doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrInvalidAddress)
 	contains(t, err.Error(), "no servers configured")
 	err = client.Pipeline().Store(Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}).Run(ctx)
 	isErrorIs(t, err, ErrInvalidAddress)
-	_, err = client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
+	_, err = doMetaPipeline(client, ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}})
 	isErrorIs(t, err, ErrInvalidAddress)
 }
 
@@ -412,7 +412,7 @@ func TestMetaDeleteMissAndQuietNS(t *testing.T) {
 func TestMetaGetMissKeepsENFlags(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	res, err := client.Meta().Get(context.Background(), []byte("missing"), MetaGet{Return: MetaGetReturn{Key: true}})
+	res, err := doMetaGet(client, context.Background(), []byte("missing"), MetaGet{Return: MetaGetReturn{Key: true}})
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
@@ -438,7 +438,7 @@ func TestMetaDeleteInvalidateTTL(t *testing.T) {
 	waitLastCmdHasToken(t, srv, "C1")
 	waitLastCmdHasToken(t, srv, "E2")
 
-	got, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	got, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), got.Item.Value)
 	isTrue(t, got.Item.Stale)

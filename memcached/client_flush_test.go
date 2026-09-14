@@ -27,9 +27,10 @@ func TestFlushAllRequiresOptIn(t *testing.T) {
 		cfg.AllowFlushAll = true
 	})
 	noError(t, mustAdmin(t, allowed).All().Flush(ctx, FlushOpts{}))
-	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
+	hasLen(t, items, 1)
+	isFalse(t, items[0].Found)
 }
 
 func TestFlushAllKeepsConnection(t *testing.T) {
@@ -61,9 +62,10 @@ func TestFlushAllAfterAndStatsArgs(t *testing.T) {
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
 	noError(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: delayPtr(Rel(time.Second))}))
-	items, err := client.Get(ctx, [][]byte{[]byte("k")}, GetOpts{})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 0)
+	hasLen(t, items, 1)
+	isFalse(t, items[0].Found)
 	srv.mu.Lock()
 	equal(t, "1", srv.lastFlushDelay)
 	srv.mu.Unlock()

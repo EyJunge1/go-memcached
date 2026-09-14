@@ -36,7 +36,7 @@ func TestStoreCAS(t *testing.T) {
 	key := liveKey(t, "cas")
 	mustStore(t, c, ctx, key, []byte("v1"))
 
-	items, err := c.Get(ctx, [][]byte{key}, memcached.GetOpts{CAS: true})
+	items, err := doGet(c, ctx, [][]byte{key}, memcached.GetOpts{CAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	cas := items[0].CAS
@@ -66,9 +66,11 @@ func TestGetMissAndPartial(t *testing.T) {
 
 	mustMiss(t, c, ctx, miss)
 
-	items, err := c.Get(ctx, [][]byte{hit, miss}, memcached.GetOpts{})
+	items, err := doGet(c, ctx, [][]byte{hit, miss}, memcached.GetOpts{})
 	noError(t, err)
-	hasLen(t, items, 1)
+	hasLen(t, items, 2)
+	if !items[0].Found || items[1].Found {
+		t.Fatalf("want hit/miss, got %#v", items)
+	}
 	equal(t, []byte("v"), items[0].Value)
-	equal(t, hit, items[0].Key)
 }

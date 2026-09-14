@@ -216,7 +216,7 @@ func (c *conn) readFramedValueInto(dst []byte) error {
 	if c.isClosed() {
 		return errConnClosed
 	}
-	return readFramedValueIntoFrom(c.rr, dst)
+	return readFramedValueIntoBufio(c.rr, dst)
 }
 
 // readDatagram reads one UDP datagram from the raw socket into a copied buffer.

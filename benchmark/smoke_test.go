@@ -16,12 +16,12 @@ func TestOurs(t *testing.T) {
 	if err := c.Store(ctx, ours.Item{Key: key, Value: val}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := c.Get(ctx, [][]byte{key}, ours.GetOpts{})
+	got, err := c.GetOne(ctx, key, ours.GetOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || string(items[0].Value) != string(val) {
-		t.Fatalf("got %#v", items)
+	if !got.Found || string(got.Value) != string(val) {
+		t.Fatalf("got %#v", got)
 	}
 }
 

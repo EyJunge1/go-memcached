@@ -18,7 +18,7 @@ func TestMetaQuietStillReturnsExists(t *testing.T) {
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrExists)
 
-	item, err := client.Meta().Get(ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
+	item, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), item.Item.Value)
 }
