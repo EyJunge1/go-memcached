@@ -107,7 +107,7 @@ func Test_assembleUDPAcceptsNineFragments(t *testing.T) {
 	const total uint16 = 9
 	datagrams := make([][]byte, 0, total)
 	var want []byte
-	for i := uint16(0); i < total; i++ {
+	for i := range total {
 		p := []byte{byte('A' + i)}
 		want = append(want, p...)
 		datagrams = append(datagrams, makeDgram(3, i, total, p))

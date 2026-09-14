@@ -158,7 +158,7 @@ func Test_ketamaEject_onlyDeadNodeKeysMove(t *testing.T) {
 	picker := defaultPickBuilder().Build(full)
 
 	moved, stayed := 0, 0
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		key := []byte("k" + strconv.Itoa(i))
 		before, err := picker.Pick(full, key)
 		noError(t, err)

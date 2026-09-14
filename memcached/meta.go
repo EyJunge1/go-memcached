@@ -128,8 +128,8 @@ type MetaGetReturn struct {
 }
 
 // MetaGet is the flag set for mg.
-// CompareCAS, Vivify (create-if-missing TTL), and Touch follow Config rule C: nil drops the flag.
-// Recache follows rule D: a zero duration drops R.
+// CompareCAS, Vivify (create-if-missing TTL), and Touch are pointers: nil drops the flag.
+// Recache is a duration: zero omits R.
 type MetaGet struct {
 	BinaryKey  bool
 	Return     MetaGetReturn

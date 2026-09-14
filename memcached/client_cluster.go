@@ -69,11 +69,11 @@ func (r defaultResolver) Resolve(spec string) ([]*addr, error) {
 
 // splitAddrWeight pulls an optional ?weight=N suffix. Unknown query keys fail.
 func splitAddrWeight(address string) (raw string, weight uint32, err error) {
-	q := strings.Index(address, "?")
-	if q < 0 {
+	before, after, ok := strings.Cut(address, "?")
+	if !ok {
 		return address, 0, nil
 	}
-	raw, query := address[:q], address[q+1:]
+	raw, query := before, after
 	// unix:///path/?weight= leaves a trailing slash on the path.
 	raw = strings.TrimSuffix(raw, "/")
 	if raw == "" {

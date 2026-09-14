@@ -24,7 +24,7 @@ func TestUDPRejectsMutation(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	err := client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = doMetaGet(client, context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
+	_, err = doMetaGet(client, context.Background(), []byte("k"), MetaGet{Touch: new(Rel(time.Second))})
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = doStatsAll(client, context.Background())
 	isErrorIs(t, err, ErrNotSupported)
@@ -109,5 +109,3 @@ func TestWatchRejectsUDP(t *testing.T) {
 	_, err := mustAdminOn(t, client).Watch(ctx, WatchFetchers)
 	isErrorIs(t, err, ErrNotSupported)
 }
-
-func expPtr(e Exptime) *Exptime { return &e }

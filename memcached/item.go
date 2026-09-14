@@ -42,7 +42,7 @@ type MetaItem struct {
 	LastAccess int64
 	// Size is the s token on success.
 	Size uint64
-	// Opaque is the O token (at most 32 bytes). Reusing dest keeps cap.
+	// Opaque is the O token (at most 32 bytes). Reusing dst keeps cap.
 	Opaque []byte
 	// HitBefore is the h token.
 	HitBefore bool
@@ -77,7 +77,7 @@ type MetaItemDebug struct {
 	SlabClassID uint64 // cls
 	Size        uint64
 	// Fields holds me pairs that are not one of the six typed keys.
-	// Reusing dest keeps Key/Value caps.
+	// Reusing dst keeps Key/Value caps.
 	Fields []DebugField
 }
 
@@ -87,7 +87,7 @@ type DebugField struct {
 	Value []byte
 }
 
-// Stat is one STAT name/value pair. Reusing dest keeps Name/Value caps.
+// Stat is one STAT name/value pair. Reusing dst keeps Name/Value caps.
 type Stat struct {
 	Name  []byte
 	Value []byte

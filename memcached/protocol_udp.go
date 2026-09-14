@@ -216,13 +216,7 @@ func udpFragmentCap(maxValue int) int {
 	if maxValue <= 0 {
 		maxValue = defaultMaxValueBytes
 	}
-	n := (maxValue + udpFragmentPayloadSize - 1) / udpFragmentPayloadSize
-	if n < minUDPFragments {
-		n = minUDPFragments
-	}
-	if n > maxUDPFragments {
-		n = maxUDPFragments
-	}
+	n := min(max((maxValue+udpFragmentPayloadSize-1)/udpFragmentPayloadSize, minUDPFragments), maxUDPFragments)
 	return n
 }
 

@@ -307,14 +307,12 @@ func (c *Client) stripNS(key []byte) []byte {
 	return key[len(c.rt.nsPrefix):]
 }
 
-var (
-	nsHdrPool = sync.Pool{
-		New: func() any {
-			s := make([][]byte, 0, 8)
-			return &s
-		},
-	}
-)
+var nsHdrPool = sync.Pool{
+	New: func() any {
+		s := make([][]byte, 0, 8)
+		return &s
+	},
+}
 
 func releaseWiredGetKeys(box *[]byte, hdrp *[][]byte) {
 	putBuilderBox(box)

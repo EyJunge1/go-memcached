@@ -531,10 +531,7 @@ func base64Decode(src []byte) ([]byte, error) {
 // base64DecodeInto decodes src into dst when cap is enough and dst does not
 // share backing with src (WireKey). Otherwise it allocates.
 func base64DecodeInto(dst, src []byte) ([]byte, error) {
-	need := base64.StdEncoding.DecodedLen(len(src))
-	if need < 0 {
-		need = 0
-	}
+	need := max(base64.StdEncoding.DecodedLen(len(src)), 0)
 	buf := dst
 	if sameByteArray(buf, src) || cap(buf) < need {
 		buf = make([]byte, need)

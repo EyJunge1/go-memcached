@@ -72,9 +72,9 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 	}
 	cd := trimmed
 	rest := []byte(nil)
-	if i := bytes.IndexByte(trimmed, ' '); i >= 0 {
-		cd = trimmed[:i]
-		rest = trimmed[i+1:]
+	if before, after, ok := bytes.Cut(trimmed, []byte{' '}); ok {
+		cd = before
+		rest = after
 	}
 
 	item.Status = metaStatusFromCD(cd)
@@ -135,11 +135,11 @@ func parseMetaDebugFields(fields []byte, item *MetaItemDebug) {
 }
 
 func applyMetaDebugField(tok []byte, item *MetaItemDebug) {
-	eq := bytes.IndexByte(tok, '=')
-	if eq < 0 {
+	before, after, ok := bytes.Cut(tok, []byte{'='})
+	if !ok {
 		return
 	}
-	key, val := tok[:eq], tok[eq+1:]
+	key, val := before, after
 	switch {
 	case bytes.Equal(key, _expBytes):
 		item.TTL, _ = parseIntFromBytes(val)

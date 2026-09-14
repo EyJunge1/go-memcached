@@ -212,7 +212,7 @@ func parseWatchTS(ts string) time.Time {
 // parseURIPairs splits a space-separated k=v line and URL-decodes each value.
 func parseURIPairs(line string) map[string]string {
 	out := make(map[string]string)
-	for _, field := range strings.Fields(line) {
+	for field := range strings.FieldsSeq(line) {
 		k, v, ok := strings.Cut(field, "=")
 		if !ok {
 			continue

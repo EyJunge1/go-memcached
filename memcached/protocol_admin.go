@@ -204,8 +204,7 @@ func isShutdownClosed(err error) bool {
 	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	var op *net.OpError
-	if errors.As(err, &op) {
+	if op, ok := errors.AsType[*net.OpError](err); ok {
 		return errors.Is(op.Err, syscall.ECONNRESET) || errors.Is(op.Err, syscall.EPIPE)
 	}
 	return false

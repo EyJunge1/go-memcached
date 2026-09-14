@@ -35,7 +35,7 @@ func waitLastCmdHasToken(t *testing.T, srv *fakeMemcached, token string) {
 		srv.mu.Lock()
 		cmd := srv.lastCmd
 		srv.mu.Unlock()
-		for _, field := range strings.Fields(cmd) {
+		for field := range strings.FieldsSeq(cmd) {
 			if field == token {
 				return
 			}
@@ -272,7 +272,7 @@ func TestFlushOptsQuietAndStagger(t *testing.T) {
 }
 
 func TestFlushDelayForAddsInTimeDomain(t *testing.T) {
-	fn := flushDelayFor(FlushOpts{Delay: delayPtr(Rel(10 * time.Second))})
+	fn := flushDelayFor(FlushOpts{Delay: new(Rel(10 * time.Second))})
 	equal(t, Exptime(10), fn(0))
 	equal(t, Exptime(10), fn(1))
 	fn = flushDelayFor(FlushOpts{Stagger: time.Second})
@@ -468,7 +468,7 @@ func TestMetaDeleteInvalidateTTL(t *testing.T) {
 
 	_, err := doMetaDelete(client, ctx, []byte("k"), MetaDelete{
 		Invalidate: true,
-		TTL:        delayPtr(Rel(5 * time.Second)),
+		TTL:        new(Rel(5 * time.Second)),
 		CompareCAS: &cas,
 		NewCAS:     &newCAS,
 	})
@@ -503,7 +503,7 @@ func TestMetaSetAutoVivifyAppend(t *testing.T) {
 
 	_, err := doMetaSet(client, ctx, []byte("k"), []byte("x"), MetaSet{
 		Mode:       MetaSetModeAppend,
-		AutoVivify: delayPtr(Rel(time.Second)),
+		AutoVivify: new(Rel(time.Second)),
 	})
 	noError(t, err)
 	waitLastCmdHasToken(t, srv, "MA")

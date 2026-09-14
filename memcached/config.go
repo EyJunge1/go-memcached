@@ -15,16 +15,11 @@ import (
 const TimeoutNone time.Duration = -1
 
 // Config is the sole input to New.
-// Optional fields share one convention across the API:
-//
-//	A — opt-in groups (Failover, Auth): the zero value or nil turns the feature off.
-//	B — features that default on use an inverted bool (DisableTCPNoDelay), never *bool.
-//	C — when 0 is a legal wire token, the field is a pointer (GetOpts.Touch,
-//	    FlushOpts.Delay, Meta *Exptime / *uint64).
-//	D — when 0 has no useful wire meaning, a zero value omits the flag
-//	    (MetaGet.Recache, Cluster.ResolverRefresh).
-//	E — numeric defaults are applied per field (DialTimeout 0 becomes 3s;
-//	    TimeoutNone means no extra deadline).
+// Zero or nil turns optional features off (Failover, Auth). A pointer field
+// is used when 0 is a legal wire token (GetOpts.Touch, FlushOpts.Delay);
+// otherwise a zero value omits the flag (MetaGet.Recache). Numeric zeros
+// become package defaults (DialTimeout 3s); TimeoutNone skips the extra
+// deadline. Features that default on use an inverted bool (DisableTCPNoDelay).
 type Config struct {
 	Servers         []Server
 	Transport       Transport
@@ -232,7 +227,7 @@ func parseServerSpec(spec string) ([]Server, error) {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 	}
 	out := make([]Server, 0, 4)
-	for _, part := range strings.Split(spec, ",") {
+	for part := range strings.SplitSeq(spec, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue

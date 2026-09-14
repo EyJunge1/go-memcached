@@ -65,9 +65,6 @@ func recacheToken(d time.Duration) (int64, bool) {
 	if d <= 0 {
 		return 0, false
 	}
-	secs := int64(d / time.Second)
-	if secs < 1 {
-		secs = 1
-	}
+	secs := max(int64(d/time.Second), 1)
 	return secs, true
 }

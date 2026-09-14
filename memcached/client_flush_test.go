@@ -61,7 +61,7 @@ func TestFlushAllAfterAndStatsArgs(t *testing.T) {
 
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
-	noError(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: delayPtr(Rel(time.Second))}))
+	noError(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: new(Rel(time.Second))}))
 	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
 	hasLen(t, items, 1)
@@ -99,7 +99,7 @@ func TestFlushAllAfterWritesDelayToken(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	noError(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{Delay: delayPtr(Rel(10 * time.Second))}))
+	noError(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{Delay: new(Rel(10 * time.Second))}))
 	srv.mu.Lock()
 	equal(t, "10", srv.lastFlushDelay)
 	srv.mu.Unlock()
@@ -180,7 +180,7 @@ func TestFlushAllOnHitsOneNode(t *testing.T) {
 	b.mu.Unlock()
 	equal(t, 1, empties)
 
-	noError(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: delayPtr(Rel(time.Second))}))
+	noError(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: new(Rel(time.Second))}))
 }
 
 func TestFlushAllDelayRejectsStagger(t *testing.T) {
@@ -190,8 +190,8 @@ func TestFlushAllDelayRejectsStagger(t *testing.T) {
 		cfg.AllowFlushAll = true
 	})
 	ctx := context.Background()
-	isErrorIs(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: delayPtr(Rel(time.Second)), Stagger: time.Second}), ErrInvalidArgument)
-	isErrorIs(t, mustAdmin(t, client).On(client.Servers()[0]).Flush(ctx, FlushOpts{Delay: delayPtr(ExptimeImmediate), Stagger: time.Second}), ErrInvalidArgument)
+	isErrorIs(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Delay: new(Rel(time.Second)), Stagger: time.Second}), ErrInvalidArgument)
+	isErrorIs(t, mustAdmin(t, client).On(client.Servers()[0]).Flush(ctx, FlushOpts{Delay: new(ExptimeImmediate), Stagger: time.Second}), ErrInvalidArgument)
 }
 
 func TestFlushAllExpImmediate(t *testing.T) {
@@ -200,7 +200,7 @@ func TestFlushAllExpImmediate(t *testing.T) {
 		cfg.AllowAdmin = true
 		cfg.AllowFlushAll = true
 	})
-	noError(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{Delay: delayPtr(ExptimeImmediate)}))
+	noError(t, mustAdmin(t, client).All().Flush(context.Background(), FlushOpts{Delay: new(ExptimeImmediate)}))
 	srv.mu.Lock()
 	equal(t, "-1", srv.lastFlushDelay)
 	srv.mu.Unlock()

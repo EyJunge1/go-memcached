@@ -312,10 +312,7 @@ func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *resp
 	default:
 	}
 
-	attempts := c.rt.retryAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(c.rt.retryAttempts, 1)
 	var last error
 	for i := 0; i < attempts; i++ {
 		node, err := c.pickFirstLiveAddr()
@@ -347,10 +344,7 @@ func (c *Client) dispatchFirstLive(ctx context.Context, req *request, resp *resp
 
 // dispatchToAddr sends req to node, retrying transport failures according to Config.
 func (c *Client) dispatchToAddr(ctx context.Context, node *addr, req *request, resp *response) error {
-	attempts := c.rt.retryAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(c.rt.retryAttempts, 1)
 	if node != nil && isUDPNetwork(node.Network) {
 		attempts = 1
 	}

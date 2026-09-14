@@ -700,12 +700,12 @@ func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp) (int, bool) 
 
 func scanMetaOpaque(header []byte) (num uint64, hasNum bool, tok []byte) {
 	line := trimCRLF(header)
-	end := bytes.IndexByte(line, ' ')
-	if end < 0 {
+	before, after, ok := bytes.Cut(line, []byte{' '})
+	if !ok {
 		return 0, false, nil
 	}
-	cd := line[:end]
-	rest := line[end+1:]
+	cd := before
+	rest := after
 	if bytes.Equal(cd, _VABytes) {
 		sp := bytes.IndexByte(rest, ' ')
 		if sp < 0 {

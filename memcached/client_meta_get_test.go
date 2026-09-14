@@ -275,11 +275,11 @@ func TestMetaPipelineValidateRejects(t *testing.T) {
 	}{
 		{
 			name: "autovivify-set",
-			op:   MetaOp{Key: []byte("k"), Body: []byte("v"), Set: &MetaSet{AutoVivify: delayPtr(Rel(time.Second))}},
+			op:   MetaOp{Key: []byte("k"), Body: []byte("v"), Set: &MetaSet{AutoVivify: new(Rel(time.Second))}},
 		},
 		{
 			name: "md-ttl",
-			op:   MetaOp{Key: []byte("k"), Delete: &MetaDelete{TTL: delayPtr(Rel(time.Second))}},
+			op:   MetaOp{Key: []byte("k"), Delete: &MetaDelete{TTL: new(Rel(time.Second))}},
 		},
 		{
 			name: "ma-j",
@@ -304,7 +304,7 @@ func TestMetaGetVivifyRoundTrip(t *testing.T) {
 	newCAS := uint64(42)
 
 	res, err := doMetaGet(client, context.Background(), []byte("missing"), MetaGet{
-		Vivify: delayPtr(Rel(time.Second)),
+		Vivify: new(Rel(time.Second)),
 		NewCAS: &newCAS,
 	})
 	noError(t, err)

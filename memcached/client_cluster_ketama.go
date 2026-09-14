@@ -131,7 +131,7 @@ func buildKetamaContinuum(addrs []*addr, pointsPerServer int) ([]ketamaPoint, er
 		hashes := pointerPerServer / pointerPerHash
 		for pointerIndex := uint32(1); pointerIndex <= hashes; pointerIndex++ {
 			hostKey := ketamaHostKey(addr, pointerIndex-1)
-			for x := uint32(0); x < pointerPerHash; x++ {
+			for x := range pointerPerHash {
 				cont = append(cont, ketamaPoint{
 					value: ketamaServerHash(hostKey, x),
 					index: hostIndex,

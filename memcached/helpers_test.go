@@ -37,10 +37,6 @@ func mustAdminOn(t *testing.T, c *Client) *AdminNode {
 	return mustAdmin(t, c).On(sv[0])
 }
 
-func delayPtr(e Exptime) *Exptime {
-	return &e
-}
-
 func testClient(t testing.TB, addr string, tweak ...func(*Config)) *Client {
 	t.Helper()
 	cfg, err := testConfig(addr, tweak...)
