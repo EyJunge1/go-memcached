@@ -51,8 +51,10 @@ go tool pprof -http=:8080 results/cpu.pprof
 | Client | Set+Get | Get-only | Multi-Get 8/32 | CAS `gets` | Meta | Text/Meta pipeline | UDP Get |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ours | yes | yes | yes | yes | yes | yes | yes (seed via TCP) |
-| yeqown | yes | yes | yes (`Gets`) | yes (`Gets`) | yes | no | yes if `udp://` works |
+| yeqown | yes | yes | yes (`Gets`) | yes (`Gets`) | yes | no | yes (`WithUDPEnabled`) |
 | bradfitz | yes | yes | yes (`GetMulti`) | yes (`Get` is `gets`) | no | no | no |
 | rainycape | yes if binary is on | yes | yes (`GetMulti`) | Get only (no CAS field) | no | no | no |
 
 rainycape speaks the deprecated binary protocol. The bench runs it when the server answers; otherwise it skips.
+
+Single-key ours benches use `GetOne` (same job as the others' `Get`). yeqown UDP sets `WithUDPEnabled`; rainycape idle is 10, same as bradfitz and this library's default.

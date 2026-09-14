@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	rainycape "github.com/rainycape/memcache"
 	yeqown "github.com/yeqown/memcached"
 )
+
+const benchIdleConns = 10
 
 var (
 	smallValue = []byte("test_value")
@@ -112,9 +115,18 @@ func newOursUDP(tb testing.TB) *ours.Client {
 	return c
 }
 
+func isUDPSpec(addr string) bool {
+	return strings.HasPrefix(addr, "udp://") || strings.HasPrefix(addr, "udp4://") || strings.HasPrefix(addr, "udp6://")
+}
+
 func newYeqown(tb testing.TB, addr string) yeqown.Client {
 	tb.Helper()
-	c, err := yeqown.New(addr)
+	var opts []yeqown.ClientOption
+	// Framing is an option, not implied by udp://.
+	if isUDPSpec(addr) {
+		opts = append(opts, yeqown.WithUDPEnabled())
+	}
+	c, err := yeqown.New(addr, opts...)
 	if err != nil {
 		tb.Skipf("yeqown: %v", err)
 	}
@@ -132,7 +144,7 @@ func newBradfitz(tb testing.TB) *memcache.Client {
 	tb.Helper()
 	c := memcache.New(tcpAddr())
 	c.Timeout = 3 * time.Second
-	c.MaxIdleConns = 10
+	c.MaxIdleConns = benchIdleConns
 	if err := c.Ping(); err != nil {
 		tb.Skipf("bradfitz no memcached on %s: %v", tcpAddr(), err)
 	}
@@ -147,6 +159,7 @@ func newRainycape(tb testing.TB) *rainycape.Client {
 	}
 	tb.Cleanup(func() { _ = c.Close() })
 	c.SetTimeout(5 * time.Second)
+	c.SetMaxIdleConnsPerAddr(benchIdleConns)
 	if err := c.Set(&rainycape.Item{Key: "b/rainycape/probe", Value: []byte("v")}); err != nil {
 		tb.Skipf("rainycape binary not available: %v", err)
 	}
@@ -193,24 +206,24 @@ type setGetter interface {
 
 type oursSG struct {
 	c   *ours.Client
-	one [1][]byte
-	dst [1]ours.GetResult
+	key []byte
+	dst ours.GetResult
 }
 
 func (s *oursSG) set(ctx context.Context, key string, value []byte) error {
-	s.one[0] = append(s.one[0][:0], key...)
-	return s.c.Store(ctx, ours.Item{Key: s.one[0], Value: value})
+	s.key = append(s.key[:0], key...)
+	return s.c.Store(ctx, ours.Item{Key: s.key, Value: value})
 }
 
 func (s *oursSG) get(ctx context.Context, key string) error {
-	s.one[0] = append(s.one[0][:0], key...)
-	if cap(s.dst[0].Value) < 4096 {
-		s.dst[0].Value = make([]byte, 0, 4096)
+	s.key = append(s.key[:0], key...)
+	if cap(s.dst.Value) < 4096 {
+		s.dst.Value = make([]byte, 0, 4096)
 	}
-	if err := s.c.Get(ctx, s.one[:], s.dst[:], ours.GetOpts{}); err != nil {
+	if err := s.c.GetOne(ctx, s.key, &s.dst, ours.GetOpts{}); err != nil {
 		return err
 	}
-	if !s.dst[0].Found {
+	if !s.dst.Found {
 		return errMiss
 	}
 	return nil

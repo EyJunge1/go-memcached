@@ -92,17 +92,15 @@ func BenchmarkTCPGetCAS(b *testing.B) {
 	b.Run("ours", func(b *testing.B) {
 		c := newOursTCP(b)
 		ctx := context.Background()
-		var one [1][]byte
-		dst := [1]ours.GetResult{{Value: make([]byte, 0, 64)}}
+		dst := ours.GetResult{Value: make([]byte, 0, 64)}
 		b.ReportAllocs()
 		b.ResetTimer()
 		i := 0
 		for b.Loop() {
-			one[0] = keyBytes[i%len(keyBytes)]
-			if err := c.Get(ctx, one[:], dst[:], casOpts); err != nil {
+			if err := c.GetOne(ctx, keyBytes[i%len(keyBytes)], &dst, casOpts); err != nil {
 				b.Fatal(err)
 			}
-			if !dst[0].Found || dst[0].CAS == 0 {
+			if !dst.Found || dst.CAS == 0 {
 				b.Fatal("missing CAS")
 			}
 			i++

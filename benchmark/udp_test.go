@@ -21,17 +21,15 @@ func BenchmarkUDPGet(b *testing.B) {
 		b.Run("ours/"+size.name, func(b *testing.B) {
 			c := newOursUDP(b)
 			ctx := context.Background()
-			var one [1][]byte
-			dst := [1]ours.GetResult{{Value: make([]byte, 0, len(size.val)+8)}}
+			dst := ours.GetResult{Value: make([]byte, 0, len(size.val)+8)}
 			b.ReportAllocs()
 			b.ResetTimer()
 			i := 0
 			for b.Loop() {
-				one[0] = keyBytes[i%len(keyBytes)]
-				if err := c.Get(ctx, one[:], dst[:], ours.GetOpts{}); err != nil {
+				if err := c.GetOne(ctx, keyBytes[i%len(keyBytes)], &dst, ours.GetOpts{}); err != nil {
 					b.Fatal(err)
 				}
-				if !dst[0].Found {
+				if !dst.Found {
 					b.Fatal(errMiss)
 				}
 				i++
