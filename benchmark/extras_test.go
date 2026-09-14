@@ -83,6 +83,97 @@ func BenchmarkTCPMultiGet(b *testing.B) {
 	}
 }
 
+func BenchmarkTCPPipelineMultiGet(b *testing.B) {
+	requireTCP(b)
+	for _, n := range []int{8, 32} {
+		keys := asKeyBytes(seedKeys(b, smallValue, n))
+		b.Run("coalesced/"+strconv.Itoa(n), func(b *testing.B) {
+			c := newOursTCP(b)
+			ctx := context.Background()
+			p := c.Pipeline()
+			dst := make([]ours.GetResult, n)
+			for i := range dst {
+				dst[i].Value = make([]byte, 0, 64)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := p.Get(keys, dst, ours.GetOpts{}).Run(ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run("individual/"+strconv.Itoa(n), func(b *testing.B) {
+			c := newOursTCP(b)
+			ctx := context.Background()
+			p := c.Pipeline()
+			dst := make([]ours.GetResult, n)
+			for i := range dst {
+				dst[i].Value = make([]byte, 0, 64)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				for i := range keys {
+					p.GetOne(keys[i], &dst[i], ours.GetOpts{})
+				}
+				if err := p.Run(ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkTCPPreparedBatchMultiGet256(b *testing.B) {
+	requireTCP(b)
+	keys := asKeyBytes(seedKeys(b, smallValue, 256))
+	for _, mode := range []string{"pipeline", "prepared", "session"} {
+		b.Run(mode, func(b *testing.B) {
+			c := newOursTCP(b)
+			ctx := context.Background()
+			dst := make([]ours.GetResult, len(keys))
+			for i := range dst {
+				dst[i].Value = make([]byte, 0, 64)
+			}
+			p := c.Pipeline()
+			var batch *ours.PreparedBatch
+			var held *ours.Session
+			if mode != "pipeline" {
+				var err error
+				batch, err = p.Get(keys, dst, ours.GetOpts{}).Prepare()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() { _ = batch.Close() })
+				if mode == "session" {
+					held, err = c.Session(ctx, keys[0])
+					if err != nil {
+						b.Fatal(err)
+					}
+					b.Cleanup(func() { _ = held.Close() })
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				var err error
+				switch mode {
+				case "pipeline":
+					err = p.Get(keys, dst, ours.GetOpts{}).Run(ctx)
+				case "prepared":
+					err = batch.Run(ctx)
+				case "session":
+					err = held.RunPrepared(ctx, batch)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkTCPGetCAS(b *testing.B) {
 	requireTCP(b)
 	keys := seedKeys(b, smallValue, 256)
@@ -209,30 +300,33 @@ func BenchmarkTCPMetaSetGet(b *testing.B) {
 
 func BenchmarkTCPMetaPipeline(b *testing.B) {
 	requireTCP(b)
-	keys := seedKeys(b, smallValue, 8)
-	ops := make([]ours.MetaOp, len(keys))
-	mg := ours.MetaGet{Return: ours.MetaGetReturn{Value: true}}
-	for i, k := range keys {
-		ops[i] = ours.MetaOp{Key: []byte(k), Get: &mg}
-	}
-
-	c := newOursTCP(b)
-	ctx := context.Background()
-	got := make([]ours.MetaResult, len(ops))
-	for i := range got {
-		got[i].Item.Value = make([]byte, 0, 64)
-	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		if err := c.Meta().Pipeline(ctx, ops, got); err != nil {
-			b.Fatal(err)
-		}
-		for i := range got {
-			if err := got[i].Err(); err != nil {
-				b.Fatal(err)
+	for _, n := range []int{8, 256} {
+		keys := seedKeys(b, smallValue, n)
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			ops := make([]ours.MetaOp, len(keys))
+			mg := ours.MetaGet{Return: ours.MetaGetReturn{Value: true}}
+			for i, k := range keys {
+				ops[i] = ours.MetaOp{Key: []byte(k), Get: &mg}
 			}
-		}
+			c := newOursTCP(b)
+			ctx := context.Background()
+			got := make([]ours.MetaResult, len(ops))
+			for i := range got {
+				got[i].Item.Value = make([]byte, 0, 64)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := c.Meta().Pipeline(ctx, ops, got); err != nil {
+					b.Fatal(err)
+				}
+				for i := range got {
+					if err := got[i].Err(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
 	}
 }
 

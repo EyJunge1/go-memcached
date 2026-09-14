@@ -22,19 +22,25 @@ type Client struct {
 	resolveSpec      string
 	resolveSpecFixed bool
 
-	healthMu  sync.Mutex
-	failCount map[string]int
-	deadUntil map[string]time.Time
+	healthMu    sync.Mutex
+	failCount   map[string]int
+	deadUntil   map[string]time.Time
+	healthDirty atomic.Bool
+	deadDirty   atomic.Bool
 
 	refreshStop chan struct{}
 	refreshOnce sync.Once
+	closeMu     sync.Mutex
 
 	resolverMu  sync.Mutex
 	resolverErr error
 
-	closed atomic.Bool
-	single atomic.Pointer[addr]
-	meta   MetaClient
+	closed         atomic.Bool
+	single         atomic.Pointer[addr]
+	clusterVersion atomic.Uint64
+	healthVersion  atomic.Uint64
+	meta           MetaClient
+	fanout         *fanoutPool
 }
 
 // New builds a Client from Config.
@@ -68,6 +74,8 @@ func New(cfg Config) (*Client, error) {
 		deadUntil:        make(map[string]time.Time),
 	}
 	c.meta.c = c
+	c.fanout = newFanoutPool(rt.fanoutWorkers)
+	c.clusterVersion.Store(1)
 	c.publishSingleLocked()
 	c.startResolverRefresh()
 	return c, nil
@@ -129,21 +137,30 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	}
 
 	c.healthMu.Lock()
+	healthChanged := false
 	for id := range c.failCount {
 		if _, ok := keep[id]; !ok {
 			delete(c.failCount, id)
+			healthChanged = true
 		}
 	}
 	for id := range c.deadUntil {
 		if _, ok := keep[id]; !ok {
 			delete(c.deadUntil, id)
+			healthChanged = true
 		}
 	}
+	if healthChanged {
+		c.healthVersion.Add(1)
+	}
+	c.healthDirty.Store(len(c.failCount) != 0)
+	c.deadDirty.Store(len(c.deadUntil) != 0)
 	c.healthMu.Unlock()
 
 	c.addrs = addrs
 	c.picker = picker
 	c.connPools = next
+	c.clusterVersion.Add(1)
 	c.publishSingleLocked()
 	for _, a := range addrs {
 		if a == nil {
@@ -161,19 +178,23 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 
 // Close shuts idle sockets and stops resolver refresh. TCP and Unix send quit first; UDP does not.
 func (c *Client) Close() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
 	c.refreshOnce.Do(func() {
 		if c.refreshStop != nil {
 			close(c.refreshStop)
 		}
 	})
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed.Load() {
 		return nil
 	}
 	c.closed.Store(true)
 	c.single.Store(nil)
+	c.fanout.close()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	var errs []error
 	for _, pool := range c.connPools {
@@ -188,9 +209,10 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// publishSingleLocked caches the only member when failover does not eject.
+// publishSingleLocked caches the only member. Ejecting cannot select an
+// alternative when the cluster has only one member.
 func (c *Client) publishSingleLocked() {
-	if len(c.addrs) == 1 && (c.rt == nil || !c.rt.failover.Eject) {
+	if len(c.addrs) == 1 {
 		c.single.Store(c.addrs[0])
 		return
 	}
@@ -204,7 +226,7 @@ func (c *Client) snapshotCluster() ([]*addr, picker) {
 	return c.addrs, c.picker
 }
 
-// pickNode returns the node for key. One member and no eject skips the lock.
+// pickNode returns the node for key. One member skips routing and locking.
 func (c *Client) pickNode(key []byte) (*addr, error) {
 	if a := c.single.Load(); a != nil {
 		return a, nil

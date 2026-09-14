@@ -2,7 +2,7 @@
 
 Compares this library against [yeqown/memcached](https://github.com/yeqown/memcached), [bradfitz/gomemcache](https://github.com/bradfitz/gomemcache), and [rainycape/memcache](https://github.com/rainycape/memcache) on one Podman Compose memcached (TCP and UDP on `127.0.0.1:11211`).
 
-`ns/op` is mostly RTT and the server. Use `allocs/op` and `B/op` as the client signal. Numbers are machine-specific; do not treat them as a gate.
+`ns/op` is mostly RTT and the server. Use `allocs/op` and `B/op` as the client signal. Numbers are machine-specific; do not treat them as a gate. `BenchmarkTCPPipelineSetGet` demonstrates Store+Get in one write/read wave; `BenchmarkTCPPreparedBatchSetGet`, `BenchmarkTCPPreparedBatchDynamicValues`, `BenchmarkTCPPreparedMetaBatchGet`, and `BenchmarkTCPPreparedMetaBatchDynamicValues` cover reusable plans; `BenchmarkTCPLargePreparedMetaBatch` covers 256/1024/4096 operations; `BenchmarkTCPSessionPoolParallel` covers fixed worker sessions. `BenchmarkTCPSetGet` intentionally measures the ordinary two-call path.
 
 This module is not part of `go test ./...` at the repo root. Live correctness tests live in [livetest](../livetest).
 
@@ -16,13 +16,13 @@ make bench-compare      # starts this stack, then `go test -bench` here
 make live-down
 ```
 
-Defaults: `MEMCACHED_TCP=127.0.0.1:11211`, `MEMCACHED_UDP=udp://127.0.0.1:11211`. Override to point at another instance. Without a server, tests and benches skip.
+Defaults: `MEMCACHED_TCP=127.0.0.1:11211`, `MEMCACHED_UDP=udp://127.0.0.1:11211`. Set `MEMCACHED_UNIX=/path/to/memcached.sock` for `BenchmarkUnixPreparedBatchSetGet`. Override to point at another instance. Without a server, tests and benches skip.
 
 UDP cannot Set in this library. UDP benches seed keys over TCP, then Get / MetaGet over UDP.
 
 ## Offline microbenchmarks
 
-No extra bench files in the library package. `make bench-micro` runs the ProtocolBuilder benches that already live in `memcached/protocol_builder_test.go` (same pattern as yeqown). This module is only the live client comparison.
+`make bench-micro` runs allocation and protocol microbenchmarks in the library package, including the bounded 256-node fanout comparison. This module contains the live client comparisons.
 
 ```bash
 make bench-micro

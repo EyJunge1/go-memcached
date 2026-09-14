@@ -25,9 +25,15 @@ func defaultPickBuilder() builder {
 	return ketamaPickBuilder{}
 }
 
-// Build returns a ketamaPicker; the continuum is built lazily on the first Pick.
-func (b ketamaPickBuilder) Build(_ []*addr) picker {
-	return &ketamaPicker{points: ketamaPointsPerServerW}
+// Build returns a ketamaPicker with the initial membership ready for the hot path.
+func (b ketamaPickBuilder) Build(addrs []*addr) picker {
+	p := &ketamaPicker{points: ketamaPointsPerServerW}
+	if len(addrs) > 1 {
+		if cont, err := buildKetamaContinuum(addrs, p.points); err == nil {
+			p.hot.Store(&ketamaHot{nodes: append([]*addr(nil), addrs...), continuum: cont})
+		}
+	}
+	return p
 }
 
 // ketamaPoint is one hash ring entry.
@@ -38,7 +44,7 @@ type ketamaPoint struct {
 
 // ketamaHot is a cached continuum for one membership snapshot.
 type ketamaHot struct {
-	cacheKey  string
+	nodes     []*addr
 	continuum []ketamaPoint
 }
 
@@ -50,59 +56,59 @@ type ketamaPicker struct {
 
 // Pick selects the cluster member that owns key on the weighted Ketama continuum.
 func (p *ketamaPicker) Pick(addrs []*addr, key []byte) (*addr, error) {
+	_, node, err := p.PickIndex(addrs, key)
+	return node, err
+}
+
+// PickIndex selects the owner and returns its index in addrs.
+func (p *ketamaPicker) PickIndex(addrs []*addr, key []byte) (int, *addr, error) {
 	n := len(addrs)
 	if n == 0 {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
+		return 0, nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}
 	if n == 1 {
-		return addrs[0], nil
+		return 0, addrs[0], nil
 	}
 
 	cont, err := p.continuumFor(addrs)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if len(cont) == 0 {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
+		return 0, nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}
 
 	h := ketamaDigest(key)
 	idx := cont[ketamaLookup(cont, h)].index
 	if idx < 0 || idx >= n {
-		return nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
+		return 0, nil, fmt.Errorf("no available address: %w", ErrInvalidAddress)
 	}
-	return addrs[idx], nil
+	return idx, addrs[idx], nil
 }
 
 // continuumFor returns the cached Ketama ring, rebuilding it when membership or weights change.
 func (p *ketamaPicker) continuumFor(addrs []*addr) ([]ketamaPoint, error) {
-	key := ketamaCacheKey(addrs)
-	if h := p.hot.Load(); h != nil && h.cacheKey == key && h.continuum != nil {
+	if h := p.hot.Load(); h != nil && sameAddrSnapshot(h.nodes, addrs) && h.continuum != nil {
 		return h.continuum, nil
 	}
 	cont, err := buildKetamaContinuum(addrs, p.points)
 	if err != nil {
 		return nil, err
 	}
-	p.hot.Store(&ketamaHot{cacheKey: key, continuum: cont})
+	p.hot.Store(&ketamaHot{nodes: append([]*addr(nil), addrs...), continuum: cont})
 	return cont, nil
 }
 
-// ketamaCacheKey is the identity of a membership snapshot used to reuse a continuum.
-func ketamaCacheKey(addrs []*addr) string {
-	var b strings.Builder
-	for i, a := range addrs {
-		if i > 0 {
-			b.WriteByte(0)
-		}
-		if a == nil {
-			continue
-		}
-		b.WriteString(a.id())
-		b.WriteByte(0)
-		b.WriteString(strconv.FormatUint(uint64(a.ketamaWeight()), 10))
+func sameAddrSnapshot(a, b []*addr) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return b.String()
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // buildKetamaContinuum lays out the weighted Ketama/MD5 ring matching libmemcached 1.1.4.

@@ -117,6 +117,38 @@ func Test_ketamaPick_goldenWeightedTwoNodes(t *testing.T) {
 	}
 }
 
+func Test_ketamaPickHotPathDoesNotAllocate(t *testing.T) {
+	addrs := []*addr{
+		newAddrWeighted("tcp", "10.0.0.1:11211", 1),
+		newAddrWeighted("tcp", "10.0.0.2:11211", 2),
+	}
+	picker := defaultPickBuilder().Build(addrs)
+	key := []byte("hot-key")
+	if _, err := picker.Pick(addrs, key); err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := picker.Pick(addrs, key); err != nil {
+			t.Fatal(err)
+		}
+	})
+	equal(t, float64(0), allocs)
+}
+
+func TestKetamaPickIndexMatchesPick(t *testing.T) {
+	addrs := []*addr{
+		newAddrWeighted("tcp", "10.0.0.1:11211", 1),
+		newAddrWeighted("tcp", "10.0.0.2:11211", 1),
+	}
+	picker := (&ketamaPickBuilder{}).Build(addrs).(*ketamaPicker)
+	index, indexed, err := picker.PickIndex(addrs, []byte("key"))
+	noError(t, err)
+	picked, err := picker.Pick(addrs, []byte("key"))
+	noError(t, err)
+	equal(t, addrs[index], indexed)
+	equal(t, picked, indexed)
+}
+
 func Test_ketamaLookup_wrapsPastLastPoint(t *testing.T) {
 	cont := []ketamaPoint{{value: 10, index: 1}, {value: 20, index: 0}}
 	equal(t, 0, ketamaLookup(cont, 0))

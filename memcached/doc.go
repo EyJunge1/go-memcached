@@ -9,8 +9,14 @@
 //
 // Meta() is the typed meta-protocol surface. Transport and parse failures are
 // the method error; protocol misses and conflicts live on dst.
-// Client.Pipeline is a text write-then-read batch; Meta().Pipeline is the
-// meta batch.
+// Client.Pipeline is a text write-then-read batch for mixed mutations and
+// retrievals. Optional PipelineResult destinations retain each operation's
+// outcome. Pipeline.Prepare retains a reusable plan; PreparedBatch.RunValues
+// borrows dynamic storage values. Meta().PreparePipeline caches an owned quiet
+// meta plan and RunValues replaces its set bodies. Client.Session leases one
+// routed connection for direct sequential work; NewSessionPool supplies fixed
+// parallel session leases. Cluster.FanoutWorkers optionally enables persistent,
+// bounded multi-node workers.
 //
 // Admin commands, Flush, and membership changes are opt-in (AllowAdmin,
 // AllowFlushAll, AllowSetServers). Admin().On targets one node; Admin().All

@@ -24,6 +24,28 @@ type picker interface {
 	Pick(addrs []*addr, key []byte) (*addr, error)
 }
 
+type indexedPicker interface {
+	PickIndex(addrs []*addr, key []byte) (int, *addr, error)
+}
+
+func pickAddrIndex(p picker, addrs []*addr, key []byte) (int, *addr, error) {
+	if indexed, ok := p.(indexedPicker); ok {
+		i, node, err := indexed.PickIndex(addrs, key)
+		if err != nil {
+			return 0, nil, err
+		}
+		if i < 0 || i >= len(addrs) || addrs[i] != node {
+			panic("memcached: indexed picker returned an address outside its snapshot")
+		}
+		return i, node, nil
+	}
+	node, err := p.Pick(addrs, key)
+	if err != nil {
+		return 0, nil, err
+	}
+	return pipelineAddrIndex(addrs, node), node, nil
+}
+
 // builder constructs a picker for a snapshot of addrs.
 type builder interface {
 	Build(addrs []*addr) picker

@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -247,6 +248,57 @@ func TestMetaPipelineAcrossNodes(t *testing.T) {
 	hasLen(t, got, 2)
 	equal(t, []byte("1"), got[0].Item.Value)
 	equal(t, []byte("2"), got[1].Item.Value)
+}
+
+func TestMetaPipelineLargeUsesIndexedOpaqueMatching(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	const count = 64
+	ops := make([]MetaOp, count)
+	dst := make([]MetaResult, count)
+	for i := range ops {
+		key := fmt.Appendf(nil, "key-%d", i)
+		mustStore(t, client, ctx, key, key)
+		ops[i] = MetaOp{
+			Key: key,
+			Get: &MetaGet{Return: MetaGetReturn{Value: true}},
+		}
+	}
+
+	noError(t, client.Meta().Pipeline(ctx, ops, dst))
+	for i := range dst {
+		equal(t, fmt.Appendf(nil, "key-%d", i), dst[i].Item.Value)
+	}
+}
+
+func TestMetaPipelineIndexRejectsDuplicateOpaque(t *testing.T) {
+	group := make([]preparedMetaOp, metaPipelineIndexThreshold)
+	for i := range group {
+		group[i] = preparedMetaOp{hasTok: true, tokNum: uint64(i)}
+	}
+	group[len(group)-1].tokNum = 0
+
+	_, err := buildMetaPipelineIndex(group)
+	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestMetaPipelineIndexMatchesNumericAndStringOpaque(t *testing.T) {
+	group := make([]preparedMetaOp, metaPipelineIndexThreshold)
+	for i := range group {
+		group[i] = preparedMetaOp{idx: i, hasTok: true, tokNum: uint64(i)}
+	}
+	group[3].tok = "custom"
+	index, err := buildMetaPipelineIndex(group)
+	noError(t, err)
+	defer putMetaPipelineIndex(index)
+
+	pos, ok := matchMetaPipelineOpaque([]byte("HD O5\r\n"), group, index)
+	isTrue(t, ok)
+	equal(t, 5, pos)
+	pos, ok = matchMetaPipelineOpaque([]byte("HD Ocustom\r\n"), group, index)
+	isTrue(t, ok)
+	equal(t, 3, pos)
 }
 
 func TestMetaPipelineEmptyAndCanceled(t *testing.T) {

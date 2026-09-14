@@ -3,6 +3,7 @@ package memcached
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,18 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+const (
+	minTLSCoalesceBytes = 32 << 10
+	maxTLSCoalesceBytes = 256 << 10
+)
+
+var tlsWriteBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, 64<<10)
+		return &buf
+	},
+}
 
 var errConnClosed = errors.New("connection is closed")
 
@@ -89,19 +102,19 @@ type conn struct {
 	addr       net.Addr
 	network    string
 	returnedAt time.Time
-	deadline   time.Time
 
 	sync.Mutex // guards Close
 	raw        net.Conn
 	closed     atomic.Bool
 	pool       *connPool
 
-	rr     *bufio.Reader
-	wr     *bufio.Writer
-	iov    net.Buffers
-	iovBuf [3][]byte
-	udpIn  []byte
-	udpOut []byte
+	rr       *bufio.Reader
+	wr       *bufio.Writer
+	iov      net.Buffers
+	iovBuf   [3][]byte
+	batchIOV net.Buffers
+	udpIn    []byte
+	udpOut   []byte
 }
 
 // newConnContext dials node, applies TCP_NODELAY, and returns a buffered wireConn.
@@ -157,38 +170,16 @@ var zeroTime = time.Time{}
 
 // setReadDeadline applies a read deadline on the raw socket; a zero time clears it.
 func (c *conn) setReadDeadline(d time.Time) error {
-	if d.IsZero() {
-		return c.raw.SetReadDeadline(zeroTime)
-	}
-
 	return c.raw.SetReadDeadline(d)
 }
 
 // setWriteDeadline applies a write deadline on the raw socket; a zero time clears it.
 func (c *conn) setWriteDeadline(d time.Time) error {
-	if d.IsZero() {
-		return c.raw.SetWriteDeadline(zeroTime)
-	}
-
 	return c.raw.SetWriteDeadline(d)
 }
 
 // setDeadline applies one combined read/write deadline; a zero time clears both.
-// A far existing deadline is kept so sequential ops skip the syscall.
 func (c *conn) setDeadline(d time.Time) error {
-	if d.IsZero() {
-		if c.deadline.IsZero() {
-			return nil
-		}
-		c.deadline = zeroTime
-		return c.raw.SetDeadline(zeroTime)
-	}
-	now := clock()
-	soon := now.Add(time.Second)
-	if !c.deadline.IsZero() && c.deadline.After(soon) && !d.Before(soon) {
-		return nil
-	}
-	c.deadline = d
 	return c.raw.SetDeadline(d)
 }
 
@@ -329,6 +320,115 @@ func (c *conn) writeLargeBody(raw, body, tail []byte) error {
 	c.iovBuf = [3][]byte{}
 	c.iov = c.iovBuf[:0]
 	return err
+}
+
+// supportsPipelineWritev reports whether net.Buffers can use the concrete
+// socket's vectored-write implementation. Wrapped sockets such as tls.Conn
+// deliberately stay on the buffered path.
+func (c *conn) supportsPipelineWritev() bool {
+	switch c.raw.(type) {
+	case *net.TCPConn, *net.UnixConn:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *conn) isTLS() bool {
+	_, ok := c.raw.(*tls.Conn)
+	return ok
+}
+
+func takeTLSWriteBuffer(n int) *[]byte {
+	box := tlsWriteBufferPool.Get().(*[]byte)
+	if cap(*box) < n {
+		*box = make([]byte, 0, n)
+	} else {
+		*box = (*box)[:0]
+	}
+	return box
+}
+
+func putTLSWriteBuffer(box *[]byte) {
+	if box == nil || cap(*box) > maxTLSCoalesceBytes {
+		return
+	}
+	*box = (*box)[:0]
+	tlsWriteBufferPool.Put(box)
+}
+
+func requestWireSize(req *request) int {
+	return len(req.raw) + len(req.body) + len(req.tail)
+}
+
+// writeTLSBatch coalesces medium frames into one tls.Conn.Write. The bounded
+// copy avoids tiny records without copying very large values.
+func (c *conn) writeTLSBatch(reqs []*request, total int) (int64, error) {
+	if c.isClosed() {
+		return 0, errConnClosed
+	}
+	box := takeTLSWriteBuffer(total)
+	defer putTLSWriteBuffer(box)
+	for _, req := range reqs {
+		*box = append(*box, req.raw...)
+		*box = append(*box, req.body...)
+		*box = append(*box, req.tail...)
+	}
+	written := 0
+	for written < len(*box) {
+		n, err := c.raw.Write((*box)[written:])
+		written += n
+		if err != nil {
+			return int64(written), err
+		}
+		if n == 0 {
+			return int64(written), io.ErrShortWrite
+		}
+	}
+	return int64(written), nil
+}
+
+// writePipelineBatch emits several frames with one vectored socket write
+// sequence. The caller must have an empty buffered writer.
+func (c *conn) writePipelineBatch(reqs []*request) (int64, error) {
+	if c.isClosed() {
+		return 0, errConnClosed
+	}
+	parts := 0
+	for _, req := range reqs {
+		parts++
+		if len(req.body) > 0 {
+			parts++
+		}
+		if len(req.tail) > 0 {
+			parts++
+		}
+	}
+	if cap(c.batchIOV) < parts {
+		c.batchIOV = make(net.Buffers, 0, parts)
+	}
+	bufs := c.batchIOV[:0]
+	for _, req := range reqs {
+		bufs = append(bufs, req.raw)
+		if len(req.body) > 0 {
+			bufs = append(bufs, req.body)
+		}
+		if len(req.tail) > 0 {
+			bufs = append(bufs, req.tail)
+		}
+	}
+	c.iov = bufs
+	n, err := c.iov.WriteTo(c.raw)
+	for i := range bufs {
+		bufs[i] = nil
+	}
+	if cap(bufs) > 1024 {
+		c.batchIOV = nil
+	} else {
+		c.batchIOV = bufs[:0]
+	}
+	c.iov = c.iovBuf[:0]
+	return n, err
 }
 
 // Close implements io.Closer on the buffered socket.

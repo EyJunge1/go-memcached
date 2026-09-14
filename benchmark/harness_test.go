@@ -49,6 +49,10 @@ func udpAddr() string {
 	return "udp://127.0.0.1:11211"
 }
 
+func unixAddr() string {
+	return os.Getenv("MEMCACHED_UNIX")
+}
+
 func benchKey(name string, n uint64) string {
 	return fmt.Sprintf("b/%s/%d", name, n)
 }
@@ -110,6 +114,29 @@ func newOursUDP(tb testing.TB) *ours.Client {
 	if err := c.Version(ctx, new([]byte)); err != nil {
 		_ = c.Close()
 		tb.Skipf("no UDP memcached on %s: %v", udpAddr(), err)
+	}
+	tb.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func newOursUnix(tb testing.TB) *ours.Client {
+	tb.Helper()
+	path := unixAddr()
+	if path == "" {
+		tb.Skip("set MEMCACHED_UNIX to a memcached Unix-socket path")
+	}
+	c, err := ours.New(ours.Config{
+		Servers:   []ours.Server{{Network: "unix", Address: path}},
+		Transport: oursTransport(),
+	})
+	if err != nil {
+		tb.Skipf("no Unix memcached on %s: %v", path, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := c.Version(ctx, new([]byte)); err != nil {
+		_ = c.Close()
+		tb.Skipf("no Unix memcached on %s: %v", path, err)
 	}
 	tb.Cleanup(func() { _ = c.Close() })
 	return c

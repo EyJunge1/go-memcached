@@ -80,6 +80,9 @@ type Cluster struct {
 	// Namespace is prepended on the wire only (250-byte key limit includes it).
 	// Dumps and watch streams still show the wired key.
 	Namespace string
+	// FanoutWorkers bounds parallel node work for very large clusters.
+	// Zero starts one goroutine per participating node for minimum latency.
+	FanoutWorkers int
 	// ResolverRefresh > 0 re-resolves ResolveSpec (or formatted Servers) on that interval.
 	// AllowSetServers is required.
 	ResolverRefresh time.Duration
@@ -153,7 +156,9 @@ func serversToAddrs(servers []Server) ([]*addr, error) {
 		if strings.TrimSpace(s.Address) == "" {
 			return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 		}
-		out = append(out, newAddrWeighted(network, s.Address, s.Weight))
+		a := newAddrWeighted(network, s.Address, s.Weight)
+		a.slot = len(out)
+		out = append(out, a)
 	}
 	return out, nil
 }
@@ -302,6 +307,9 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.Pool.MaxOpen < 0 {
 		return fmt.Errorf("Pool.MaxOpen must be >= 0: %w", ErrInvalidArgument)
+	}
+	if cfg.Cluster.FanoutWorkers < 0 {
+		return fmt.Errorf("Cluster.FanoutWorkers must be >= 0: %w", ErrInvalidArgument)
 	}
 	if err := validateTransportServers(cfg.Servers, cfg.Transport.TLS); err != nil {
 		return err

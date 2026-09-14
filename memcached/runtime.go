@@ -49,6 +49,7 @@ type runtime struct {
 	nsPrefix        []byte
 	resolverRefresh time.Duration
 	maxValueBytes   int
+	fanoutWorkers   int
 
 	tcpNoDelay        bool
 	unixSocketAnyMode bool
@@ -82,6 +83,7 @@ func runtimeFromConfig(cfg Config) (*runtime, error) {
 		namespace:         cfg.Cluster.Namespace,
 		resolverRefresh:   cfg.Cluster.ResolverRefresh,
 		maxValueBytes:     cfg.MaxValueBytes,
+		fanoutWorkers:     cfg.Cluster.FanoutWorkers,
 		tcpNoDelay:        !cfg.Transport.DisableTCPNoDelay,
 		unixSocketAnyMode: cfg.Transport.UnixSocketAnyMode,
 		unixSocketMaxMode: cfg.Transport.UnixSocketMaxMode,

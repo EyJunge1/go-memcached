@@ -26,6 +26,8 @@ type request struct {
 	raw []byte
 	// rawBox is the pool slot for raw when the builder detached it.
 	rawBox *[]byte
+	// rawPut overrides the default small-builder pool for specialized batches.
+	rawPut func(*[]byte)
 	// keyBox is the pool slot for a namespaced routing key.
 	keyBox *[]byte
 	// body and tail follow raw so storage values skip the builder buffer.
@@ -61,7 +63,9 @@ func buildRequest(cmd []byte, key []byte, raw []byte) *request {
 // release clears the request and returns it to the pool.
 func (req *request) release() {
 	if req.rawBox != nil {
-		if cap(*req.rawBox) <= maxPooledBufferCap {
+		if req.rawPut != nil {
+			req.rawPut(req.rawBox)
+		} else if cap(*req.rawBox) <= maxPooledBufferCap {
 			*req.rawBox = (*req.rawBox)[:0]
 			builderBufPool.Put(req.rawBox)
 		}
@@ -71,6 +75,7 @@ func (req *request) release() {
 	}
 	putBuilderBox(req.keyBox)
 	req.keyBox = nil
+	req.rawPut = nil
 	req.cmd = nil
 	req.key = nil
 	req.raw = nil
@@ -118,8 +123,17 @@ func (req *request) doSend(ctx context.Context, rr wireConn, writeTimeout time.D
 	if req.udpEnabled {
 		return req.sendUDP(rr)
 	}
+	if c, ok := rr.(*conn); ok && c.wr != nil && c.wr.Buffered() == 0 && c.isTLS() {
+		total := requestWireSize(req)
+		if total >= minTLSCoalesceBytes && total <= maxTLSCoalesceBytes {
+			reqs := [1]*request{req}
+			_, err = c.writeTLSBatch(reqs[:], total)
+			return err
+		}
+	}
 	if len(req.body) >= writevBodyThreshold {
-		if c, ok := rr.(*conn); ok && c.wr != nil && c.wr.Buffered() == 0 {
+		if c, ok := rr.(*conn); ok && c.wr != nil && c.wr.Buffered() == 0 &&
+			c.supportsPipelineWritev() {
 			return c.writeLargeBody(req.raw, req.body, req.tail)
 		}
 	}
@@ -145,13 +159,28 @@ func (req *request) write(rr wireConn) (err error) {
 	return err
 }
 
+// writePipeline writes one queued frame without the final batch flush.
+// Bodies at least as large as the connection buffer bypass bufio after
+// flushing earlier frames, avoiding a large copy and split header/body writes.
+func (req *request) writePipeline(rr wireConn) error {
+	if len(req.body) >= connWriteBufferSize {
+		if c, ok := rr.(*conn); ok && c.wr != nil && c.supportsPipelineWritev() {
+			if c.wr.Buffered() > 0 {
+				if err := c.wr.Flush(); err != nil {
+					return err
+				}
+			}
+			return c.writeLargeBody(req.raw, req.body, req.tail)
+		}
+	}
+	return req.write(rr)
+}
+
 func nopStop() {}
 
 func clearWriteDeadline(rr wireConn) { _ = rr.setWriteDeadline(zeroTime) }
 
 func clearReadDeadline(rr wireConn) { _ = rr.setReadDeadline(zeroTime) }
-
-func clearDeadlines(rr wireConn) { _ = rr.setDeadline(zeroTime) }
 
 // watchContextCancel shortens the conn deadlines when ctx is canceled.
 func watchContextCancel(ctx context.Context, rr wireConn) (stop func()) {

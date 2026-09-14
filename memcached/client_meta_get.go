@@ -128,24 +128,26 @@ func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
 
 // preparedMetaOp is one encoded Meta().Pipeline step plus its opaque token.
 type preparedMetaOp struct {
-	idx        int
-	key        []byte
-	cmd        []byte
-	line       []byte
-	body       []byte
-	tail       []byte
-	lineBox    *[]byte
-	keyBox     *[]byte
-	tok        string
-	tokNum     uint64
-	hasTok     bool
-	getFlags   metaGetFlags
-	hasGet     bool
-	returnKey  bool
-	keepUser   []byte
-	keepOpaque []byte
-	noop       bool
-	barrier    MetaNoop
+	idx         int
+	key         []byte
+	nodeIndex   int
+	cmd         []byte
+	line        []byte
+	body        []byte
+	tail        []byte
+	lineBox     *[]byte
+	keyBox      *[]byte
+	tok         string
+	tokNum      uint64
+	hasTok      bool
+	getFlags    metaGetFlags
+	hasGet      bool
+	returnKey   bool
+	valueBinary bool
+	keepUser    []byte
+	keepOpaque  []byte
+	noop        bool
+	barrier     MetaNoop
 }
 
 const maxPooledPreparedMeta = 256
@@ -155,6 +157,32 @@ var preparedMetaPool = sync.Pool{
 		s := make([]preparedMetaOp, 0, 16)
 		return &s
 	},
+}
+
+const (
+	defaultMetaBatchBuffer = 8 << 10
+	maxMetaBatchBuffer     = 64 << 10
+)
+
+var metaBatchBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, defaultMetaBatchBuffer)
+		return &buf
+	},
+}
+
+func takeMetaBatchBuffer() *[]byte {
+	box := metaBatchBufferPool.Get().(*[]byte)
+	*box = (*box)[:0]
+	return box
+}
+
+func putMetaBatchBuffer(box *[]byte) {
+	if box == nil || cap(*box) > maxMetaBatchBuffer {
+		return
+	}
+	*box = (*box)[:0]
+	metaBatchBufferPool.Put(box)
 }
 
 func getPreparedMeta(n int) *[]preparedMetaOp {
@@ -273,6 +301,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.lineBox = box
 		prep.body = body
 		prep.tail = tail
+		prep.valueBinary = ms.b
 		prep.tok = opaqueToken(ms.Otoken, ms.O, ms.OtokenSet)
 		prep.tokNum = ms.O
 		prep.hasTok = ms.Oset || ms.OtokenSet
@@ -453,39 +482,77 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResul
 		return c.metaPipelineDispatch(ctx, addrs[0], prepared, out)
 	}
 
-	groups := make(map[*addr][]preparedMetaOp, len(addrs))
-	for _, p := range prepared {
-		addr, err := picker.Pick(addrs, p.key)
+	var first *addr
+	sameNode := true
+	for i := range prepared {
+		nodeIndex, addr, err := pickAddrIndex(picker, addrs, prepared[i].key)
 		if err != nil {
 			return fmt.Errorf("pick node failed: %w", err)
 		}
-		groups[addr] = append(groups[addr], p)
+		prepared[i].nodeIndex = nodeIndex
+		if first == nil {
+			first = addr
+		} else if addr != first {
+			sameNode = false
+		}
 	}
-	for i := range prepared {
-		prepared[i].lineBox = nil
+	if sameNode {
+		return c.metaPipelineDispatch(ctx, first, prepared, out)
 	}
 
-	if len(groups) == 1 {
-		for addr, group := range groups {
-			return c.metaPipelineDispatch(ctx, addr, group, out)
-		}
+	var countStack [32]int
+	var offsetStack [33]int
+	var counts, offsets []int
+	if len(addrs) <= len(countStack) {
+		counts = countStack[:len(addrs)]
+		offsets = offsetStack[:len(addrs)+1]
+	} else {
+		counts = make([]int, len(addrs))
+		offsets = make([]int, len(addrs)+1)
+	}
+	for i := range prepared {
+		counts[prepared[i].nodeIndex]++
+	}
+	for i := range addrs {
+		offsets[i+1] = offsets[i] + counts[i]
+		counts[i] = offsets[i]
+	}
+	groupBox := getPreparedMeta(len(prepared))
+	if cap(*groupBox) < len(prepared) {
+		*groupBox = make([]preparedMetaOp, len(prepared))
+	} else {
+		*groupBox = (*groupBox)[:len(prepared)]
+	}
+	defer putPreparedMeta(groupBox)
+	grouped := *groupBox
+	for i := range prepared {
+		group := prepared[i].nodeIndex
+		copyOp := prepared[i]
+		copyOp.keyBox = nil
+		grouped[counts[group]] = copyOp
+		counts[group]++
+		prepared[i].lineBox = nil
 	}
 
 	var (
 		mu   sync.Mutex
 		errs []error
-		wg   sync.WaitGroup
 	)
-	for addr, group := range groups {
-		wg.Go(func() {
-			if err := c.metaPipelineDispatch(ctx, addr, group, out); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-			}
-		})
+	active := 0
+	for i := range addrs {
+		if offsets[i] != offsets[i+1] {
+			counts[active] = i
+			active++
+		}
 	}
-	wg.Wait()
+	c.runFanout(ctx, active, func(runCtx context.Context, groupIndex int) {
+		i := counts[groupIndex]
+		if err := c.metaPipelineDispatch(runCtx, addrs[i], grouped[offsets[i]:offsets[i+1]], out); err != nil {
+			mu.Lock()
+			errs = append(errs, err)
+			mu.Unlock()
+		}
+	})
 	return errors.Join(errs...)
 }
 
@@ -494,39 +561,56 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	if len(group) == 0 {
 		return nil
 	}
-	box := takeBuilderBox()
-	if err := duplicatePipelineOpaque(group); err != nil {
-		putBuilderBox(box)
-		for i := range group {
-			putBuilderBox(group[i].lineBox)
-			group[i].lineBox = nil
-		}
+	box := takeMetaBatchBuffer()
+	index, err := buildMetaPipelineIndex(group)
+	if err != nil {
+		putMetaBatchBuffer(box)
 		return err
 	}
-	raw := (*box)[:0]
 	var barrier MetaNoop
+	need := 0
+	for i := range group {
+		p := &group[i]
+		need += len(p.line) + len(p.body) + len(p.tail)
+		if p.noop {
+			barrier = p.barrier
+		}
+	}
+	need += metaQuietBarrierLen(barrier)
+	if cap(*box) < need {
+		*box = make([]byte, 0, need)
+	}
+	raw := (*box)[:0]
 	for i := range group {
 		p := &group[i]
 		raw = append(raw, p.line...)
 		raw = append(raw, p.body...)
 		raw = append(raw, p.tail...)
-		putBuilderBox(p.lineBox)
-		p.lineBox = nil
-		if p.noop {
-			barrier = p.barrier
-		}
 	}
 	raw = appendMetaQuietBarrier(raw, barrier)
 	*box = raw
 
 	req := buildRequest(group[0].cmd, group[0].key, raw)
 	req.rawBox = box
+	req.rawPut = putMetaBatchBuffer
 	resp := buildQuietBarrierResponse()
 	resp.metaPipeC = c
 	resp.metaPipeDst = out
 	resp.metaPipeGroup = group
+	resp.metaPipeIndex = index
 	defer releaseReqAndResp(req, resp)
 
+	return c.finishMetaPipelineDispatch(ctx, node, group, out, req, resp)
+}
+
+func (c *Client) finishMetaPipelineDispatch(
+	ctx context.Context,
+	node *addr,
+	group []preparedMetaOp,
+	out []MetaResult,
+	req *request,
+	resp *response,
+) error {
 	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
 	if dispatchErr != nil && !resp.metaSawReply && !isChargeMetaFault(dispatchErr) {
 		return dispatchErr
@@ -556,12 +640,29 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	return dispatchErr
 }
 
+func metaQuietBarrierLen(f MetaNoop) int {
+	n := len(_MnCRLFBytes)
+	if f.ProxyHint != "" {
+		n += 2 + len(f.ProxyHint)
+	}
+	if f.ProxyPath != "" {
+		n += 2 + len(f.ProxyPath)
+	}
+	return n
+}
+
 func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 	if resp == nil || resp.metaPipeDst == nil {
 		return fmt.Errorf("missing meta pipeline dest: %w", ErrMalformedResponse)
 	}
 	resp.metaSawReply = true
-	idx, ok := matchMetaPipelineOpaque(header, resp.metaPipeGroup)
+	pos, ok := matchMetaPipelineOpaque(header, resp.metaPipeGroup, resp.metaPipeIndex)
+	idx := 0
+	var prep *preparedMetaOp
+	if ok {
+		prep = &resp.metaPipeGroup[pos]
+		idx = prep.idx
+	}
 
 	var item *MetaItem
 	var scratch MetaItem
@@ -600,15 +701,8 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 	if !ok {
 		return nil
 	}
-	var prep *preparedMetaOp
-	for i := range resp.metaPipeGroup {
-		if resp.metaPipeGroup[i].idx == idx {
-			prep = &resp.metaPipeGroup[i]
-			if prep.hasGet {
-				applyCheckCAS(item, &prep.getFlags)
-			}
-			break
-		}
+	if prep.hasGet {
+		applyCheckCAS(item, &prep.getFlags)
 	}
 	finishMetaPipelineDest(resp.metaPipeC, resp.metaPipeDst, idx, prep)
 	return nil
@@ -665,33 +759,176 @@ func storeMetaPipelineResult(c *Client, out []MetaResult, idx int, p *preparedMe
 	}
 }
 
-func duplicatePipelineOpaque(group []preparedMetaOp) error {
-	for i := range group {
-		if group[i].tok == "" {
-			continue
+const metaPipelineIndexThreshold = 16
+
+type metaPipelineIndex struct {
+	dense []int32
+	num   map[uint64]int
+	tok   map[string]int
+}
+
+const (
+	maxPooledMetaPipelineIndex = 256
+	maxDenseMetaOpaque         = 4096
+)
+
+var metaPipelineIndexPool = sync.Pool{
+	New: func() any { return new(metaPipelineIndex) },
+}
+
+func takeMetaPipelineIndex() *metaPipelineIndex {
+	index := metaPipelineIndexPool.Get().(*metaPipelineIndex)
+	index.dense = index.dense[:0]
+	clear(index.num)
+	clear(index.tok)
+	return index
+}
+
+func putMetaPipelineIndex(index *metaPipelineIndex) {
+	if index == nil {
+		return
+	}
+	if cap(index.dense) > maxDenseMetaOpaque ||
+		len(index.num)+len(index.tok) > maxPooledMetaPipelineIndex {
+		return
+	}
+	clear(index.dense)
+	clear(index.num)
+	clear(index.tok)
+	index.dense = index.dense[:0]
+	metaPipelineIndexPool.Put(index)
+}
+
+func preparedMetaOpaque(p *preparedMetaOp) (num uint64, numeric bool, tok string, ok bool) {
+	if !p.hasTok {
+		return 0, false, "", false
+	}
+	if p.tok == "" {
+		return p.tokNum, true, "", true
+	}
+	n, err := strconv.ParseUint(p.tok, 10, 64)
+	if err == nil && opaqueIsCanonical([]byte(p.tok), n) {
+		return n, true, "", true
+	}
+	return 0, false, p.tok, true
+}
+
+func samePreparedMetaOpaque(a, b *preparedMetaOp) bool {
+	an, anum, atok, aok := preparedMetaOpaque(a)
+	bn, bnum, btok, bok := preparedMetaOpaque(b)
+	if !aok || !bok || anum != bnum {
+		return false
+	}
+	if anum {
+		return an == bn
+	}
+	return atok == btok
+}
+
+func buildMetaPipelineIndex(group []preparedMetaOp) (*metaPipelineIndex, error) {
+	if len(group) < metaPipelineIndexThreshold {
+		for i := range group {
+			for j := i + 1; j < len(group); j++ {
+				if samePreparedMetaOpaque(&group[i], &group[j]) {
+					return nil, fmt.Errorf("duplicate opaque: %w", ErrInvalidArgument)
+				}
+			}
 		}
-		for j := i + 1; j < len(group); j++ {
-			if group[j].tok != "" && group[i].tok == group[j].tok {
-				return fmt.Errorf("duplicate opaque %q: %w", group[i].tok, ErrInvalidArgument)
+		return nil, nil
+	}
+	index := takeMetaPipelineIndex()
+	maxNum := uint64(0)
+	numericCount := 0
+	for i := range group {
+		num, numeric, _, ok := preparedMetaOpaque(&group[i])
+		if ok && numeric {
+			numericCount++
+			if num > maxNum {
+				maxNum = num
 			}
 		}
 	}
-	return nil
+	useDense := numericCount > 0 && maxNum < maxDenseMetaOpaque &&
+		maxNum+1 <= uint64(len(group))*8
+	if useDense {
+		need := int(maxNum) + 1
+		if cap(index.dense) < need {
+			index.dense = make([]int32, need)
+		} else {
+			index.dense = index.dense[:need]
+		}
+		for i := range index.dense {
+			index.dense[i] = -1
+		}
+	}
+	for i := range group {
+		num, numeric, tok, ok := preparedMetaOpaque(&group[i])
+		if !ok {
+			continue
+		}
+		if numeric {
+			if useDense {
+				if index.dense[num] >= 0 {
+					putMetaPipelineIndex(index)
+					return nil, fmt.Errorf("duplicate opaque: %w", ErrInvalidArgument)
+				}
+				index.dense[num] = int32(i)
+			} else {
+				if index.num == nil {
+					index.num = make(map[uint64]int, numericCount)
+				}
+				if _, exists := index.num[num]; exists {
+					putMetaPipelineIndex(index)
+					return nil, fmt.Errorf("duplicate opaque: %w", ErrInvalidArgument)
+				}
+				index.num[num] = i
+			}
+			continue
+		}
+		if index.tok == nil {
+			index.tok = make(map[string]int)
+		}
+		if _, exists := index.tok[tok]; exists {
+			putMetaPipelineIndex(index)
+			return nil, fmt.Errorf("duplicate opaque %q: %w", tok, ErrInvalidArgument)
+		}
+		index.tok[tok] = i
+	}
+	return index, nil
 }
 
-func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp) (int, bool) {
+func matchMetaPipelineOpaque(
+	header []byte, group []preparedMetaOp, index *metaPipelineIndex,
+) (int, bool) {
 	num, hasNum, tok := scanMetaOpaque(header)
+	if index != nil {
+		if hasNum {
+			if num < uint64(len(index.dense)) {
+				i := index.dense[num]
+				return int(i), i >= 0
+			}
+			i, ok := index.num[num]
+			return i, ok
+		}
+		if len(tok) > 0 {
+			i, ok := index.tok[string(tok)]
+			return i, ok
+		}
+		return 0, false
+	}
 	if hasNum {
-		for _, p := range group {
-			if p.tok == "" && p.hasTok && p.tokNum == num {
-				return p.idx, true
+		for i := range group {
+			n, numeric, _, ok := preparedMetaOpaque(&group[i])
+			if ok && numeric && n == num {
+				return i, true
 			}
 		}
 	}
 	if len(tok) > 0 {
-		for _, p := range group {
-			if p.tok != "" && eqStringBytes(p.tok, tok) {
-				return p.idx, true
+		for i := range group {
+			_, numeric, opaque, ok := preparedMetaOpaque(&group[i])
+			if ok && !numeric && eqStringBytes(opaque, tok) {
+				return i, true
 			}
 		}
 	}

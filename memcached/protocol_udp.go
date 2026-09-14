@@ -65,6 +65,7 @@ func putUDPBuf(p *[]byte) {
 // nextUDPRequestID returns a non-zero 16-bit id. Zero is reserved on the wire.
 func nextUDPRequestID() uint16 {
 	for {
+		// #nosec G115 -- wraparound is intentional for the 16-bit wire field.
 		id := uint16(udpRequestID.Add(1))
 		if id != 0 {
 			return id
@@ -281,12 +282,10 @@ func assembleUDPPayload(rr wireConn, wantID uint16, maxFragments int, own bool) 
 			box = takeUDPBuf()
 		}
 		if total == 0 {
-			need := tot * udpFragmentPayloadSize
-			if cap(*box) < need {
-				*box = make([]byte, 0, need)
-			} else {
-				*box = (*box)[:0]
-			}
+			// The total field is untrusted and says nothing about the actual
+			// payload sizes. Grow from received bytes instead of reserving up
+			// to several MiB for a tiny or incomplete response.
+			*box = (*box)[:0]
 			if tot <= len(offStor) {
 				offs = offStor[:tot]
 				lens = lenStor[:tot]

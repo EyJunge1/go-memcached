@@ -345,12 +345,21 @@ func (p *connPool) connectionCleanerRunLocked(d time.Duration) (time.Duration, [
 	}
 
 drained:
+	expiredClosing := len(closing)
 	for _, c := range kept {
-		p.conns <- c
+		// A concurrent put can refill the channel while the cleaner inspects
+		// idle connections. Never block here while holding p.mu: put closes
+		// overflow connections under the same mutex.
+		select {
+		case p.conns <- c:
+		default:
+			closing = append(closing, c)
+			p.closedIdleCap++
+		}
 	}
 
 	p.closedIdleAge += idleClosing
-	p.closedLifetime += int64(len(closing)) - idleClosing
+	p.closedLifetime += int64(expiredClosing) - idleClosing
 	return d, closing
 }
 

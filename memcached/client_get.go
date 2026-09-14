@@ -149,66 +149,139 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 		return c.getFromAddr(ctx, addr, command, expiry, wired, nil, dst, withCAS)
 	}
 
-	first, err := picker.Pick(addrs, wired[0])
-	if err != nil {
-		return fmt.Errorf("pick node failed: %w", err)
-	}
+	scratch := takeGetFanoutScratch(len(wired), len(addrs))
+	defer putGetFanoutScratch(scratch)
+	routed := scratch.routed
 	same := true
-	for i := 1; i < len(wired); i++ {
-		addr, err := picker.Pick(addrs, wired[i])
+	for i := range wired {
+		nodeIndex, _, err := pickAddrIndex(picker, addrs, wired[i])
 		if err != nil {
 			return fmt.Errorf("pick node failed: %w", err)
 		}
-		if addr != first {
+		routed[i] = nodeIndex
+		if i > 0 && nodeIndex != routed[0] {
 			same = false
-			break
 		}
 	}
 	if same {
-		return c.getFromAddr(ctx, first, command, expiry, wired, nil, dst, withCAS)
+		return c.getFromAddr(ctx, addrs[routed[0]], command, expiry, wired, nil, dst, withCAS)
 	}
 
-	type getRef struct {
-		key []byte
-		idx int
+	for _, nodeIndex := range routed {
+		scratch.counts[nodeIndex]++
 	}
-	groups := make(map[*addr][]getRef, len(addrs))
-	for i, key := range wired {
-		addr, err := picker.Pick(addrs, key)
-		if err != nil {
-			return fmt.Errorf("pick node failed: %w", err)
+	activeGroups := 0
+	for i := range addrs {
+		scratch.offsets[i+1] = scratch.offsets[i] + scratch.counts[i]
+		if scratch.counts[i] > 0 {
+			activeGroups++
 		}
-		groups[addr] = append(groups[addr], getRef{key: key, idx: i})
+		scratch.counts[i] = scratch.offsets[i]
 	}
-
-	if len(groups) == 1 {
-		for addr := range groups {
-			return c.getFromAddr(ctx, addr, command, expiry, wired, nil, dst, withCAS)
-		}
+	for i, group := range routed {
+		at := scratch.counts[group]
+		scratch.keys[at] = wired[i]
+		scratch.idx[at] = i
+		scratch.counts[group]++
 	}
 
 	var (
 		mu   sync.Mutex
 		errs []error
-		wg   sync.WaitGroup
 	)
-	for addr, refs := range groups {
-		nodeKeys := make([][]byte, len(refs))
-		nodeIdx := make([]int, len(refs))
-		for i, r := range refs {
-			nodeKeys[i] = r.key
-			nodeIdx[i] = r.idx
-		}
-		wg.Go(func() {
-			if err := c.getFromAddr(ctx, addr, command, expiry, nodeKeys, nodeIdx, dst, withCAS); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
+	if activeGroups == 1 {
+		for i, node := range addrs {
+			start, end := scratch.offsets[i], scratch.offsets[i+1]
+			if start != end {
+				return c.getFromAddr(
+					ctx, node, command, expiry,
+					scratch.keys[start:end], scratch.idx[start:end], dst, withCAS,
+				)
 			}
-		})
+		}
 	}
-	wg.Wait()
+	n := 0
+	for i := range addrs {
+		if scratch.offsets[i] != scratch.offsets[i+1] {
+			scratch.counts[n] = i
+			n++
+		}
+	}
+	c.runFanout(ctx, n, func(runCtx context.Context, group int) {
+		i := scratch.counts[group]
+		start, end := scratch.offsets[i], scratch.offsets[i+1]
+		if err := c.getFromAddr(
+			runCtx, addrs[i], command, expiry,
+			scratch.keys[start:end], scratch.idx[start:end], dst, withCAS,
+		); err != nil {
+			mu.Lock()
+			errs = append(errs, err)
+			mu.Unlock()
+		}
+	})
 	return errors.Join(errs...)
+}
+
+type getFanoutScratch struct {
+	routed  []int
+	keys    [][]byte
+	idx     []int
+	counts  []int
+	offsets []int
+}
+
+const maxPooledGetFanout = 1024
+
+var getFanoutPool = sync.Pool{
+	New: func() any {
+		return &getFanoutScratch{
+			routed:  make([]int, 0, 32),
+			keys:    make([][]byte, 0, 32),
+			idx:     make([]int, 0, 32),
+			counts:  make([]int, 0, 4),
+			offsets: make([]int, 0, 5),
+		}
+	},
+}
+
+func takeGetFanoutScratch(keys, nodes int) *getFanoutScratch {
+	s := getFanoutPool.Get().(*getFanoutScratch)
+	if cap(s.routed) < keys {
+		s.routed = make([]int, keys)
+		s.keys = make([][]byte, keys)
+		s.idx = make([]int, keys)
+	} else {
+		s.routed = s.routed[:keys]
+		s.keys = s.keys[:keys]
+		s.idx = s.idx[:keys]
+	}
+	if cap(s.counts) < nodes {
+		s.counts = make([]int, nodes)
+		s.offsets = make([]int, nodes+1)
+	} else {
+		s.counts = s.counts[:nodes]
+		s.offsets = s.offsets[:nodes+1]
+	}
+	clear(s.counts)
+	clear(s.offsets)
+	return s
+}
+
+func putGetFanoutScratch(s *getFanoutScratch) {
+	if s == nil {
+		return
+	}
+	clear(s.routed)
+	clear(s.keys)
+	if cap(s.routed) > maxPooledGetFanout {
+		return
+	}
+	s.routed = s.routed[:0]
+	s.keys = s.keys[:0]
+	s.idx = s.idx[:0]
+	s.counts = s.counts[:0]
+	s.offsets = s.offsets[:0]
+	getFanoutPool.Put(s)
 }
 
 func matchRetrievalKey(keys [][]byte, want []byte, cursor *int) (int, bool) {

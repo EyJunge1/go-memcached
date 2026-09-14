@@ -254,6 +254,32 @@ func Test_applyOpDeadlinesSplit(t *testing.T) {
 	equal(t, 1, cn.writeDeadlineCalls)
 }
 
+func Test_applyOpDeadlinesClearsCombinedDeadline(t *testing.T) {
+	cn := newMockConn()
+	cn.readDeadline = time.Now()
+	cn.writeDeadline = time.Now()
+
+	applyOpDeadlinesAt(context.Background(), cn, 0, 0, time.Now)
+
+	isTrue(t, cn.readDeadline.IsZero())
+	isTrue(t, cn.writeDeadline.IsZero())
+	equal(t, 1, cn.deadlineCalls)
+}
+
+func Test_applyOpDeadlinesClearsDisabledHalf(t *testing.T) {
+	now := time.Now()
+	cn := newMockConn()
+	cn.readDeadline = now
+	cn.writeDeadline = now
+
+	applyOpDeadlinesAt(context.Background(), cn, 0, time.Second, func() time.Time { return now })
+
+	isTrue(t, cn.readDeadline.IsZero())
+	equal(t, now.Add(time.Second), cn.writeDeadline)
+	equal(t, 1, cn.readDeadlineCalls)
+	equal(t, 1, cn.writeDeadlineCalls)
+}
+
 func Test_cappedValueSize(t *testing.T) {
 	n, err := cappedValueSize(4, 0)
 	noError(t, err)

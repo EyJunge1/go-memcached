@@ -3,12 +3,25 @@ package memcached
 import (
 	"context"
 	"errors"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+type blockingIdleConn struct {
+	*mockConn
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (c *blockingIdleConn) idle(since time.Time) (time.Duration, bool) {
+	close(c.entered)
+	<-c.resume
+	return c.mockConn.idle(since)
+}
 
 func Test_connPool_new(t *testing.T) {
 	tests := []struct {
@@ -317,6 +330,42 @@ func Test_connectionCleanerRunLocked_both_limits(t *testing.T) {
 
 	kept := <-pool.conns
 	same(t, fresh, kept)
+}
+
+func Test_connectionCleanerRunLocked_concurrentPutCannotDeadlock(t *testing.T) {
+	pool := newConnPool(2, 3, time.Hour, time.Hour, createConn)
+	now := time.Now()
+	blocking := &blockingIdleConn{
+		mockConn: &mockConn{createdAt: now, returnedAt: now},
+		entered:  make(chan struct{}),
+		resume:   make(chan struct{}),
+	}
+	idle := &mockConn{createdAt: now, returnedAt: now}
+	returned := &mockConn{createdAt: now, returnedAt: now}
+	pool.conns <- blocking
+	pool.conns <- idle
+	pool.open.Store(3)
+
+	putDone := make(chan error, 1)
+	pool.mu.Lock()
+	go func() {
+		<-blocking.entered
+		putDone <- pool.put(returned)
+	}()
+	go func() {
+		<-blocking.entered
+		for len(pool.conns) != 2 {
+			goruntime.Gosched()
+		}
+		close(blocking.resume)
+	}()
+	_, closing := pool.connectionCleanerRunLocked(time.Hour)
+	pool.mu.Unlock()
+
+	noError(t, <-putDone)
+	hasLen(t, closing, 1)
+	equal(t, 2, len(pool.conns))
+	equal(t, int64(1), pool.closedIdleCap)
 }
 
 func Test_connPool_cleanup_concurrent_get(t *testing.T) {

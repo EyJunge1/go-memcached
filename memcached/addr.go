@@ -14,6 +14,7 @@ type addr struct {
 	Weight  uint32 // 0 is treated as 1 by Ketama
 	ident   string
 	udp     bool
+	slot    int
 	pool    atomic.Pointer[connPool]
 }
 

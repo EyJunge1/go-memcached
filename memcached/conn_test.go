@@ -216,7 +216,7 @@ func (c *writeCountConn) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
-func TestConnSetDeadlineCoalesces(t *testing.T) {
+func TestConnSetDeadlineRefreshesEveryOperation(t *testing.T) {
 	c1, c2 := net.Pipe()
 	t.Cleanup(func() {
 		_ = c1.Close()
@@ -227,9 +227,9 @@ func TestConnSetDeadlineCoalesces(t *testing.T) {
 	far := clock().Add(5 * time.Second)
 	noError(t, cn.setDeadline(far))
 	noError(t, cn.setDeadline(clock().Add(5*time.Second)))
-	equal(t, int32(1), dc.deadline.Load())
-	noError(t, cn.setDeadline(clock().Add(100*time.Millisecond)))
 	equal(t, int32(2), dc.deadline.Load())
+	noError(t, cn.setDeadline(clock().Add(100*time.Millisecond)))
+	equal(t, int32(3), dc.deadline.Load())
 }
 
 func TestConnReleaseLeavesDeadline(t *testing.T) {
@@ -249,7 +249,7 @@ func TestConnReleaseLeavesDeadline(t *testing.T) {
 	equal(t, int32(0), dc.write.Load())
 }
 
-func Test_requestSendWritevLargeBody(t *testing.T) {
+func Test_requestSendWrappedConnUsesSingleBufferedWrite(t *testing.T) {
 	c1, c2 := net.Pipe()
 	t.Cleanup(func() {
 		_ = c1.Close()
@@ -265,7 +265,7 @@ func Test_requestSendWritevLargeBody(t *testing.T) {
 	}
 	noError(t, req.sendReady(context.Background(), cn))
 	equal(t, 0, cn.wr.Buffered())
-	greater(t, int(wc.n.Load()), 1)
+	equal(t, 1, int(wc.n.Load()))
 }
 
 func Test_requestSendSmallUsesBufio(t *testing.T) {
@@ -301,4 +301,71 @@ func Test_requestWriteKeepsPipelineBuffered(t *testing.T) {
 	greater(t, cn.wr.Buffered(), 0)
 	noError(t, cn.Flush())
 	equal(t, 1, int(wc.n.Load()))
+}
+
+func Test_requestWritePipelineWrappedConnStaysBuffered(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	})
+	wc := &writeCountConn{Conn: c1}
+	cn := &conn{raw: wc, wr: bufio.NewWriterSize(wc, connWriteBufferSize)}
+	small := &request{raw: []byte("get k\r\n")}
+	large := &request{
+		raw:  []byte("set k 0 0 16384\r\n"),
+		body: make([]byte, connWriteBufferSize),
+		tail: []byte("\r\n"),
+	}
+	expected := make([]byte, 0, len(small.raw)+len(large.raw)+len(large.body)+len(large.tail))
+	expected = append(expected, small.raw...)
+	expected = append(expected, large.raw...)
+	expected = append(expected, large.body...)
+	expected = append(expected, large.tail...)
+	received := make(chan []byte, 1)
+	go func() {
+		got := make([]byte, len(expected))
+		_, _ = io.ReadFull(c2, got)
+		received <- got
+	}()
+
+	noError(t, small.writePipeline(cn))
+	greater(t, cn.wr.Buffered(), 0)
+	noError(t, large.writePipeline(cn))
+	greater(t, cn.wr.Buffered(), 0)
+	noError(t, cn.Flush())
+	greater(t, int(wc.n.Load()), 1)
+	equal(t, expected, <-received)
+}
+
+func Test_connWritePipelineBatch(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	noError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	raw, err := net.Dial("tcp", ln.Addr().String())
+	noError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	server, err := ln.Accept()
+	noError(t, err)
+	t.Cleanup(func() { _ = server.Close() })
+
+	cn := &conn{raw: raw, wr: bufio.NewWriterSize(raw, connWriteBufferSize)}
+	isTrue(t, cn.supportsPipelineWritev())
+	reqs := []*request{
+		{raw: []byte("set a 0 0 1\r\n"), body: []byte("1"), tail: []byte("\r\n")},
+		{raw: []byte("set b 0 0 1\r\n"), body: []byte("2"), tail: []byte("\r\n")},
+	}
+	expected := []byte("set a 0 0 1\r\n1\r\nset b 0 0 1\r\n2\r\n")
+	received := make(chan []byte, 1)
+	go func() {
+		got := make([]byte, len(expected))
+		_, _ = io.ReadFull(server, got)
+		received <- got
+	}()
+
+	n, err := cn.writePipelineBatch(reqs)
+	noError(t, err)
+	equal(t, int64(len(expected)), n)
+	equal(t, expected, <-received)
+	greater(t, cap(cn.batchIOV), 0)
 }

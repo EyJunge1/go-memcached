@@ -247,7 +247,7 @@ func (c *closeNotifyConn) Close() error {
 	return c.Conn.Close()
 }
 
-func mustTestTLSCert(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
+func mustTestTLSCert(t testing.TB) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	noError(t, err)

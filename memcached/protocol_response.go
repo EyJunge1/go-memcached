@@ -82,6 +82,7 @@ type response struct {
 	metaPipeC     *Client
 	metaPipeDst   []MetaResult
 	metaPipeGroup []preparedMetaOp
+	metaPipeIndex *metaPipelineIndex
 	metaSawReply  bool
 
 	arithValue    uint64
@@ -173,6 +174,8 @@ func (resp *response) release() {
 	resp.metaPipeC = nil
 	resp.metaPipeDst = nil
 	resp.metaPipeGroup = nil
+	putMetaPipelineIndex(resp.metaPipeIndex)
+	resp.metaPipeIndex = nil
 	resp.metaSawReply = false
 	resp.arithValue = 0
 	resp.versionDst = nil
@@ -566,14 +569,20 @@ func applyOpDeadlinesAt(ctx context.Context, rr wireConn, readTimeout, writeTime
 	if readTimeout == writeTimeout {
 		if dl, has := combineDeadline(readTimeout, ctxDL, hasCtx, now); has {
 			_ = rr.setDeadline(dl)
+		} else {
+			_ = rr.setDeadline(time.Time{})
 		}
 		return
 	}
 	if dl, has := combineDeadline(writeTimeout, ctxDL, hasCtx, now); has {
 		_ = rr.setWriteDeadline(dl)
+	} else {
+		_ = rr.setWriteDeadline(time.Time{})
 	}
 	if dl, has := combineDeadline(readTimeout, ctxDL, hasCtx, now); has {
 		_ = rr.setReadDeadline(dl)
+	} else {
+		_ = rr.setReadDeadline(time.Time{})
 	}
 }
 

@@ -123,6 +123,49 @@ func TestFailoverEjectsDeadNode(t *testing.T) {
 	isTrue(t, len(client.DeadServers()) > 0 || n.Load() > 0)
 }
 
+func TestFailoverHealthyRoutingDoesNotAllocate(t *testing.T) {
+	client := testClient(t, "127.0.0.1:11211,127.0.0.1:11212", func(cfg *Config) {
+		cfg.Failover = DefaultFailover()
+	})
+	addrs, _ := client.snapshotCluster()
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		live := client.liveAddrs(addrs)
+		if len(live) != len(addrs) {
+			t.Fatalf("got %d live addresses, want %d", len(live), len(addrs))
+		}
+	})
+	equal(t, float64(0), allocs)
+}
+
+func TestFailoverSingleNodeUsesFastPath(t *testing.T) {
+	client := testClient(t, "127.0.0.1:11211", func(cfg *Config) {
+		cfg.Failover = DefaultFailover()
+	})
+	addrs, _ := client.snapshotCluster()
+
+	node, err := client.pickNode([]byte("key"))
+	noError(t, err)
+	same(t, addrs[0], node)
+	notNil(t, client.single.Load())
+}
+
+func TestSameResolvedAddrsIncludesOrderAndWeight(t *testing.T) {
+	client := testClient(t, "127.0.0.1:11211?weight=2,127.0.0.1:11212")
+	isTrue(t, client.sameResolvedAddrs([]*addr{
+		newAddrWeighted("tcp", "127.0.0.1:11211", 2),
+		newAddrWeighted("tcp", "127.0.0.1:11212", 0),
+	}))
+	isFalse(t, client.sameResolvedAddrs([]*addr{
+		newAddrWeighted("tcp", "127.0.0.1:11212", 0),
+		newAddrWeighted("tcp", "127.0.0.1:11211", 2),
+	}))
+	isFalse(t, client.sameResolvedAddrs([]*addr{
+		newAddrWeighted("tcp", "127.0.0.1:11211", 3),
+		newAddrWeighted("tcp", "127.0.0.1:11212", 0),
+	}))
+}
+
 func TestSetServersDropsRemovedHealth(t *testing.T) {
 	good := startFakeMemcached(t)
 	client := testClient(t, "127.0.0.1:1,"+good.Addr(), func(cfg *Config) {
