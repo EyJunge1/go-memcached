@@ -39,6 +39,20 @@ func validCrawlerSelector(s string) error {
 	return fmt.Errorf("invalid crawler selector %q: %w", s, ErrInvalidArgument)
 }
 
+// validCrawlClasses accepts all or a comma-separated slab class list. hash is dump-only.
+func validCrawlClasses(s string) error {
+	if err := validAdminToken(s); err != nil {
+		return err
+	}
+	if s == "all" {
+		return nil
+	}
+	if crawlerClassSelector.MatchString(s) {
+		return nil
+	}
+	return fmt.Errorf("invalid crawler selector %q: %w", s, ErrInvalidArgument)
+}
+
 // buildAdminLine encodes a one-line admin command and optional noreply.
 func buildAdminLine(cmd string, noReply bool, args ...string) (*request, *response) {
 	b := newProtocolBuilder().AddString(cmd)

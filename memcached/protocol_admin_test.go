@@ -51,6 +51,13 @@ func Test_validCrawlerSelector(t *testing.T) {
 	isErrorIs(t, validCrawlerSelector(""), ErrInvalidArgument)
 }
 
+func Test_validCrawlClasses(t *testing.T) {
+	noError(t, validCrawlClasses("all"))
+	noError(t, validCrawlClasses("1,3,10"))
+	isErrorIs(t, validCrawlClasses("hash"), ErrInvalidArgument)
+	isErrorIs(t, validCrawlClasses(""), ErrInvalidArgument)
+}
+
 func Test_mapAdminStatus(t *testing.T) {
 	noError(t, mapAdminStatus([]byte("OK\r\n")))
 	isErrorIs(t, mapAdminStatus([]byte("BUSY\r\n")), ErrBusy)

@@ -6,8 +6,9 @@ import (
 )
 
 // Debug sends me and writes the outcome into dst. dst must be non-nil.
-// A protocol miss is dst.Err / Status, not the returned error.
-func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug, dst *MetaItemDebug) error {
+// Transport and parse failures are the method error. A protocol miss lives
+// on dst.Status / dst.Err(); the method error stays nil.
+func (m *MetaClient) Debug(ctx context.Context, key []byte, dst *MetaItemDebug, f MetaDebug) error {
 	if dst == nil {
 		return fmt.Errorf("meta debug dst: %w", ErrInvalidArgument)
 	}

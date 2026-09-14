@@ -45,12 +45,14 @@ func TestConcurrent(t *testing.T) {
 	msOptions := func(cas uint64, clientFlags uint32) memcached.MetaSet {
 		exp := memcached.Exptime(2)
 		return memcached.MetaSet{
-			NewCAS:     &cas,
-			TTL:        &exp,
-			Flags:      clientFlags,
-			ReturnKey:  true,
-			ReturnSize: true,
-			ReturnCAS:  true,
+			NewCAS: &cas,
+			TTL:    &exp,
+			Flags:  clientFlags,
+			Return: memcached.MetaSetReturn{
+				Key:  true,
+				Size: true,
+				CAS:  true,
+			},
 		}
 	}
 

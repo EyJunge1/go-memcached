@@ -8,7 +8,7 @@ import (
 
 // Exptime is the item expiry token on the wire.
 // 0 is no expiry, 1–2592000 are relative seconds, larger values are Unix time.
-// Negative values send -1 (expire now); protocol.txt does not define that token.
+// Negative values send as-is (protocol.txt: a negative value expires immediately).
 type Exptime int64
 
 const (

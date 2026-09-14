@@ -5,6 +5,8 @@
 //     Check NOT_STORED, EXISTS, and NOT_FOUND with errors.Is.
 //   - Get fills a caller-provided []GetResult aligned with the keys. A miss
 //     leaves Found false and is not ErrNotFound. GetOne writes one slot.
+//   - Signatures take dest before options: GetOne(ctx, key, dst, opts).
+//     Meta matches: Get(ctx, key, dst, flags).
 //   - Quiet on Item, MutateOpts, and FlushOpts adds noreply. The connection is
 //     discarded after send; CLIENT_ERROR is still returned. AdminOpts.Quiet
 //     means only that the write was sent.
@@ -13,9 +15,12 @@
 //     Meta().Arithmetic with q.
 //   - Meta() exposes mg, ms, md, mn, ma, me (Get, Set, Delete, Noop,
 //     Arithmetic, Debug, Pipeline). Each command writes into a caller
-//     dest; reuse dest for the zero-allocation path.
+//     dest; reuse dest for the zero-allocation path. Transport and parse
+//     failures are the method error. EN, NF, NS, and EX live on dst.Status
+//     / dst.Err(); the method error stays nil.
 //   - Version / VersionAll and Stats / StatsAll write into caller dests.
-//     reset and sizes are on Admin; detail is AdminNode.StatsDetail.
+//     StatsReset and StatsSizes are on Admin; detail is AdminNode.StatsDetail.
+//     Stats and StatsAll are TCP-only.
 //   - flush_all is Admin().On or All Flush and requires Config.AllowFlushAll.
 //
 // Client.Pipeline is a text write-then-read batch. Meta().Pipeline is the
@@ -33,7 +38,8 @@
 // TLS is missing; it does not change that default. UDP (udp://, udp4, udp6)
 // uses 8-byte framing and one request per datagram. It cannot share a Client
 // with TCP, Unix, TLS, or Auth, and it cannot mutate. Allowed UDP calls:
-// Get/gets, Version, Meta().Get without N/R/T/E, Meta().Noop, Meta().Debug.
-// GetOpts.Touch and StatsAll require TCP. Config.Auth is token auth (-Y) at
-// dial. SASL, binary, TAP, VBucket, and range ops are not implemented.
+// Get/gets, Version, VersionAll, Meta().Get without N/R/T/E, Meta().Noop,
+// Meta().Debug. GetOpts.Touch, Stats, and StatsAll require TCP. Config.Auth
+// is token auth (-Y) at dial. SASL, binary, TAP, VBucket, and range ops
+// are not implemented.
 package memcached

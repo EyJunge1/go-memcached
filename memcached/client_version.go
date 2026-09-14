@@ -26,7 +26,7 @@ func (c *Client) Version(ctx context.Context, dst *[]byte) error {
 	resp.afterRecv = mapVersionReply
 	if err := c.dispatchFirstLive(ctx, req, resp); err != nil {
 		*dst = (*dst)[:0]
-		return fmt.Errorf("request: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }
@@ -63,7 +63,7 @@ func (c *Client) VersionAll(ctx context.Context, dst *[]NodeVersion) error {
 	*dst = acc
 	c.orderNodeVersions(*dst)
 	if err != nil {
-		return fmt.Errorf("VersionAll: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }

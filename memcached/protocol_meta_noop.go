@@ -4,8 +4,8 @@ package memcached
 func buildMetaNoopCommand(f MetaNoop) (*request, *response) {
 	b := newProtocolBuilder().AddBytes(_MnBytes)
 	defer b.release()
-	b.AddFlagString("P", f.P)
-	b.AddFlagString("L", f.L)
+	b.AddFlagString("P", f.ProxyHint)
+	b.AddFlagString("L", f.ProxyPath)
 	req := b.AddCRLF().request(_MnBytes, nil)
 	resp := buildLimitedLineResponse(1)
 	return req, resp

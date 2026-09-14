@@ -322,7 +322,7 @@ func TestMetaPipelineChargeKeepsSiblingHD(t *testing.T) {
 	})
 	client := testClient(t, addr)
 	got, err := doMetaPipeline(client, context.Background(), []MetaOp{
-		{Key: []byte("k"), Del: &MetaDelete{}},
+		{Key: []byte("k"), Delete: &MetaDelete{}},
 	})
 	isErrorIs(t, err, ErrClientError)
 	hasLen(t, got, 1)
@@ -414,7 +414,7 @@ func TestMetaPipelineChargeOnlyDoesNotInventHD(t *testing.T) {
 	})
 	client := testClient(t, addr)
 	got, err := doMetaPipeline(client, context.Background(), []MetaOp{
-		{Key: []byte("k"), Del: &MetaDelete{}},
+		{Key: []byte("k"), Delete: &MetaDelete{}},
 	})
 	isErrorIs(t, err, ErrClientError)
 	hasLen(t, got, 1)

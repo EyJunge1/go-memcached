@@ -27,7 +27,7 @@ func TestClassicReadCommandsRoundTrip(t *testing.T) {
 
 	assertItem(mustGet(t, client, ctx, key1))
 
-	items, err := doGet(client, ctx, [][]byte{key1, key2}, memcached.GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{key1, key2}, memcached.GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {
@@ -41,7 +41,7 @@ func TestClassicReadCommandsRoundTrip(t *testing.T) {
 	hasLen(t, items, 1)
 	assertItem(items[0])
 
-	items, err = doGet(client, ctx, [][]byte{key1, key2}, memcached.GetOpts{CAS: true, Touch: &exp})
+	items, err = doGet(client, ctx, [][]byte{key1, key2}, memcached.GetOpts{ReturnCAS: true, Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 2)
 	for _, item := range items {

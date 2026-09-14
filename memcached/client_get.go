@@ -10,8 +10,8 @@ import (
 
 // GetOpts chooses get, gets, gat, or gats.
 type GetOpts struct {
-	CAS   bool     // CAS requests gets or gats.
-	Touch *Exptime // Touch uses gat or gats; UDP returns ErrNotSupported.
+	ReturnCAS bool     // ReturnCAS requests gets or gats (echo Unique; does not compare).
+	Touch     *Exptime // Touch uses gat or gats; UDP returns ErrNotSupported.
 }
 
 // Get loads keys into dst. len(dst) must equal len(keys).
@@ -42,7 +42,7 @@ func (c *Client) Get(ctx context.Context, keys [][]byte, dst []GetResult, opts G
 // zero-allocation path when dst.Value has enough cap.
 func (c *Client) GetOne(ctx context.Context, key []byte, dst *GetResult, opts GetOpts) error {
 	if dst == nil {
-		return fmt.Errorf("get dest: %w", ErrInvalidArgument)
+		return fmt.Errorf("get dst: %w", ErrInvalidArgument)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -107,12 +107,12 @@ func (c *Client) hasNS() bool {
 // getCommand selects get, gets, gat, or gats from GetOpts.
 func getCommand(opts GetOpts) (command string, withCAS bool) {
 	if opts.Touch != nil {
-		if opts.CAS {
+		if opts.ReturnCAS {
 			return "gats", true
 		}
 		return "gat", false
 	}
-	if opts.CAS {
+	if opts.ReturnCAS {
 		return "gets", true
 	}
 	return "get", false

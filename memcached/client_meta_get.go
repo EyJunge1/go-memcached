@@ -13,7 +13,9 @@ import (
 // Get sends mg for key using flags f and writes the outcome into dst.
 // dst must be non-nil. If dst.Item.Value has enough cap, a VA body is written
 // there. Key is copied only when f.Return.Key is set.
-func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet, dst *MetaResult) error {
+// Transport and parse failures are the method error. EN, NF, NS, and EX live
+// on dst.Status / dst.Err(); the method error stays nil.
+func (m *MetaClient) Get(ctx context.Context, key []byte, dst *MetaResult, f MetaGet) error {
 	if dst == nil {
 		return fmt.Errorf("meta get dst: %w", ErrInvalidArgument)
 	}
@@ -126,19 +128,19 @@ func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
 
 // preparedMetaOp is one encoded Meta().Pipeline step plus its opaque token.
 type preparedMetaOp struct {
-	idx       int
-	key       []byte
-	cmd       []byte
-	line      []byte
-	body      []byte
-	tail      []byte
-	lineBox   *[]byte
-	keyBox    *[]byte
-	tok       string
-	tokNum    uint64
-	hasTok    bool
-	getFlags  metaGetFlags
-	hasGet    bool
+	idx        int
+	key        []byte
+	cmd        []byte
+	line       []byte
+	body       []byte
+	tail       []byte
+	lineBox    *[]byte
+	keyBox     *[]byte
+	tok        string
+	tokNum     uint64
+	hasTok     bool
+	getFlags   metaGetFlags
+	hasGet     bool
 	returnKey  bool
 	keepUser   []byte
 	keepOpaque []byte
@@ -183,7 +185,7 @@ func putPreparedMeta(p *[]preparedMetaOp) {
 	preparedMetaPool.Put(p)
 }
 
-// metaOpKinds counts how many of Get, Set, Del, Arith, and Noop are set on op.
+// metaOpKinds counts how many of Get, Set, Delete, Arithmetic, and Noop are set on op.
 func metaOpKinds(op MetaOp) int {
 	n := 0
 	if op.Get != nil {
@@ -192,10 +194,10 @@ func metaOpKinds(op MetaOp) int {
 	if op.Set != nil {
 		n++
 	}
-	if op.Del != nil {
+	if op.Delete != nil {
 		n++
 	}
-	if op.Arith != nil {
+	if op.Arithmetic != nil {
 		n++
 	}
 	if op.Noop != nil {
@@ -271,9 +273,9 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.tokNum = ms.O
 		prep.hasTok = ms.Oset || ms.OtokenSet
 		prep.key = key
-		prep.returnKey = f.ReturnKey
-	case op.Del != nil:
-		f := *op.Del
+		prep.returnKey = f.Return.Key
+	case op.Delete != nil:
+		f := *op.Delete
 		if err := f.validate(); err != nil {
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
@@ -295,9 +297,9 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.tok = opaqueToken(md.Otoken, md.O, md.OtokenSet)
 		prep.tokNum = md.O
 		prep.hasTok = md.Oset || md.OtokenSet
-		prep.returnKey = f.ReturnKey
-	case op.Arith != nil:
-		f := *op.Arith
+		prep.returnKey = f.Return.Key
+	case op.Arithmetic != nil:
+		f := *op.Arithmetic
 		if err := f.validate(); err != nil {
 			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
@@ -325,7 +327,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		prep.tok = opaqueToken(ma.Otoken, ma.O, ma.OtokenSet)
 		prep.tokNum = ma.O
 		prep.hasTok = ma.Oset || ma.OtokenSet
-		prep.returnKey = f.ReturnKey
+		prep.returnKey = f.Return.Key
 	case op.Noop != nil:
 		// The batch already ends with mn; another mn would make the barrier reader stop early.
 		f := *op.Noop
@@ -407,6 +409,8 @@ func ensureArithOpaque(flags *metaArithmeticFlags, idx int) error {
 // Pipeline runs mixed meta ops, assigns O when missing, appends mn, and fans out by node.
 // len(dst) must equal len(ops). Each dst[i] is filled for ops[i]. Value buffers
 // with enough cap are reused.
+// Transport and parse failures are the method error. EN, NF, NS, and EX live
+// on dst[i].Status / dst[i].Err(); the method error stays nil.
 func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResult) error {
 	c := m.c
 	if err := ctx.Err(); err != nil {
@@ -517,7 +521,6 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	resp.metaPipeC = c
 	resp.metaPipeDst = out
 	resp.metaPipeGroup = group
-	resp.metaPipeByOpaque = nil
 	defer releaseReqAndResp(req, resp)
 
 	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
@@ -554,7 +557,7 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 		return fmt.Errorf("missing meta pipeline dest: %w", ErrMalformedResponse)
 	}
 	resp.metaSawReply = true
-	idx, ok := matchMetaPipelineOpaque(header, resp.metaPipeGroup, resp.metaPipeByOpaque)
+	idx, ok := matchMetaPipelineOpaque(header, resp.metaPipeGroup)
 
 	var item *MetaItem
 	var scratch MetaItem
@@ -676,7 +679,7 @@ func duplicatePipelineOpaque(group []preparedMetaOp) error {
 	return nil
 }
 
-func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp, byOpaque map[string]int) (int, bool) {
+func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp) (int, bool) {
 	num, hasNum, tok := scanMetaOpaque(header)
 	if hasNum {
 		for _, p := range group {

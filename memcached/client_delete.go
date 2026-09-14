@@ -11,7 +11,7 @@ type MutateOpts struct {
 	Quiet bool
 }
 
-// Delete drops the key.
+// Delete drops the key. A miss is ErrNotFound.
 func (c *Client) Delete(ctx context.Context, key []byte, opts MutateOpts) error {
 	key, keyBox := c.nsKey(key)
 	if err := validateKeyAndValue(key, nil); err != nil {

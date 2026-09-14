@@ -26,7 +26,7 @@ func TestPipelineStoreCAS(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	mustStore(t, client, ctx, []byte("k"), []byte("v"))
-	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	cas := items[0].CAS

@@ -216,37 +216,37 @@ func doGet(c *memcached.Client, ctx context.Context, keys [][]byte, opts memcach
 
 func doMetaGet(c *memcached.Client, ctx context.Context, key []byte, f memcached.MetaGet) (memcached.MetaResult, error) {
 	var dst memcached.MetaResult
-	err := c.Meta().Get(ctx, key, f, &dst)
+	err := c.Meta().Get(ctx, key, &dst, f)
 	return dst, err
 }
 
 func doMetaSet(c *memcached.Client, ctx context.Context, key, value []byte, f memcached.MetaSet) (memcached.MetaResult, error) {
 	var dst memcached.MetaResult
-	err := c.Meta().Set(ctx, key, value, f, &dst)
+	err := c.Meta().Set(ctx, key, value, &dst, f)
 	return dst, err
 }
 
 func doMetaDelete(c *memcached.Client, ctx context.Context, key []byte, f memcached.MetaDelete) (memcached.MetaResult, error) {
 	var dst memcached.MetaResult
-	err := c.Meta().Delete(ctx, key, f, &dst)
+	err := c.Meta().Delete(ctx, key, &dst, f)
 	return dst, err
 }
 
 func doMetaArith(c *memcached.Client, ctx context.Context, key []byte, delta uint64, f memcached.MetaArithmetic) (memcached.MetaResult, error) {
 	var dst memcached.MetaResult
-	err := c.Meta().Arithmetic(ctx, key, delta, f, &dst)
+	err := c.Meta().Arithmetic(ctx, key, delta, &dst, f)
 	return dst, err
 }
 
 func doMetaNoop(c *memcached.Client, ctx context.Context, f memcached.MetaNoop) (memcached.MetaResult, error) {
 	var dst memcached.MetaResult
-	err := c.Meta().Noop(ctx, f, &dst)
+	err := c.Meta().Noop(ctx, &dst, f)
 	return dst, err
 }
 
 func doMetaDebug(c *memcached.Client, ctx context.Context, key []byte, f memcached.MetaDebug) (memcached.MetaItemDebug, error) {
 	var dst memcached.MetaItemDebug
-	err := c.Meta().Debug(ctx, key, f, &dst)
+	err := c.Meta().Debug(ctx, key, &dst, f)
 	return dst, err
 }
 

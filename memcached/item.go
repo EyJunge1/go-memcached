@@ -21,7 +21,9 @@ type Item struct {
 	Value []byte
 	Flags uint32
 	Exp   Exptime
-	CAS   uint64
+	// CAS is sent only when Mode is StoreCAS.
+	CAS uint64
+	// Quiet adds noreply. Pipeline.Store rejects Quiet.
 	Quiet bool
 }
 
@@ -30,7 +32,7 @@ type MetaItem struct {
 	Key   []byte
 	Value []byte
 
-	// CAS is the c token. Ask for it with MetaGet.Return.CAS or MetaSet.ReturnCAS.
+	// CAS is the c token. Ask for it with MetaGet.Return.CAS or MetaSet.Return.CAS.
 	CAS uint64
 	// Flags is the f token on a value reply.
 	Flags uint32

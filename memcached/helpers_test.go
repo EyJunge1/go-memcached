@@ -103,10 +103,8 @@ func doStatsAll(c *Client, ctx context.Context, args ...string) ([]NodeStats, er
 	return dst, err
 }
 
-func doAdminStats(a *AdminNode, ctx context.Context, args ...string) ([]Stat, error) {
-	var dst []Stat
-	err := a.Stats(ctx, &dst, args...)
-	return dst, err
+func doAdminStatsReset(a *AdminNode, ctx context.Context) error {
+	return a.StatsReset(ctx)
 }
 
 func doAdminStatsDetail(a *AdminNode, ctx context.Context, mode StatsDetailMode) ([]Stat, error) {
@@ -141,37 +139,37 @@ func doGet(c *Client, ctx context.Context, keys [][]byte, opts GetOpts) ([]GetRe
 
 func doMetaGet(c *Client, ctx context.Context, key []byte, f MetaGet) (MetaResult, error) {
 	var dst MetaResult
-	err := c.Meta().Get(ctx, key, f, &dst)
+	err := c.Meta().Get(ctx, key, &dst, f)
 	return dst, err
 }
 
 func doMetaSet(c *Client, ctx context.Context, key, value []byte, f MetaSet) (MetaResult, error) {
 	var dst MetaResult
-	err := c.Meta().Set(ctx, key, value, f, &dst)
+	err := c.Meta().Set(ctx, key, value, &dst, f)
 	return dst, err
 }
 
 func doMetaDelete(c *Client, ctx context.Context, key []byte, f MetaDelete) (MetaResult, error) {
 	var dst MetaResult
-	err := c.Meta().Delete(ctx, key, f, &dst)
+	err := c.Meta().Delete(ctx, key, &dst, f)
 	return dst, err
 }
 
 func doMetaArith(c *Client, ctx context.Context, key []byte, delta uint64, f MetaArithmetic) (MetaResult, error) {
 	var dst MetaResult
-	err := c.Meta().Arithmetic(ctx, key, delta, f, &dst)
+	err := c.Meta().Arithmetic(ctx, key, delta, &dst, f)
 	return dst, err
 }
 
 func doMetaNoop(c *Client, ctx context.Context, f MetaNoop) (MetaResult, error) {
 	var dst MetaResult
-	err := c.Meta().Noop(ctx, f, &dst)
+	err := c.Meta().Noop(ctx, &dst, f)
 	return dst, err
 }
 
 func doMetaDebug(c *Client, ctx context.Context, key []byte, f MetaDebug) (MetaItemDebug, error) {
 	var dst MetaItemDebug
-	err := c.Meta().Debug(ctx, key, f, &dst)
+	err := c.Meta().Debug(ctx, key, &dst, f)
 	return dst, err
 }
 

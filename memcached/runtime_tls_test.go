@@ -78,6 +78,29 @@ func TestNewAllowsInsecureTLSWithOptIn(t *testing.T) {
 	noError(t, err)
 }
 
+func TestNewClonesTLSConfig(t *testing.T) {
+	shared := &tls.Config{MinVersion: tls.VersionTLS12}
+	client, err := New(Config{
+		Servers:   []Server{{Address: "127.0.0.1:11211"}},
+		Transport: Transport{TLS: shared},
+	})
+	noError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	shared.InsecureSkipVerify = true
+	got := tlsConfigForDial(client.rt.tlsConfig, "tcp", "127.0.0.1:11211")
+	isFalse(t, got.InsecureSkipVerify)
+}
+
+func TestWrapTLSDialRejectsInsecureWithoutOptIn(t *testing.T) {
+	dial := wrapTLSDial(func(context.Context, string, string) (net.Conn, error) {
+		c1, c2 := net.Pipe()
+		_ = c2.Close()
+		return c1, nil
+	}, &tls.Config{InsecureSkipVerify: true}, false)
+	_, err := dial(context.Background(), "tcp", "127.0.0.1:11211")
+	isErrorIs(t, err, ErrInsecureTLS)
+}
+
 func TestTLSWrapsCustomDial(t *testing.T) {
 	addr, roots := startTLSVersionServer(t, "tls-ok")
 	rawDials := 0

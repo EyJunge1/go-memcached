@@ -202,8 +202,7 @@ func TestStatsDetailOnAllowedOnAppClient(t *testing.T) {
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	admin := mustAdminOn(t, client)
-	_, err = doAdminStats(admin, context.Background(), "detail", "dump")
-	isErrorIs(t, err, ErrInvalidArgument)
+	isErrorIs(t, admin.StatsSizes(context.Background(), nil), ErrInvalidArgument)
 	got, err := doAdminStatsDetail(admin, context.Background(), StatsDetailOn)
 	noError(t, err)
 	equal(t, 0, len(got))
@@ -231,7 +230,7 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a"), Value: []byte("1")}))
 	got, err := doMetaPipeline(client, ctx, []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
-		{Noop: &MetaNoop{P: "hint", L: "/path"}},
+		{Noop: &MetaNoop{ProxyHint: "hint", ProxyPath: "/path"}},
 	})
 	noError(t, err)
 	hasLen(t, got, 2)
@@ -382,8 +381,8 @@ func TestMetaPipelineRejectsDuplicateOpaque(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	_, err := doMetaPipeline(client, context.Background(), []MetaOp{
-		{Key: []byte("a"), Get: &MetaGet{Opaque: "same"}},
-		{Key: []byte("b"), Get: &MetaGet{Opaque: "same"}},
+		{Key: []byte("a"), Get: &MetaGet{Opaque: []byte("same")}},
+		{Key: []byte("b"), Get: &MetaGet{Opaque: []byte("same")}},
 	})
 	isErrorIs(t, err, ErrInvalidArgument)
 }

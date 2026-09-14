@@ -6,7 +6,8 @@ import (
 )
 
 // Noop sends mn and writes the outcome into dst. dst must be non-nil.
-func (m *MetaClient) Noop(ctx context.Context, f MetaNoop, dst *MetaResult) error {
+// Transport and parse failures are the method error.
+func (m *MetaClient) Noop(ctx context.Context, dst *MetaResult, f MetaNoop) error {
 	keep, err := prepareMetaDest(dst)
 	if err != nil {
 		return err

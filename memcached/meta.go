@@ -124,7 +124,7 @@ func metaResultWithErr(item *MetaItem, status MetaStatus, err error) MetaResult 
 
 // MetaGetReturn chooses which tokens mg should echo.
 type MetaGetReturn struct {
-	CAS, Flags, Hit, Key, LastAccess, Size, TTL, Value bool
+	CAS, Flags, HitBefore, Key, LastAccess, Size, TTL, Value bool
 }
 
 // MetaGet is the flag set for mg.
@@ -134,42 +134,51 @@ type MetaGet struct {
 	BinaryKey  bool
 	Return     MetaGetReturn
 	CompareCAS *uint64
-	Opaque     string
+	Opaque     []byte
 	Quiet      bool
 	NoLRUBump  bool
 	NewCAS     *uint64
 	Vivify     *Exptime
 	// Recache is the remaining-TTL window sent as R (seconds).
 	// Zero drops the flag. It is not an item Exptime and has no 30-day split.
-	Recache time.Duration
-	Touch   *Exptime
-	P       string // proxy hint, ignored by memcached
-	L       string // proxy path, ignored by memcached
+	Recache   time.Duration
+	Touch     *Exptime
+	ProxyHint string // wire P; ignored by memcached
+	ProxyPath string // wire L; ignored by memcached
 }
 
-// MetaNoop is the flag set for mn. P and L are proxy hints the daemon ignores.
+// MetaNoop is the flag set for mn. ProxyHint and ProxyPath are ignored by the daemon.
+// In Meta().Pipeline a Noop sends no line; it only sets P/L on the batch barrier.
 type MetaNoop struct {
-	P string
-	L string
+	ProxyHint string
+	ProxyPath string
+}
+
+// MetaSetReturn chooses which tokens ms should echo.
+type MetaSetReturn struct {
+	CAS, Key, Size bool
 }
 
 // MetaSet is the flag set for ms.
 type MetaSet struct {
 	BinaryKey  bool
-	ReturnCAS  bool
+	Return     MetaSetReturn
 	CompareCAS *uint64
 	NewCAS     *uint64
 	Flags      uint32
 	Invalidate bool
-	ReturnKey  bool
-	Opaque     string
+	Opaque     []byte
 	Quiet      bool
-	ReturnSize bool
 	TTL        *Exptime
 	Mode       MetaSetMode
 	AutoVivify *Exptime
-	P          string
-	L          string
+	ProxyHint  string
+	ProxyPath  string
+}
+
+// MetaDeleteReturn chooses which tokens md should echo.
+type MetaDeleteReturn struct {
+	Key bool
 }
 
 // MetaDelete is the flag set for md.
@@ -178,67 +187,71 @@ type MetaDelete struct {
 	CompareCAS      *uint64
 	NewCAS          *uint64
 	Invalidate      bool
-	ReturnKey       bool
-	Opaque          string
+	Return          MetaDeleteReturn
+	Opaque          []byte
 	Quiet           bool
 	TTL             *Exptime
 	RemoveValueOnly bool
-	P               string
-	L               string
+	ProxyHint       string
+	ProxyPath       string
 }
 
 // MetaDebug is the flag set for me.
 type MetaDebug struct {
 	BinaryKey bool
-	P         string
-	L         string
+	ProxyHint string
+	ProxyPath string
+}
+
+// MetaArithmeticReturn chooses which tokens ma should echo.
+type MetaArithmeticReturn struct {
+	TTL, CAS, Value, Key bool
 }
 
 // MetaArithmetic is the flag set for ma.
 type MetaArithmetic struct {
-	BinaryKey   bool
-	CompareCAS  *uint64
-	NewCAS      *uint64
-	AutoCreate  *Exptime
-	Initial     *uint64
-	TTL         *Exptime
-	Mode        MetaArithmeticMode
-	Opaque      string
-	Quiet       bool
-	ReturnTTL   bool
-	ReturnCAS   bool
-	ReturnValue bool
-	ReturnKey   bool
-	P           string
-	L           string
+	BinaryKey  bool
+	CompareCAS *uint64
+	NewCAS     *uint64
+	AutoCreate *Exptime
+	Initial    *uint64
+	TTL        *Exptime
+	Mode       MetaArithmeticMode
+	Opaque     []byte
+	Quiet      bool
+	Return     MetaArithmeticReturn
+	ProxyHint  string
+	ProxyPath  string
 }
 
 // MetaOp is one step in Meta().Pipeline. Pipeline writes into a caller dst
 // of the same length; Key is copied only when the op asks to return it.
-// Exactly one of Get, Set, Del, Arith, or Noop must be set.
-// Debug (me) cannot be pipelined.
+// Exactly one of Get, Set, Delete, Arithmetic, or Noop must be set.
+// Debug (me) cannot be pipelined. Pipeline Noop writes no mn line; it only
+// puts ProxyHint/ProxyPath on the batch barrier.
 type MetaOp struct {
-	Key   []byte
-	Body  []byte
-	Delta uint64
-	Get   *MetaGet
-	Set   *MetaSet
-	Del   *MetaDelete
-	Arith *MetaArithmetic
-	Noop  *MetaNoop
+	Key        []byte
+	Body       []byte
+	Delta      uint64
+	Get        *MetaGet
+	Set        *MetaSet
+	Delete     *MetaDelete
+	Arithmetic *MetaArithmetic
+	Noop       *MetaNoop
 }
 
 // applyOpaque stores token as a numeric O flag or a string opaque.
-func applyOpaque(token string, flagsO *uint64, flagsOset *bool, flagsTok *string, flagsTokSet *bool) {
-	if token == "" {
+func applyOpaque(token []byte, flagsO *uint64, flagsOset *bool, flagsTok *string, flagsTokSet *bool) {
+	if len(token) == 0 {
 		return
 	}
-	if v, err := strconv.ParseUint(token, 10, 64); err == nil && opaqueStringIsCanonical(token, v) {
+	s := string(token)
+	if v, err := strconv.ParseUint(s, 10, 64); err == nil && opaqueStringIsCanonical(s, v) {
 		*flagsO = v
 		*flagsOset = true
 		return
 	}
-	*flagsTok = token
+	*flagsTok = s
 	*flagsTokSet = true
 }
 
@@ -248,7 +261,7 @@ func (f MetaGet) toFlags() metaGetFlags {
 		b: f.BinaryKey,
 		c: f.Return.CAS,
 		f: f.Return.Flags,
-		h: f.Return.Hit,
+		h: f.Return.HitBefore,
 		k: f.Return.Key,
 		l: f.Return.LastAccess,
 		q: f.Quiet,
@@ -278,8 +291,8 @@ func (f MetaGet) toFlags() metaGetFlags {
 		out.T = expiryToken(*f.Touch)
 		out.Tset = true
 	}
-	out.P = f.P
-	out.L = f.L
+	out.P = f.ProxyHint
+	out.L = f.ProxyPath
 	return out
 }
 
@@ -287,12 +300,12 @@ func (f MetaGet) toFlags() metaGetFlags {
 func (f MetaSet) toFlags() metaSetFlags {
 	out := metaSetFlags{
 		b: f.BinaryKey,
-		c: f.ReturnCAS,
+		c: f.Return.CAS,
 		F: f.Flags,
 		I: f.Invalidate,
-		k: f.ReturnKey,
+		k: f.Return.Key,
 		q: f.Quiet,
-		s: f.ReturnSize,
+		s: f.Return.Size,
 		M: f.Mode,
 	}
 	applyOpaque(f.Opaque, &out.O, &out.Oset, &out.Otoken, &out.OtokenSet)
@@ -312,8 +325,8 @@ func (f MetaSet) toFlags() metaSetFlags {
 		out.N = expiryToken(*f.AutoVivify)
 		out.Nset = true
 	}
-	out.P = f.P
-	out.L = f.L
+	out.P = f.ProxyHint
+	out.L = f.ProxyPath
 	return out
 }
 
@@ -322,7 +335,7 @@ func (f MetaDelete) toFlags() metaDeleteFlags {
 	out := metaDeleteFlags{
 		b: f.BinaryKey,
 		I: f.Invalidate,
-		k: f.ReturnKey,
+		k: f.Return.Key,
 		q: f.Quiet,
 		x: f.RemoveValueOnly,
 	}
@@ -339,8 +352,8 @@ func (f MetaDelete) toFlags() metaDeleteFlags {
 		out.T = expiryToken(*f.TTL)
 		out.Tset = true
 	}
-	out.P = f.P
-	out.L = f.L
+	out.P = f.ProxyHint
+	out.L = f.ProxyPath
 	return out
 }
 
@@ -349,10 +362,10 @@ func (f MetaArithmetic) toFlags() metaArithmeticFlags {
 	out := metaArithmeticFlags{
 		b: f.BinaryKey,
 		q: f.Quiet,
-		t: f.ReturnTTL,
-		c: f.ReturnCAS,
-		v: f.ReturnValue,
-		k: f.ReturnKey,
+		t: f.Return.TTL,
+		c: f.Return.CAS,
+		v: f.Return.Value,
+		k: f.Return.Key,
 		M: f.Mode,
 	}
 	applyOpaque(f.Opaque, &out.O, &out.Oset, &out.Otoken, &out.OtokenSet)
@@ -376,19 +389,19 @@ func (f MetaArithmetic) toFlags() metaArithmeticFlags {
 		out.T = expiryToken(*f.TTL)
 		out.Tset = true
 	}
-	out.P = f.P
-	out.L = f.L
+	out.P = f.ProxyHint
+	out.L = f.ProxyPath
 	return out
 }
 
 // toFlags maps MetaDebug onto the me wire flags.
 func (f MetaDebug) toFlags() metaDebugFlags {
-	return metaDebugFlags{b: f.BinaryKey, P: f.P, L: f.L}
+	return metaDebugFlags{b: f.BinaryKey, P: f.ProxyHint, L: f.ProxyPath}
 }
 
 // validate checks MetaGet proxy hints and the recache window.
 func (f MetaGet) validate() error {
-	if err := validMetaHints(f.P, f.L); err != nil {
+	if err := validMetaHints(f.ProxyHint, f.ProxyPath); err != nil {
 		return err
 	}
 	if f.Recache == 0 {
@@ -402,7 +415,7 @@ func (f MetaGet) validate() error {
 
 // validate checks MetaSet proxy hints and that N is only set for append or prepend.
 func (f MetaSet) validate() error {
-	if err := validMetaHints(f.P, f.L); err != nil {
+	if err := validMetaHints(f.ProxyHint, f.ProxyPath); err != nil {
 		return err
 	}
 	if f.AutoVivify != nil && f.Mode != MetaSetModeAppend && f.Mode != MetaSetModePrepend {
@@ -413,7 +426,7 @@ func (f MetaSet) validate() error {
 
 // validate checks MetaDelete proxy hints and that T requires invalidate.
 func (f MetaDelete) validate() error {
-	if err := validMetaHints(f.P, f.L); err != nil {
+	if err := validMetaHints(f.ProxyHint, f.ProxyPath); err != nil {
 		return err
 	}
 	if f.TTL != nil && !f.Invalidate {
@@ -422,12 +435,12 @@ func (f MetaDelete) validate() error {
 	return nil
 }
 
-// validate checks MetaArithmetic proxy hints, rejects Quiet with ReturnValue, and requires AutoCreate when Initial is set.
+// validate checks MetaArithmetic proxy hints, rejects Quiet with Return.Value, and requires AutoCreate when Initial is set.
 func (f MetaArithmetic) validate() error {
-	if err := validMetaHints(f.P, f.L); err != nil {
+	if err := validMetaHints(f.ProxyHint, f.ProxyPath); err != nil {
 		return err
 	}
-	if f.Quiet && f.ReturnValue {
+	if f.Quiet && f.Return.Value {
 		return fmt.Errorf("ma q+v: %w", ErrInvalidArgument)
 	}
 	if f.Initial != nil && f.AutoCreate == nil {
@@ -438,10 +451,10 @@ func (f MetaArithmetic) validate() error {
 
 // validate checks MetaDebug proxy hints.
 func (f MetaDebug) validate() error {
-	return validMetaHints(f.P, f.L)
+	return validMetaHints(f.ProxyHint, f.ProxyPath)
 }
 
 // validate checks MetaNoop proxy hints.
 func (f MetaNoop) validate() error {
-	return validMetaHints(f.P, f.L)
+	return validMetaHints(f.ProxyHint, f.ProxyPath)
 }

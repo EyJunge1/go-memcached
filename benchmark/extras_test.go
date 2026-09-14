@@ -87,7 +87,7 @@ func BenchmarkTCPGetCAS(b *testing.B) {
 	requireTCP(b)
 	keys := seedKeys(b, smallValue, 256)
 	keyBytes := asKeyBytes(keys)
-	casOpts := ours.GetOpts{CAS: true}
+	casOpts := ours.GetOpts{ReturnCAS: true}
 
 	b.Run("ours", func(b *testing.B) {
 		c := newOursTCP(b)
@@ -177,10 +177,10 @@ func BenchmarkTCPMetaSetGet(b *testing.B) {
 				key = append(key[:0], prefix...)
 				key = append(key, '/')
 				key = strconv.AppendUint(key, uint64(i), 10)
-				if err := c.Meta().Set(ctx, key, size.val, ours.MetaSet{}, &setRes); err != nil {
+				if err := c.Meta().Set(ctx, key, size.val, &setRes, ours.MetaSet{}); err != nil {
 					b.Fatal(err)
 				}
-				if err := c.Meta().Get(ctx, key, mg, &res); err != nil {
+				if err := c.Meta().Get(ctx, key, &res, mg); err != nil {
 					b.Fatal(err)
 				}
 				if err := res.Err(); err != nil {

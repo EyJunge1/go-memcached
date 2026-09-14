@@ -31,7 +31,7 @@ func Test_buildMetaSetCommand(t *testing.T) {
 				M: MetaSetModeSet,
 				N: 6,
 			},
-			wantRequestRaw:    []byte("ms Zm9v 3 b c C1 E2 F3 I k O4 q s T5 MS N6\r\nbar\r\nmn\r\n"),
+			wantRequestRaw:    []byte("ms Zm9v 3 b c C1 E2 F3 I k O4 q s T5 N6\r\nbar\r\nmn\r\n"),
 			wantRespIndicator: endIndicatorQuietBarrier,
 		},
 		{

@@ -2,6 +2,8 @@ package memcached_test
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -44,9 +46,15 @@ func ExampleNew() {
 
 func ExampleConfig() {
 	cfg := memcached.Config{
-		Servers: []memcached.Server{{Address: "localhost:11211"}},
+		Servers:  []memcached.Server{{Address: "localhost:11211"}},
+		Pool:     memcached.Pool{MaxOpen: 20},
+		Failover: memcached.DefaultFailover(),
 	}
-	_ = cfg
+	client, err := memcached.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
 }
 
 func ExampleClient_Store() {
@@ -332,14 +340,15 @@ func ExampleMetaClient_Get() {
 	defer func() { _ = client.Close() }()
 
 	var res memcached.MetaResult
-	err = client.Meta().Get(context.Background(), []byte("key"), memcached.MetaGet{
+	err = client.Meta().Get(context.Background(), []byte("key"), &res, memcached.MetaGet{
 		Return: memcached.MetaGetReturn{Value: true},
-	}, &res)
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	if err := res.Err(); err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 	_ = res.Item.Value
 }
@@ -356,16 +365,16 @@ func ExampleMetaClient_Get_recache() {
 	ctx := context.Background()
 	vivify := memcached.Rel(30 * time.Second)
 	var res memcached.MetaResult
-	err = client.Meta().Get(ctx, []byte("key"), memcached.MetaGet{
+	err = client.Meta().Get(ctx, []byte("key"), &res, memcached.MetaGet{
 		Vivify:  &vivify,
 		Recache: 10 * time.Second,
 		Return:  memcached.MetaGetReturn{Value: true},
-	}, &res)
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	if res.Item.Won {
-		_ = client.Meta().Set(ctx, []byte("key"), []byte("fresh"), memcached.MetaSet{}, &res)
+		_ = client.Meta().Set(ctx, []byte("key"), []byte("fresh"), &res, memcached.MetaSet{})
 	}
 }
 
@@ -449,4 +458,236 @@ func ExampleUnixExp() {
 
 func ExampleDefaultFailover() {
 	_ = memcached.DefaultFailover()
+}
+
+func ExampleClient_GetOne() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	var got memcached.GetResult
+	err = client.GetOne(context.Background(), []byte("key"), &got, memcached.GetOpts{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !got.Found {
+		return
+	}
+	_ = got.Value
+}
+
+func ExampleClient_Get_found() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	dst := make([]memcached.GetResult, 1)
+	err = client.Get(context.Background(), [][]byte{[]byte("key")}, dst, memcached.GetOpts{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if dst[0].Found {
+		_ = dst[0].Value
+	}
+}
+
+func ExampleTransport_TLS() {
+	cfg := memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+		Transport: memcached.Transport{
+			TLS: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "localhost"},
+		},
+	}
+	client, err := memcached.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+}
+
+func ExampleClient_Touch() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	err = client.Touch(context.Background(), []byte("key"), memcached.Rel(time.Minute), memcached.MutateOpts{})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func ExampleClient_Store_errorsIs() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	err = client.Store(context.Background(), memcached.Item{
+		Mode:  memcached.StoreAdd,
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	if errors.Is(err, memcached.ErrNotStored) {
+		return
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func ExampleClient_Incr_afterStore() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	ctx := context.Background()
+	if err := client.Store(ctx, memcached.Item{Key: []byte("n"), Value: []byte("10")}); err != nil {
+		log.Fatal(err)
+	}
+	n, err := client.Incr(ctx, []byte("n"), 1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = n
+}
+
+func ExampleMetaClient_Set() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	var res memcached.MetaResult
+	err = client.Meta().Set(context.Background(), []byte("key"), []byte("value"), &res, memcached.MetaSet{
+		Return: memcached.MetaSetReturn{CAS: true},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := res.Err(); err != nil {
+		log.Print(err)
+	}
+}
+
+func ExampleMetaClient_Delete() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	var res memcached.MetaResult
+	err = client.Meta().Delete(context.Background(), []byte("key"), &res, memcached.MetaDelete{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := res.Err(); err != nil {
+		log.Print(err)
+	}
+}
+
+func ExampleMetaClient_Arithmetic() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	var res memcached.MetaResult
+	ttl := memcached.Rel(time.Hour)
+	initial := uint64(0)
+	err = client.Meta().Arithmetic(context.Background(), []byte("n"), 1, &res, memcached.MetaArithmetic{
+		AutoCreate: &ttl,
+		Initial:    &initial,
+		Return:     memcached.MetaArithmeticReturn{Value: true},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = res.Item.Value
+}
+
+func ExampleMetaClient_Debug() {
+	client, err := memcached.New(memcached.Config{
+		Servers: []memcached.Server{{Address: "localhost:11211"}},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	var dst memcached.MetaItemDebug
+	err = client.Meta().Debug(context.Background(), []byte("key"), &dst, memcached.MetaDebug{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := dst.Err(); err != nil {
+		log.Print(err)
+	}
+}
+
+func ExampleAdminNode_StatsReset() {
+	client, err := memcached.New(memcached.Config{
+		Servers:    []memcached.Server{{Address: "localhost:11211"}},
+		AllowAdmin: true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	admin, err := client.Admin()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := admin.On(client.Servers()[0]).StatsReset(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func ExampleAdminNode_StatsSizes() {
+	client, err := memcached.New(memcached.Config{
+		Servers:    []memcached.Server{{Address: "localhost:11211"}},
+		AllowAdmin: true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	admin, err := client.Admin()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var got []memcached.Stat
+	if err := admin.On(client.Servers()[0]).StatsSizes(context.Background(), &got); err != nil {
+		log.Fatal(err)
+	}
+	_ = got
 }

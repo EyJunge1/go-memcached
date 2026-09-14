@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -26,17 +25,37 @@ type AdminBroadcast struct {
 }
 
 // AdminOpts adds optional tokens for verbosity and cache_memlimit.
+// Quiet means only that the write was sent (no fault probe). Unlike FlushOpts.Quiet,
+// it does not discard the connection.
 type AdminOpts struct {
 	Quiet bool
 }
 
 // StatsDetailMode is the on/off/dump argument to AdminNode.StatsDetail.
+// The zero value is invalid; it does not enable detail.
 type StatsDetailMode uint8
 
 const (
-	StatsDetailOn StatsDetailMode = iota
+	StatsDetailOn StatsDetailMode = iota + 1
 	StatsDetailOff
 	StatsDetailDump
+)
+
+// LRUMode is flat or segmented LRU. Other strings are rejected.
+type LRUMode string
+
+const (
+	LRUFlat      LRUMode = "flat"
+	LRUSegmented LRUMode = "segmented"
+)
+
+// SlabsAutomoveMode is the slabs automove policy.
+type SlabsAutomoveMode uint8
+
+const (
+	SlabsAutomoveStandby SlabsAutomoveMode = iota
+	SlabsAutomoveNormal
+	SlabsAutomoveAggressive
 )
 
 // wire maps the mode onto the on/off/dump token stats detail expects.
@@ -76,7 +95,8 @@ func (a *Admin) On(server Server) *AdminNode {
 	return &AdminNode{c: a.c, target: &s}
 }
 
-// All returns a handle for cluster-wide admin ops (Flush needs AllowFlushAll).
+// All returns a handle for Flush, Verbosity, and CacheMemLimit on every node.
+// Shutdown is not available here; use On(server). Flush needs AllowFlushAll.
 func (a *Admin) All() *AdminBroadcast {
 	if a == nil {
 		return nil
@@ -110,7 +130,7 @@ func (a *AdminNode) do(ctx context.Context, req *request, resp *response) error 
 	}
 	resp.afterRecv = parseAdminReply
 	if err := a.c.dispatchToAddr(ctx, addr, req, resp); err != nil {
-		return fmt.Errorf("admin: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }
@@ -122,7 +142,7 @@ func (a *AdminNode) doQuiet(ctx context.Context, req *request, resp *response) e
 		return err
 	}
 	if err := a.c.sendQuietToAddr(ctx, addr, req, resp, false); err != nil {
-		return fmt.Errorf("admin: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }
@@ -132,14 +152,17 @@ func (b *AdminBroadcast) doAll(ctx context.Context, build func() (*request, *res
 	if b == nil || b.c == nil {
 		return ErrAdminNotEnabled
 	}
-	return b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
+	if err := b.c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
 		req, resp := build()
 		defer releaseReqAndResp(req, resp)
 		if err := b.c.sendOnConn(ctx, node, cn, req, resp); err != nil {
 			return err
 		}
 		return parseAdminReply(resp)
-	})
+	}); err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	return nil
 }
 
 // doAllQuiet sends a noreply admin command to every configured node.
@@ -152,7 +175,7 @@ func (b *AdminBroadcast) doAllQuiet(ctx context.Context, build func() (*request,
 		req, resp := build()
 		defer releaseReqAndResp(req, resp)
 		if err := b.c.sendQuietToAddr(ctx, addrs[0], req, resp, false); err != nil {
-			return fmt.Errorf("admin: %w", err)
+			return fmt.Errorf("request failed: %w", err)
 		}
 		return nil
 	}
@@ -174,7 +197,7 @@ func (b *AdminBroadcast) doAllQuiet(ctx context.Context, build func() (*request,
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("admin: %w", errors.Join(errs...))
+		return fmt.Errorf("request failed: %w", errors.Join(errs...))
 	}
 	return nil
 }
@@ -216,7 +239,7 @@ func (a *AdminNode) Shutdown(ctx context.Context, graceful bool) error {
 	if err == nil || isShutdownClosed(err) {
 		return nil
 	}
-	return fmt.Errorf("shutdown: %w", err)
+	return fmt.Errorf("request failed: %w", err)
 }
 
 // CacheMemLimit sets the runtime cache size in megabytes.
@@ -263,14 +286,24 @@ func (a *AdminNode) StatsDetail(ctx context.Context, dst *[]Stat, mode StatsDeta
 	}
 	if err := a.c.dispatchToAddr(ctx, addr, req, resp); err != nil {
 		*dst = (*dst)[:0]
-		return err
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }
 
-// Stats runs stats reset or stats sizes on the bound node into dst.
-// All other subcommands belong on Client.Stats or Client.StatsAll.
-func (a *AdminNode) Stats(ctx context.Context, dst *[]Stat, args ...string) error {
+// StatsReset runs stats reset on the bound node.
+func (a *AdminNode) StatsReset(ctx context.Context) error {
+	addr, err := a.resolveTarget()
+	if err != nil {
+		return err
+	}
+	var discard []Stat
+	return a.c.statsIntoOnAddr(ctx, addr, &discard, []string{"reset"})
+}
+
+// StatsSizes runs stats sizes on the bound node into dst.
+// dst must be non-nil. Reusing dst is the zero-allocation path when caps fit.
+func (a *AdminNode) StatsSizes(ctx context.Context, dst *[]Stat) error {
 	if dst == nil {
 		return fmt.Errorf("stats dst: %w", ErrInvalidArgument)
 	}
@@ -278,23 +311,7 @@ func (a *AdminNode) Stats(ctx context.Context, dst *[]Stat, args ...string) erro
 	if err != nil {
 		return err
 	}
-	if err := validAdminStatsArgs(args); err != nil {
-		return err
-	}
-	return a.c.statsIntoOnAddr(ctx, addr, dst, args)
-}
-
-// validAdminStatsArgs allows only stats reset and stats sizes on AdminNode.
-func validAdminStatsArgs(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("admin stats: only reset and sizes: %w", ErrInvalidArgument)
-	}
-	for _, a := range args {
-		if !strings.EqualFold(a, "reset") && !strings.EqualFold(a, "sizes") {
-			return fmt.Errorf("admin stats %q: use Client.Stats: %w", a, ErrInvalidArgument)
-		}
-	}
-	return validFreeStatsArgs(args)
+	return a.c.statsIntoOnAddr(ctx, addr, dst, []string{"sizes"})
 }
 
 // SlabsReassign moves pages from source to dest. source -1 means any class.
@@ -304,12 +321,14 @@ func (a *AdminNode) SlabsReassign(ctx context.Context, source, dest int) error {
 	return a.do(ctx, req, resp)
 }
 
-// SlabsAutomove sets automove: 0 standby, 1 normal, 2 aggressive.
-func (a *AdminNode) SlabsAutomove(ctx context.Context, mode int) error {
-	if mode < 0 || mode > 2 {
+// SlabsAutomove sets the automove policy. Zero is standby.
+func (a *AdminNode) SlabsAutomove(ctx context.Context, mode SlabsAutomoveMode) error {
+	switch mode {
+	case SlabsAutomoveStandby, SlabsAutomoveNormal, SlabsAutomoveAggressive:
+	default:
 		return fmt.Errorf("slabs automove: %w", ErrInvalidArgument)
 	}
-	req, resp := buildSlabsAutomoveCommand(mode)
+	req, resp := buildSlabsAutomoveCommand(int(mode))
 	defer releaseReqAndResp(req, resp)
 	return a.do(ctx, req, resp)
 }
@@ -325,11 +344,11 @@ func (a *AdminNode) LRUTune(ctx context.Context, hotPct, warmPct int, hotFactor,
 }
 
 // LRUMode switches between flat and segmented LRU.
-func (a *AdminNode) LRUMode(ctx context.Context, mode string) error {
-	if mode != "flat" && mode != "segmented" {
+func (a *AdminNode) LRUMode(ctx context.Context, mode LRUMode) error {
+	if mode != LRUFlat && mode != LRUSegmented {
 		return fmt.Errorf("lru mode: %w", ErrInvalidArgument)
 	}
-	req, resp := buildLRUModeCommand(mode)
+	req, resp := buildLRUModeCommand(string(mode))
 	defer releaseReqAndResp(req, resp)
 	return a.do(ctx, req, resp)
 }
@@ -371,7 +390,7 @@ func (a *AdminNode) LRUCrawlerToCrawl(ctx context.Context, n uint32) error {
 
 // LRUCrawlerCrawl starts a crawl of classes ("all" or "1,3,10").
 func (a *AdminNode) LRUCrawlerCrawl(ctx context.Context, classes string) error {
-	if err := validCrawlerSelector(classes); err != nil {
+	if err := validCrawlClasses(classes); err != nil {
 		return err
 	}
 	req, resp := buildLRUCrawlerCommand("crawl", classes)

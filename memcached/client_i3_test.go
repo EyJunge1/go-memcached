@@ -174,7 +174,7 @@ func TestGetCASPartialNodeFailure(t *testing.T) {
 	})
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-good"), Value: []byte("v")}))
-	items, err := doGet(client, ctx, [][]byte{[]byte("a-good"), []byte("b-dead")}, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{[]byte("a-good"), []byte("b-dead")}, GetOpts{ReturnCAS: true})
 	isError(t, err)
 	hasLen(t, items, 2)
 	isTrue(t, items[0].Found)

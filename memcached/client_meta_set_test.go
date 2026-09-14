@@ -46,7 +46,7 @@ func TestMetaMutateDestKeyContract(t *testing.T) {
 	var dst MetaResult
 	dst.Item.WireKey = wire
 
-	noError(t, client.Meta().Set(ctx, key, []byte("v"), MetaSet{}, &dst))
+	noError(t, client.Meta().Set(ctx, key, []byte("v"), &dst, MetaSet{}))
 	if dst.Item.Key != nil {
 		t.Fatalf("Key without ReturnKey: %q", dst.Item.Key)
 	}
@@ -58,7 +58,7 @@ func TestMetaMutateDestKeyContract(t *testing.T) {
 	}
 
 	dst.Item.WireKey = dst.Item.WireKey[:0]
-	noError(t, client.Meta().Set(ctx, key, []byte("v2"), MetaSet{ReturnKey: true}, &dst))
+	noError(t, client.Meta().Set(ctx, key, []byte("v2"), &dst, MetaSet{Return: MetaSetReturn{Key: true}}))
 	equal(t, key, dst.Item.Key)
 	if len(dst.Item.Key) > 0 && cap(dst.Item.WireKey) > 0 &&
 		&dst.Item.Key[:1][0] == &dst.Item.WireKey[:1][0] &&
@@ -68,7 +68,7 @@ func TestMetaMutateDestKeyContract(t *testing.T) {
 
 	var del MetaResult
 	del.Item.WireKey = make([]byte, 0, 16)
-	noError(t, client.Meta().Delete(ctx, key, MetaDelete{}, &del))
+	noError(t, client.Meta().Delete(ctx, key, &del, MetaDelete{}))
 	if del.Item.Key != nil {
 		t.Fatalf("Delete Key without ReturnKey: %q", del.Item.Key)
 	}
@@ -77,7 +77,7 @@ func TestMetaMutateDestKeyContract(t *testing.T) {
 	mustStore(t, client, ctx, []byte("n"), []byte("1"))
 	var arith MetaResult
 	arith.Item.WireKey = make([]byte, 0, 16)
-	noError(t, client.Meta().Arithmetic(ctx, []byte("n"), 1, MetaArithmetic{}, &arith))
+	noError(t, client.Meta().Arithmetic(ctx, []byte("n"), 1, &arith, MetaArithmetic{}))
 	if arith.Item.Key != nil {
 		t.Fatalf("Arithmetic Key without ReturnKey: %q", arith.Item.Key)
 	}
@@ -88,6 +88,6 @@ func TestMetaSetRejectsInjectedMode(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 
-	_, err := doMetaSet(client, context.Background(), []byte("k"), []byte("v"), MetaSet{Mode: "set\r\nquit"})
+	_, err := doMetaSet(client, context.Background(), []byte("k"), []byte("v"), MetaSet{Mode: MetaSetMode(255)})
 	isErrorIs(t, err, ErrInvalidArgument)
 }

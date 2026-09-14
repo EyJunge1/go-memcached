@@ -42,7 +42,7 @@ func TestOpaqueTokenRejectedAndAuth(t *testing.T) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
 
-	_, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Opaque: "bad token"})
+	_, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Opaque: []byte("bad token")})
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	noError(t, client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}))
@@ -176,6 +176,6 @@ func TestSetServersRejectsAuthBypass(t *testing.T) {
 
 	udp, err := ParseServers("udp://127.0.0.1:11211")
 	noError(t, err)
-	isErrorIs(t, client.SetServers(udp), ErrNotSupported)
+	isErrorIs(t, client.SetServers(udp), ErrMixedTransport)
 	equal(t, srv.Addr(), client.Servers()[0].Address)
 }

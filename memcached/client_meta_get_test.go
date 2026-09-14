@@ -41,7 +41,7 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	_, err := doMetaSet(client, ctx, []byte("k"), []byte("v"), MetaSet{ReturnCAS: true})
+	_, err := doMetaSet(client, ctx, []byte("k"), []byte("v"), MetaSet{Return: MetaSetReturn{CAS: true}})
 	noError(t, err)
 	item, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true, Value: true}})
 	noError(t, err)
@@ -85,18 +85,18 @@ func TestMetaGetCheckCASReusesValueCap(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
-	_, err := doMetaSet(client, ctx, []byte("k"), []byte("v"), MetaSet{ReturnCAS: true})
+	_, err := doMetaSet(client, ctx, []byte("k"), []byte("v"), MetaSet{Return: MetaSetReturn{CAS: true}})
 	noError(t, err)
 	var dst MetaResult
 	dst.Item.Value = make([]byte, 0, 32)
 	mg := MetaGet{Return: MetaGetReturn{CAS: true, Value: true}}
-	noError(t, client.Meta().Get(ctx, []byte("k"), mg, &dst))
+	noError(t, client.Meta().Get(ctx, []byte("k"), &dst, mg))
 	cas := dst.Item.CAS
 	equal(t, []byte("v"), dst.Item.Value)
 	equal(t, 32, cap(dst.Item.Value))
 
 	mg.CompareCAS = &cas
-	noError(t, client.Meta().Get(ctx, []byte("k"), mg, &dst))
+	noError(t, client.Meta().Get(ctx, []byte("k"), &dst, mg))
 	noError(t, dst.Err())
 	isTrue(t, dst.Item.CASMatched)
 	equal(t, 0, len(dst.Item.Value))
@@ -104,7 +104,7 @@ func TestMetaGetCheckCASReusesValueCap(t *testing.T) {
 
 	wrong := cas + 1
 	mg.CompareCAS = &wrong
-	noError(t, client.Meta().Get(ctx, []byte("k"), mg, &dst))
+	noError(t, client.Meta().Get(ctx, []byte("k"), &dst, mg))
 	equal(t, []byte("v"), dst.Item.Value)
 	isFalse(t, dst.Item.CASMatched)
 	equal(t, 32, cap(dst.Item.Value))
@@ -164,9 +164,9 @@ func TestMetaGetReturnsWireKey(t *testing.T) {
 	var dst MetaResult
 	dst.Item.WireKey = make([]byte, 0, 32)
 	mg := MetaGet{Return: MetaGetReturn{Key: true, Value: true}}
-	noError(t, client.Meta().Get(ctx, []byte("foo"), mg, &dst))
+	noError(t, client.Meta().Get(ctx, []byte("foo"), &dst, mg))
 	buf := dst.Item.WireKey
-	noError(t, client.Meta().Get(ctx, []byte("foo"), mg, &dst))
+	noError(t, client.Meta().Get(ctx, []byte("foo"), &dst, mg))
 	if cap(dst.Item.WireKey) != cap(buf) || (cap(buf) > 0 && &dst.Item.WireKey[:cap(dst.Item.WireKey)][0] != &buf[:cap(buf)][0]) {
 		t.Fatal("WireKey cap was not reused")
 	}
@@ -184,7 +184,7 @@ func TestMetaGetDestKeyDoesNotAliasWireKey(t *testing.T) {
 	dst.Item.Key = make([]byte, 0, 16)
 	dst.Item.WireKey = make([]byte, 0, 16)
 	mg := MetaGet{Return: MetaGetReturn{Key: true, Value: true}}
-	noError(t, client.Meta().Get(ctx, []byte("foo"), mg, &dst))
+	noError(t, client.Meta().Get(ctx, []byte("foo"), &dst, mg))
 	equal(t, []byte("foo"), dst.Item.Key)
 	equal(t, []byte("ns:foo"), dst.Item.WireKey)
 	if sameByteArray(dst.Item.Key, dst.Item.WireKey) {
@@ -220,7 +220,7 @@ func TestMetaPipelineArithmetic(t *testing.T) {
 	mustStore(t, client, ctx, []byte("n"), []byte("10"))
 
 	got, err := doMetaPipeline(client, ctx, []MetaOp{
-		{Key: []byte("n"), Delta: 3, Arith: &MetaArithmetic{ReturnValue: true}},
+		{Key: []byte("n"), Delta: 3, Arithmetic: &MetaArithmetic{Return: MetaArithmeticReturn{Value: true}}},
 	})
 	noError(t, err)
 	hasLen(t, got, 1)
@@ -279,15 +279,15 @@ func TestMetaPipelineValidateRejects(t *testing.T) {
 		},
 		{
 			name: "md-ttl",
-			op:   MetaOp{Key: []byte("k"), Del: &MetaDelete{TTL: delayPtr(Rel(time.Second))}},
+			op:   MetaOp{Key: []byte("k"), Delete: &MetaDelete{TTL: delayPtr(Rel(time.Second))}},
 		},
 		{
 			name: "ma-j",
-			op:   MetaOp{Key: []byte("k"), Arith: &MetaArithmetic{Initial: &init}},
+			op:   MetaOp{Key: []byte("k"), Arithmetic: &MetaArithmetic{Initial: &init}},
 		},
 		{
 			name: "hints",
-			op:   MetaOp{Key: []byte("k"), Get: &MetaGet{P: "bad token"}},
+			op:   MetaOp{Key: []byte("k"), Get: &MetaGet{ProxyHint: "bad token"}},
 		},
 	}
 	for _, tt := range tests {

@@ -53,7 +53,7 @@ func Test_buildMetaArithmeticCommand(t *testing.T) {
 				v: true,
 				k: true,
 			},
-			wantRequestRaw:    []byte("ma foo C1 E2 N3 J4 D64 T6 MI O7 t c v k\r\n"),
+			wantRequestRaw:    []byte("ma foo C1 E2 N3 J4 D64 T6 O7 t c v k\r\n"),
 			wantRespIndicator: endIndicatorLimitedLines,
 		},
 	}
@@ -75,7 +75,7 @@ func Test_buildMetaArithmeticCommand_deltaZero(t *testing.T) {
 
 func Test_buildMetaArithmeticCommand_omitsInjectedMode(t *testing.T) {
 	req, resp := buildMetaArithmeticCommand([]byte("foo"), 1, &metaArithmeticFlags{
-		M: "I\r\nflush_all\r\n",
+		M: MetaArithmeticMode(255),
 	})
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("ma foo D1\r\n"), req.raw)

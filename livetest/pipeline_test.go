@@ -26,7 +26,7 @@ func TestTextPipeline(t *testing.T) {
 	noError(t, c.Pipeline().Delete(b).Run(ctx))
 	mustMiss(t, c, ctx, b)
 
-	items, err := doGet(c, ctx, [][]byte{a}, memcached.GetOpts{CAS: true})
+	items, err := doGet(c, ctx, [][]byte{a}, memcached.GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	noError(t, c.Pipeline().
@@ -41,7 +41,7 @@ func TestMetaPipeline(t *testing.T) {
 	key := liveKey(t, "m")
 
 	got, err := doMetaPipeline(c, ctx, []memcached.MetaOp{
-		{Key: key, Body: []byte("v"), Set: &memcached.MetaSet{ReturnCAS: true}},
+		{Key: key, Body: []byte("v"), Set: &memcached.MetaSet{Return: memcached.MetaSetReturn{CAS: true}}},
 		{Key: key, Get: &memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true}}},
 	})
 	noError(t, err)

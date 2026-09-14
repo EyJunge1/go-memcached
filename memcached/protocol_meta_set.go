@@ -28,25 +28,44 @@ type metaSetFlags struct {
 }
 
 // MetaSetMode is the ms M token (add, replace, append, prepend, set).
-type MetaSetMode string
+// The zero value is MetaSetModeSet and omits M (server default is set).
+type MetaSetMode uint8
 
 const (
+	// MetaSetModeSet overwrites regardless of prior existence. Zero Mode is set.
+	MetaSetModeSet MetaSetMode = iota
 	// MetaSetModeAdd stores only when the key is missing.
-	MetaSetModeAdd MetaSetMode = "E"
+	MetaSetModeAdd
 	// MetaSetModeReplace stores only when the key already exists.
-	MetaSetModeReplace MetaSetMode = "R"
+	MetaSetModeReplace
 	// MetaSetModeAppend appends to an existing value.
-	MetaSetModeAppend MetaSetMode = "A"
+	MetaSetModeAppend
 	// MetaSetModePrepend prepends to an existing value.
-	MetaSetModePrepend MetaSetMode = "P"
-	// MetaSetModeSet overwrites regardless of prior existence.
-	MetaSetModeSet MetaSetMode = "S"
+	MetaSetModePrepend
 )
 
-// validMetaSetMode reports whether m is empty or a known ms mode.
+// metaSetModeToken maps Mode onto the wire M token. Set omits M.
+func metaSetModeToken(m MetaSetMode) (string, bool) {
+	switch m {
+	case MetaSetModeSet:
+		return "", false
+	case MetaSetModeAdd:
+		return "E", true
+	case MetaSetModeReplace:
+		return "R", true
+	case MetaSetModeAppend:
+		return "A", true
+	case MetaSetModePrepend:
+		return "P", true
+	default:
+		return "", false
+	}
+}
+
+// validMetaSetMode reports whether m is a known ms mode.
 func validMetaSetMode(m MetaSetMode) bool {
 	switch m {
-	case "", MetaSetModeAdd, MetaSetModeReplace, MetaSetModeAppend, MetaSetModePrepend, MetaSetModeSet:
+	case MetaSetModeSet, MetaSetModeAdd, MetaSetModeReplace, MetaSetModeAppend, MetaSetModePrepend:
 		return true
 	default:
 		return false
@@ -72,8 +91,8 @@ func writeMetaSet(b *protocolBuilder, key []byte, valueLen int, flags *metaSetFl
 	b.AddFlagBool("q", flags.q)
 	b.AddFlagBool("s", flags.s)
 	b.AddFlagInt64Present("T", flags.T, flags.Tset)
-	if validMetaSetMode(flags.M) {
-		b.AddFlagString("M", string(flags.M))
+	if tok, ok := metaSetModeToken(flags.M); ok {
+		b.AddFlagString("M", tok)
 	}
 	b.AddFlagInt64Present("N", flags.N, flags.Nset)
 	b.AddFlagString("P", flags.P)

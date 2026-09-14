@@ -88,9 +88,7 @@ func TestFlushAllAfterAndStatsArgs(t *testing.T) {
 	_, err = doStatsAll(client, ctx, "sizes")
 	isErrorIs(t, err, ErrAdminNotEnabled)
 
-	reset, err := doAdminStats(mustAdminOn(t, client), ctx, "reset")
-	noError(t, err)
-	equal(t, 0, len(reset))
+	noError(t, doAdminStatsReset(mustAdminOn(t, client), ctx))
 
 	noError(t, mustAdmin(t, client).All().Flush(ctx, FlushOpts{Stagger: time.Second}))
 }

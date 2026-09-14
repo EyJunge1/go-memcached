@@ -21,7 +21,7 @@ func TestGetAcrossNodes(t *testing.T) {
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("b-two"), Value: []byte("2")}))
 
 	keys := [][]byte{[]byte("a-one"), []byte("b-two")}
-	items, err := doGet(client, ctx, keys, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, keys, GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, items, 2)
 	isTrue(t, items[0].Found)
@@ -33,7 +33,7 @@ func TestGetAcrossNodes(t *testing.T) {
 	notZero(t, got["a-one"].CAS)
 
 	exp := Rel(time.Second)
-	items, err = doGet(client, ctx, keys, GetOpts{CAS: true, Touch: &exp})
+	items, err = doGet(client, ctx, keys, GetOpts{ReturnCAS: true, Touch: &exp})
 	noError(t, err)
 	hasLen(t, items, 2)
 	isTrue(t, items[0].Found)
@@ -152,7 +152,7 @@ func TestGetPartialNodeFailure(t *testing.T) {
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("a-good"), Value: []byte("v")}))
 	keys := [][]byte{[]byte("a-good"), []byte("b-dead")}
-	items, err := doGet(client, ctx, keys, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, keys, GetOpts{ReturnCAS: true})
 	isError(t, err)
 	got := itemsByKey(keys, items)
 	notNil(t, got["a-good"])
@@ -175,13 +175,13 @@ func TestGetValueContainsEmbeddedCRLF(t *testing.T) {
 	item := mustGet(t, client, ctx, []byte("k"))
 	equal(t, want, item.Value)
 
-	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
+	items, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	isTrue(t, items[0].Found)
 	equal(t, want, items[0].Value)
 
-	got, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{CAS: true})
+	got, err := doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, got, 1)
 	equal(t, want, got[0].Value)
@@ -250,7 +250,7 @@ func TestGetDestinationContract(t *testing.T) {
 	equal(t, []byte("nv"), nsOne.Value)
 	equal(t, 8, cap(nsOne.Value))
 
-	isErrorIs(t, client.Meta().Get(ctx, []byte("k"), MetaGet{}, nil), ErrInvalidArgument)
+	isErrorIs(t, client.Meta().Get(ctx, []byte("k"), nil, MetaGet{}), ErrInvalidArgument)
 	isErrorIs(t, client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}}, nil), ErrInvalidArgument)
 }
 
@@ -312,15 +312,15 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	meta := client.Meta()
 	mg := MetaGet{Return: MetaGetReturn{Value: true}}
 	var metaSet MetaResult
-	noError(t, meta.Set(ctx, key, val, MetaSet{}, &metaSet))
+	noError(t, meta.Set(ctx, key, val, &metaSet, MetaSet{}))
 	var metaDst MetaResult
 	metaDst.Item.Value = make([]byte, 0, 64)
-	noError(t, meta.Get(ctx, key, mg, &metaDst))
+	noError(t, meta.Get(ctx, key, &metaDst, mg))
 	metaAllocs := testing.AllocsPerRun(200, func() {
-		if err := meta.Set(ctx, key, val, MetaSet{}, &metaSet); err != nil {
+		if err := meta.Set(ctx, key, val, &metaSet, MetaSet{}); err != nil {
 			t.Fatalf("meta set: %v", err)
 		}
-		if err := meta.Get(ctx, key, mg, &metaDst); err != nil || metaDst.Err() != nil {
+		if err := meta.Get(ctx, key, &metaDst, mg); err != nil || metaDst.Err() != nil {
 			t.Fatalf("meta get: %v %v", err, metaDst.Err())
 		}
 	})
@@ -398,7 +398,7 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 	})
 
 	metaGetOnly := testing.AllocsPerRun(200, func() {
-		if err := meta.Get(ctx, key, mg, &metaDst); err != nil || metaDst.Err() != nil {
+		if err := meta.Get(ctx, key, &metaDst, mg); err != nil || metaDst.Err() != nil {
 			t.Fatalf("meta get: %v %v", err, metaDst.Err())
 		}
 	})

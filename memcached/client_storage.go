@@ -7,14 +7,21 @@ import (
 )
 
 // StoreMode picks which text storage verb Store sends.
+// The zero value is StoreSet.
 type StoreMode uint8
 
 const (
+	// StoreSet overwrites regardless of prior existence. Zero Mode is set.
 	StoreSet StoreMode = iota
+	// StoreAdd stores only when the key is missing.
 	StoreAdd
+	// StoreReplace stores only when the key already exists.
 	StoreReplace
+	// StoreAppend appends to an existing value. Flags and Exptime are sent as 0 0.
 	StoreAppend
+	// StorePrepend prepends to an existing value. Flags and Exptime are sent as 0 0.
 	StorePrepend
+	// StoreCAS stores only when Item.CAS matches the server Unique.
 	StoreCAS
 )
 
@@ -38,7 +45,8 @@ func storeCommand(mode StoreMode) ([]byte, error) {
 	}
 }
 
-// Store sends one text storage command. NOT_STORED, EXISTS, and NOT_FOUND are sentinels; Quiet only means the write was sent.
+// Store sends one text storage command. NOT_STORED, EXISTS, and NOT_FOUND are sentinels.
+// Quiet adds noreply: the connection is discarded after send; CLIENT_ERROR is still returned.
 func (c *Client) Store(ctx context.Context, item Item) error {
 	command, err := storeCommand(item.Mode)
 	if err != nil {

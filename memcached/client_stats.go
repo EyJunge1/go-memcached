@@ -52,7 +52,11 @@ func (c *Client) statsIntoOnAddr(ctx context.Context, node *addr, dst *[]Stat, a
 	defer releaseReqAndResp(req, resp)
 	resp.statsDst = dst
 	resp.afterRecv = mapStatsReply
-	return c.dispatchToAddr(ctx, node, req, resp)
+	if err := c.dispatchToAddr(ctx, node, req, resp); err != nil {
+		*dst = (*dst)[:0]
+		return fmt.Errorf("request failed: %w", err)
+	}
+	return nil
 }
 
 // Stats reads STAT pairs from the first live node into dst.
@@ -75,7 +79,7 @@ func (c *Client) Stats(ctx context.Context, dst *[]Stat, args ...string) error {
 	resp.afterRecv = mapStatsReply
 	if err := c.dispatchFirstLive(ctx, req, resp); err != nil {
 		*dst = (*dst)[:0]
-		return err
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }
@@ -119,7 +123,7 @@ func (c *Client) StatsAll(ctx context.Context, dst *[]NodeStats, args ...string)
 	*dst = acc
 	c.orderNodeStats(*dst)
 	if err != nil {
-		return fmt.Errorf("StatsAll: %w", err)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	return nil
 }

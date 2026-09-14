@@ -36,7 +36,7 @@ func TestStoreCAS(t *testing.T) {
 	key := liveKey(t, "cas")
 	mustStore(t, c, ctx, key, []byte("v1"))
 
-	items, err := doGet(c, ctx, [][]byte{key}, memcached.GetOpts{CAS: true})
+	items, err := doGet(c, ctx, [][]byte{key}, memcached.GetOpts{ReturnCAS: true})
 	noError(t, err)
 	hasLen(t, items, 1)
 	cas := items[0].CAS

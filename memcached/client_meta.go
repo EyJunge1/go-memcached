@@ -102,7 +102,7 @@ func (m *MetaClient) finishMetaDest(ctx context.Context, req *request, resp *res
 	return nil
 }
 
-// applyMetaMutateDest publishes status and copies Key only when ReturnKey is set.
+// applyMetaMutateDest publishes status and copies Key only when Return.Key is set.
 // Key never shares keep.key unless we synthesize both Key and WireKey together.
 func applyMetaMutateDest(dst *MetaResult, keep metaKeep, c *Client, userKey []byte, returnKey bool) {
 	applyMetaDestStatus(dst, keep)

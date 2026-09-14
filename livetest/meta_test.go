@@ -17,7 +17,7 @@ func TestMetaSetModesAndStatus(t *testing.T) {
 	noError(t, err)
 	isErrorIs(t, res.Err(), memcached.ErrNotFound)
 
-	_, err = doMetaSet(c, ctx, key, []byte("v"), memcached.MetaSet{Flags: 0x11, ReturnCAS: true})
+	_, err = doMetaSet(c, ctx, key, []byte("v"), memcached.MetaSet{Flags: 0x11, Return: memcached.MetaSetReturn{CAS: true}})
 	noError(t, err)
 	got, err := doMetaGet(c, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true, CAS: true, Key: true}})
 	noError(t, err)
@@ -64,23 +64,22 @@ func TestMetaDeleteArithmeticDebugNoop(t *testing.T) {
 	ttl := memcached.Rel(time.Hour)
 	initial := uint64(10)
 	arith, err := doMetaArith(c, ctx, key, 2, memcached.MetaArithmetic{
-		AutoCreate:  &ttl,
-		Initial:     &initial,
-		ReturnValue: true,
-		ReturnCAS:   true,
+		AutoCreate: &ttl,
+		Initial:    &initial,
+		Return:     memcached.MetaArithmeticReturn{Value: true, CAS: true},
 	})
 	noError(t, err)
 	noError(t, arith.Err())
 	equal(t, []byte("10"), arith.Item.Value)
 
-	arith, err = doMetaArith(c, ctx, key, 2, memcached.MetaArithmetic{ReturnValue: true})
+	arith, err = doMetaArith(c, ctx, key, 2, memcached.MetaArithmetic{Return: memcached.MetaArithmeticReturn{Value: true}})
 	noError(t, err)
 	noError(t, arith.Err())
 	equal(t, []byte("12"), arith.Item.Value)
 
 	arith, err = doMetaArith(c, ctx, key, 1, memcached.MetaArithmetic{
-		Mode:        memcached.MetaArithmeticModeDecr,
-		ReturnValue: true,
+		Mode:   memcached.MetaArithmeticModeDecr,
+		Return: memcached.MetaArithmeticReturn{Value: true},
 	})
 	noError(t, err)
 	noError(t, arith.Err())

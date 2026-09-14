@@ -79,7 +79,7 @@ func BenchmarkUDPMetaGet(b *testing.B) {
 		b.ResetTimer()
 		i := 0
 		for b.Loop() {
-			if err := c.Meta().Get(ctx, keyBytes[i%len(keyBytes)], mg, &res); err != nil {
+			if err := c.Meta().Get(ctx, keyBytes[i%len(keyBytes)], &res, mg); err != nil {
 				b.Fatal(err)
 			}
 			if err := res.Err(); err != nil {

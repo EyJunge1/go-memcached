@@ -181,7 +181,7 @@ func TestVersionStatsDestContract(t *testing.T) {
 	isErrorIs(t, client.VersionAll(ctx, nil), ErrInvalidArgument)
 	isErrorIs(t, client.Stats(ctx, nil), ErrInvalidArgument)
 	isErrorIs(t, client.StatsAll(ctx, nil), ErrInvalidArgument)
-	isErrorIs(t, mustAdminOn(t, client).Stats(ctx, nil, "reset"), ErrInvalidArgument)
+	isErrorIs(t, mustAdminOn(t, client).StatsSizes(ctx, nil), ErrInvalidArgument)
 	isErrorIs(t, mustAdminOn(t, client).StatsDetail(ctx, nil, StatsDetailOn), ErrInvalidArgument)
 
 	ver := make([]byte, 0, 32)

@@ -30,17 +30,32 @@ type metaArithmeticFlags struct {
 }
 
 // MetaArithmeticMode is the ma M token (incr or decr).
-type MetaArithmeticMode string
+// The zero value is MetaArithmeticModeIncr and omits M (server default is incr).
+type MetaArithmeticMode uint8
 
 const (
-	MetaArithmeticModeIncr MetaArithmeticMode = "I"
-	MetaArithmeticModeDecr MetaArithmeticMode = "D"
+	// MetaArithmeticModeIncr adds the delta. Zero Mode is incr.
+	MetaArithmeticModeIncr MetaArithmeticMode = iota
+	// MetaArithmeticModeDecr subtracts the delta.
+	MetaArithmeticModeDecr
 )
 
-// validMetaArithmeticMode reports whether m is empty, incr, or decr.
+// metaArithModeToken maps Mode onto the wire M token. Incr omits M.
+func metaArithModeToken(m MetaArithmeticMode) (string, bool) {
+	switch m {
+	case MetaArithmeticModeIncr:
+		return "", false
+	case MetaArithmeticModeDecr:
+		return "D", true
+	default:
+		return "", false
+	}
+}
+
+// validMetaArithmeticMode reports whether m is incr or decr.
 func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 	switch m {
-	case "", MetaArithmeticModeIncr, MetaArithmeticModeDecr:
+	case MetaArithmeticModeIncr, MetaArithmeticModeDecr:
 		return true
 	default:
 		return false
@@ -61,8 +76,8 @@ func writeMetaArithmetic(b *protocolBuilder, key []byte, flags *metaArithmeticFl
 	b.AddFlagUintPresent("J", flags.J, flags.Jset)
 	b.AddFlagUint("D", flags.D)
 	b.AddFlagInt64Present("T", flags.T, flags.Tset)
-	if validMetaArithmeticMode(flags.M) {
-		b.AddFlagString("M", string(flags.M))
+	if tok, ok := metaArithModeToken(flags.M); ok {
+		b.AddFlagString("M", tok)
 	}
 	b.AddOpaque(flags.Otoken, flags.O, flags.Oset || flags.OtokenSet)
 	b.AddFlagBool("q", flags.q)

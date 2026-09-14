@@ -16,6 +16,14 @@ func Test_parseWatchTS(t *testing.T) {
 	equal(t, time.Time{}, parseWatchTS("not-a-ts"))
 }
 
+func TestAdminStatsSizesClearsDestOnError(t *testing.T) {
+	client := testClient(t, "127.0.0.1:1", func(cfg *Config) { cfg.AllowAdmin = true })
+	dst := []Stat{{Name: []byte("stale")}}
+	err := mustAdminOn(t, client).StatsSizes(context.Background(), &dst)
+	isError(t, err)
+	equal(t, 0, len(dst))
+}
+
 func TestAdminRequiresOptIn(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
@@ -31,8 +39,8 @@ func TestAdminSyncCommands(t *testing.T) {
 	ctx := context.Background()
 	noError(t, admin.Verbosity(ctx, 1, AdminOpts{}))
 	noError(t, admin.CacheMemLimit(ctx, 64, AdminOpts{}))
-	noError(t, admin.SlabsAutomove(ctx, 1))
-	noError(t, admin.LRUMode(ctx, "segmented"))
+	noError(t, admin.SlabsAutomove(ctx, SlabsAutomoveNormal))
+	noError(t, admin.LRUMode(ctx, LRUSegmented))
 	noError(t, admin.LRUTune(ctx, 20, 40, 2, 2))
 	noError(t, admin.LRUTempTTL(ctx, 60))
 	noError(t, admin.LRUCrawlerEnable(ctx, true))
@@ -42,8 +50,9 @@ func TestAdminSyncCommands(t *testing.T) {
 	noError(t, admin.SlabsReassign(ctx, 1, 2))
 	isErrorIs(t, admin.SlabsReassign(ctx, 1, 999), ErrBusy)
 	isErrorIs(t, admin.SlabsReassign(ctx, 2, 2), ErrSame)
-	isErrorIs(t, admin.LRUMode(ctx, "flat\r\nshutdown"), ErrInvalidArgument)
+	isErrorIs(t, admin.LRUMode(ctx, LRUMode("flat\r\nshutdown")), ErrInvalidArgument)
 	isErrorIs(t, admin.LRUCrawlerCrawl(ctx, "all\r\nwatch"), ErrInvalidArgument)
+	isErrorIs(t, admin.LRUCrawlerCrawl(ctx, "hash"), ErrInvalidArgument)
 	noError(t, admin.Shutdown(ctx, false))
 }
 

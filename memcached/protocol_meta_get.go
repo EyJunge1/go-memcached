@@ -76,8 +76,8 @@ func writeMetaGet(b *protocolBuilder, key []byte, flags *metaGetFlags) {
 
 func writeMetaNoop(b *protocolBuilder, f MetaNoop) {
 	b.AddBytes(_MnBytes)
-	b.AddFlagString("P", f.P)
-	b.AddFlagString("L", f.L)
+	b.AddFlagString("P", f.ProxyHint)
+	b.AddFlagString("L", f.ProxyPath)
 	b.AddCRLF()
 }
 

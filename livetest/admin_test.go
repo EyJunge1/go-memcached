@@ -33,7 +33,7 @@ func TestAdminStatsAndCrawler(t *testing.T) {
 	node := admin.On(c.Servers()[0])
 
 	noError(t, node.Verbosity(ctx, 0, memcached.AdminOpts{}))
-	noError(t, node.SlabsAutomove(ctx, 0))
+	noError(t, node.SlabsAutomove(ctx, memcached.SlabsAutomoveStandby))
 	noError(t, node.LRUTempTTL(ctx, 0))
 	noError(t, node.LRUCrawlerSleep(ctx, 100))
 	noError(t, node.LRUCrawlerToCrawl(ctx, 100))

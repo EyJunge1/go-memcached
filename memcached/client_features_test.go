@@ -139,9 +139,9 @@ func TestMetaSingleCommandStatusCodes(t *testing.T) {
 func TestMetaHintsRejectWhitespace(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
-	_, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{P: "bad token"})
+	_, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{ProxyHint: "bad token"})
 	isErrorIs(t, err, ErrInvalidArgument)
-	_, err = doMetaNoop(client, context.Background(), MetaNoop{L: "x y"})
+	_, err = doMetaNoop(client, context.Background(), MetaNoop{ProxyPath: "x y"})
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -161,7 +161,7 @@ func TestMetaNoopStatusAndProxyHints(t *testing.T) {
 	noError(t, err)
 	equal(t, MetaStatusMN, res.Status)
 
-	res, err = doMetaNoop(client, context.Background(), MetaNoop{P: "hint", L: "/path"})
+	res, err = doMetaNoop(client, context.Background(), MetaNoop{ProxyHint: "hint", ProxyPath: "/path"})
 	noError(t, err)
 	equal(t, MetaStatusMN, res.Status)
 	srv.mu.Lock()
@@ -205,7 +205,7 @@ func TestMetaDebugDestContract(t *testing.T) {
 
 	wire := make([]byte, 0, 32)
 	dst := MetaItemDebug{WireKey: wire}
-	noError(t, client.Meta().Debug(ctx, []byte("k"), MetaDebug{}, &dst))
+	noError(t, client.Meta().Debug(ctx, []byte("k"), &dst, MetaDebug{}))
 	equal(t, MetaStatusME, dst.Status)
 	equal(t, []byte("k"), dst.Key)
 	equal(t, []byte("ns:k"), dst.WireKey)
@@ -215,7 +215,7 @@ func TestMetaDebugDestContract(t *testing.T) {
 		t.Fatal("Key aliases WireKey")
 	}
 
-	isErrorIs(t, client.Meta().Debug(ctx, []byte("k"), MetaDebug{}, nil), ErrInvalidArgument)
+	isErrorIs(t, client.Meta().Debug(ctx, []byte("k"), nil, MetaDebug{}), ErrInvalidArgument)
 }
 
 func TestMetaGetRecacheWindow(t *testing.T) {
@@ -354,7 +354,7 @@ func TestMetaArithmeticQuietReturnValueIsRejected(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	ctx := context.Background()
 	noError(t, client.Store(ctx, Item{Mode: StoreSet, Key: []byte("n"), Value: []byte("10")}))
-	_, err := doMetaArith(client, ctx, []byte("n"), 1, MetaArithmetic{Quiet: true, ReturnValue: true})
+	_, err := doMetaArith(client, ctx, []byte("n"), 1, MetaArithmetic{Quiet: true, Return: MetaArithmeticReturn{Value: true}})
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -376,6 +376,23 @@ func TestCommandErrorFromGet(t *testing.T) {
 	_, err = doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrCommandError)
 	isFalse(t, errors.Is(err, ErrTransport))
+}
+
+func TestSetServersRejectsFamilySwitch(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowSetServers = true })
+	udp, err := ParseServers("udp://127.0.0.1:11211")
+	noError(t, err)
+	isErrorIs(t, client.SetServers(udp), ErrMixedTransport)
+	equal(t, srv.Addr(), client.Servers()[0].Address)
+}
+
+func TestNewRejectsResolveSpecFamilySwitch(t *testing.T) {
+	_, err := New(Config{
+		Servers: []Server{{Address: "127.0.0.1:11211"}},
+		Cluster: Cluster{ResolveSpec: "udp://127.0.0.1:11211"},
+	})
+	isErrorIs(t, err, ErrMixedTransport)
 }
 
 func TestEmptyServersIsInvalidAddress(t *testing.T) {

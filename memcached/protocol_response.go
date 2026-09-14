@@ -78,11 +78,10 @@ type response struct {
 	metaFilled bool
 
 	// metaPipe* stream Meta().Pipeline replies into dest by opaque (no VA clone).
-	metaPipeC        *Client
-	metaPipeDst      []MetaResult
-	metaPipeGroup    []preparedMetaOp
-	metaPipeByOpaque map[string]int
-	metaSawReply     bool
+	metaPipeC     *Client
+	metaPipeDst   []MetaResult
+	metaPipeGroup []preparedMetaOp
+	metaSawReply  bool
 
 	arithValue    uint64
 	versionDst    *[]byte
@@ -173,7 +172,6 @@ func (resp *response) release() {
 	resp.metaPipeC = nil
 	resp.metaPipeDst = nil
 	resp.metaPipeGroup = nil
-	resp.metaPipeByOpaque = nil
 	resp.metaSawReply = false
 	resp.arithValue = 0
 	resp.versionDst = nil
@@ -257,13 +255,13 @@ func buildQuietBarrierResponse() *response {
 
 // appendMetaQuietBarrier appends mn [P] [L] after raw.
 func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
-	if f.P == "" && f.L == "" {
+	if f.ProxyHint == "" && f.ProxyPath == "" {
 		return append(raw, _MnCRLFBytes...)
 	}
 	b := newProtocolBuilder().AddBytes(_MnBytes)
 	defer b.release()
-	b.AddFlagString("P", f.P)
-	b.AddFlagString("L", f.L)
+	b.AddFlagString("P", f.ProxyHint)
+	b.AddFlagString("L", f.ProxyPath)
 	line, box := b.AddCRLF().takeBytes()
 	raw = append(raw, line...)
 	putBuilderBox(box)

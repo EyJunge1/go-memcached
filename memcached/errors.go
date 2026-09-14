@@ -18,7 +18,7 @@ var (
 	// ErrNotStored matches NOT_STORED when add/replace/append/prepend is refused.
 	ErrNotStored = errors.New("not stored")
 	// ErrInvalidArgument reports a bad caller argument or Config value.
-	ErrInvalidArgument = errors.New("invalid arguments")
+	ErrInvalidArgument = errors.New("invalid argument")
 	// ErrNotSupported reports a command or transport this client will not send.
 	ErrNotSupported = errors.New("not supported")
 
@@ -69,7 +69,7 @@ var (
 	// ErrDeadlineRequired is returned when a streaming call has no context deadline.
 	ErrDeadlineRequired = errors.New("context deadline required")
 	// ErrTransport wraps dial, send, and receive failures.
-	ErrTransport = errors.New("memcached transport")
+	ErrTransport = errors.New("transport")
 	// ErrAdminTargetRequired is returned when a node-local admin call omits On(server).
 	ErrAdminTargetRequired = errors.New("admin command requires On(server)")
 	// ErrClosed is returned by methods after Client.Close.

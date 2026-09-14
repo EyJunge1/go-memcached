@@ -87,6 +87,9 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	if err := validateTransportServers(servers, tlsCfg); err != nil {
 		return err
 	}
+	if len(servers) > 0 && c.rt != nil && serversAreUDP(servers) != c.rt.udp {
+		return fmt.Errorf("cannot change transport family: %w", ErrMixedTransport)
+	}
 	if c.rt != nil && (c.rt.authUser != "" || c.rt.authPass != "") {
 		if err := validateAuthAgainstServers(servers, c.rt.authAllowPlain, c.rt.tlsSet); err != nil {
 			return err

@@ -11,7 +11,7 @@ func Test_buildMetaNoopCommand(t *testing.T) {
 	equal(t, []byte("mn"), req.cmd)
 	equal(t, endIndicatorLimitedLines, resp.endIndicator)
 
-	req, resp = buildMetaNoopCommand(MetaNoop{P: "hint", L: "/path"})
+	req, resp = buildMetaNoopCommand(MetaNoop{ProxyHint: "hint", ProxyPath: "/path"})
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("mn Phint L/path\r\n"), req.raw)
 }

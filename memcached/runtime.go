@@ -33,8 +33,10 @@ type runtime struct {
 
 	dialContext DialContextFunc
 
-	tlsConfig *tls.Config
-	tlsSet    bool
+	tlsConfig        *tls.Config
+	tlsSet           bool
+	allowInsecureTLS bool
+	udp              bool
 
 	authUser        string
 	authPass        string
@@ -113,10 +115,12 @@ func runtimeFromConfig(cfg Config) (*runtime, error) {
 	if rt.minIdle < 0 {
 		rt.minIdle = 0
 	}
+	rt.allowInsecureTLS = cfg.Transport.AllowInsecureTLS
 	if cfg.Transport.TLS != nil {
 		rt.tlsSet = true
-		rt.tlsConfig = cfg.Transport.TLS
+		rt.tlsConfig = cfg.Transport.TLS.Clone()
 	}
+	rt.udp = serversAreUDP(cfg.Servers)
 	if cfg.Auth != nil {
 		rt.authUser = cfg.Auth.User
 		rt.authPass = cfg.Auth.Pass
@@ -155,13 +159,18 @@ func tlsConfigForDial(cfg *tls.Config, network, address string) *tls.Config {
 }
 
 // wrapTLSDial returns a dialer that TLS-wraps inner and completes the handshake.
-func wrapTLSDial(inner DialContextFunc, cfg *tls.Config) DialContextFunc {
+func wrapTLSDial(inner DialContextFunc, cfg *tls.Config, allowInsecure bool) DialContextFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		raw, err := inner(ctx, network, address)
 		if err != nil {
 			return nil, err
 		}
-		tconn := tls.Client(raw, tlsConfigForDial(cfg, network, address))
+		tcfg := tlsConfigForDial(cfg, network, address)
+		if tcfg.InsecureSkipVerify && !allowInsecure {
+			_ = raw.Close()
+			return nil, ErrInsecureTLS
+		}
+		tconn := tls.Client(raw, tcfg)
 		if err = tconn.HandshakeContext(ctx); err != nil {
 			_ = raw.Close()
 			return nil, err
@@ -190,6 +199,6 @@ func applyTLSDialer(rt *runtime) error {
 	if inner == nil {
 		inner = defaultRawDial(rt.keepAlive)
 	}
-	rt.dialContext = wrapTLSDial(inner, rt.tlsConfig)
+	rt.dialContext = wrapTLSDial(inner, rt.tlsConfig, rt.allowInsecureTLS)
 	return nil
 }
