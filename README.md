@@ -57,6 +57,8 @@ UDP also allows `VersionAll`.
 
 ### Security
 
+See [SECURITY.md](SECURITY.md) for supported versions and private disclosure.
+
 Memcached text without TLS is a full data and admin plane.
 
 **Flush** invalidates every item on the targeted servers (wire `flush_all`). Call
@@ -76,13 +78,15 @@ Without `AllowFlushAll`, `All().Flush` / `On().Flush` return
 
 Token auth (`Config.Auth`) is rejected on plaintext TCP except Unix, loopback,
 or `Auth.AllowPlaintext`. UDP + Auth is `ErrNotSupported`.
+A custom `Transport.Dial` is a trust boundary for that plaintext policy.
 
 ### Installation
 
 ```bash
-go get github.com/EyJunge1/go-memcached/memcached@latest
+go get github.com/EyJunge1/go-memcached/memcached@v0.1.0
 ```
 
+Pin a release tag for production. `@latest` follows the newest tagged line.
 ### Usage
 
 ```go

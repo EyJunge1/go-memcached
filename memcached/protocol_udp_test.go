@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"math"
 	"testing"
 )
 
@@ -146,15 +147,46 @@ func Test_assembleUDPRejectsFragmentConflict(t *testing.T) {
 }
 
 func Test_udpFragmentCap(t *testing.T) {
-	equal(t, 2048, udpFragmentCap(0))
-	equal(t, 2048, udpFragmentCap(defaultMaxValueBytes))
-	greater(t, udpFragmentCap(4<<20), 2048)
+	want := (udpAssemblyBudget(0) + udpFragmentPayloadSize - 1) / udpFragmentPayloadSize
+	equal(t, want, udpFragmentCap(0))
+	equal(t, want, udpFragmentCap(defaultMaxValueBytes))
+	greater(t, udpFragmentCap(4<<20), want)
 	h := make([]byte, 10)
 	binary.BigEndian.PutUint16(h[0:2], 3)
 	binary.BigEndian.PutUint16(h[4:6], 65)
 	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{h}}
 	_, err := assembleUDP(cn, 3, 64)
 	isErrorIs(t, err, ErrMalformedResponse)
+}
+
+func Test_udpAssemblyByteBudget(t *testing.T) {
+	makeDgram := func(seq, tot uint16, payload []byte) []byte {
+		h := make([]byte, udpHeaderSize+len(payload))
+		binary.BigEndian.PutUint16(h[0:2], 3)
+		binary.BigEndian.PutUint16(h[2:4], seq)
+		binary.BigEndian.PutUint16(h[4:6], tot)
+		copy(h[udpHeaderSize:], payload)
+		return h
+	}
+	payload := bytes.Repeat([]byte("x"), 100)
+	cn := &recordUDPConn{
+		mockConn: newMockConn(),
+		datagrams: [][]byte{
+			makeDgram(0, 3, payload),
+			makeDgram(1, 3, payload),
+			makeDgram(2, 3, payload),
+		},
+	}
+	_, _, err := assembleUDPPayload(cn, 3, 8, 150, true)
+	isErrorIs(t, err, ErrMalformedResponse)
+}
+
+func Test_nextUDPRequestIDWrapBumpsEpoch(t *testing.T) {
+	prev := udpRequestEpoch.Load()
+	udpRequestID.Store(math.MaxUint16)
+	id := nextUDPRequestID()
+	equal(t, uint16(1), id)
+	equal(t, prev+1, udpRequestEpoch.Load())
 }
 
 func Test_udpRequestAllowedAllocs(t *testing.T) {
@@ -233,7 +265,7 @@ func Test_assembleUDPPayloadInPlaceTot1(t *testing.T) {
 	binary.BigEndian.PutUint16(d[4:6], 1)
 	copy(d[8:], payload)
 	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{d}}
-	box, view, err := assembleUDPPayload(cn, 3, udpFragmentCap(0), false)
+	box, view, err := assembleUDPPayload(cn, 3, udpFragmentCap(0), 0, false)
 	noError(t, err)
 	if box != nil {
 		t.Fatal("tot=1 in-place must not take a pool box")

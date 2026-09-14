@@ -194,6 +194,7 @@ func (b *PreparedMetaBatch) runGroup(ctx context.Context, group *preparedMetaBat
 	resp.metaPipeDst = b.dst
 	resp.metaPipeGroup = group.ops
 	resp.metaPipeIndex = group.index
+	resetMetaPipeSeen(resp, len(group.ops))
 	defer func() {
 		// group.raw is retained by the prepared batch, not requestPool.
 		req.raw = nil

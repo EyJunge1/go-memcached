@@ -10,10 +10,11 @@ type fanoutPool struct {
 	jobs        chan *fanoutCall
 	workerCount int
 
-	mu      sync.RWMutex
-	workers sync.WaitGroup
-	closed  bool
-
+	mu       sync.Mutex
+	workers  sync.WaitGroup
+	closed   bool
+	closing  chan struct{}
+	enqueue  sync.WaitGroup
 	activeMu sync.Mutex
 	active   map[*fanoutCall]context.CancelCauseFunc
 	rootCtx  context.Context
@@ -38,6 +39,7 @@ func newFanoutPool(workers int) *fanoutPool {
 	p := &fanoutPool{
 		jobs:        make(chan *fanoutCall, workers*4),
 		workerCount: workers,
+		closing:     make(chan struct{}),
 		active:      make(map[*fanoutCall]context.CancelCauseFunc),
 		rootCtx:     rootCtx,
 		stopRoot:    stopRoot,
@@ -64,11 +66,21 @@ func (p *fanoutPool) run(ctx context.Context, n int, run func(context.Context, i
 	if p == nil || n <= 0 {
 		return false
 	}
-	p.mu.RLock()
+	p.mu.Lock()
 	if p.closed {
-		p.mu.RUnlock()
+		p.mu.Unlock()
 		return false
 	}
+	p.enqueue.Add(1)
+	p.mu.Unlock()
+
+	select {
+	case <-p.closing:
+		p.enqueue.Done()
+		return false
+	default:
+	}
+
 	call := fanoutCallPool.Get().(*fanoutCall)
 	var cancel context.CancelCauseFunc
 	if ctx == context.Background() || ctx == context.TODO() {
@@ -84,10 +96,34 @@ func (p *fanoutPool) run(ctx context.Context, n int, run func(context.Context, i
 	p.activeMu.Unlock()
 	participants := min(n, p.workerCount)
 	call.done.Add(participants)
+	sent := 0
 	for range participants {
-		p.jobs <- call
+		select {
+		case p.jobs <- call:
+			sent++
+		case <-p.closing:
+			for i := sent; i < participants; i++ {
+				call.done.Done()
+			}
+			p.enqueue.Done()
+			if sent == 0 {
+				p.activeMu.Lock()
+				delete(p.active, call)
+				p.activeMu.Unlock()
+				if cancel != nil {
+					cancel(nil)
+				}
+				call.ctx = nil
+				call.run = nil
+				call.n = 0
+				fanoutCallPool.Put(call)
+				return false
+			}
+			goto wait
+		}
 	}
-	p.mu.RUnlock()
+	p.enqueue.Done()
+wait:
 	call.done.Wait()
 	p.activeMu.Lock()
 	delete(p.active, call)
@@ -112,8 +148,9 @@ func (p *fanoutPool) close() {
 		return
 	}
 	p.closed = true
-	close(p.jobs)
+	close(p.closing)
 	p.mu.Unlock()
+
 	p.stopRoot(ErrClosed)
 	p.activeMu.Lock()
 	for _, cancel := range p.active {
@@ -122,6 +159,9 @@ func (p *fanoutPool) close() {
 		}
 	}
 	p.activeMu.Unlock()
+
+	p.enqueue.Wait()
+	close(p.jobs)
 	p.workers.Wait()
 }
 

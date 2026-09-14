@@ -49,3 +49,13 @@ func TestSessionPoolValidatesArguments(t *testing.T) {
 	t.Cleanup(func() { noError(t, pool.Close()) })
 	isErrorIs(t, pool.Do(context.Background(), nil), ErrInvalidArgument)
 }
+
+func TestNewSessionPoolRejectsSizeAboveMaxOpen(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Pool.MaxOpen = 1
+		cfg.Pool.MaxIdle = 1
+	})
+	_, err := client.NewSessionPool(context.Background(), []byte("k"), 2)
+	isErrorIs(t, err, ErrInvalidArgument)
+}

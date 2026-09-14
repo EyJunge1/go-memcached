@@ -24,6 +24,10 @@ type connPool struct {
 	// closedCh is closed once so get waiters unblock.
 	closedCh  chan struct{}
 	cleanerCh chan struct{}
+	// waitCh wakes MaxOpen waiters after open-- without an idle handoff.
+	// It is non-nil only while at least one get is waiting for a free slot.
+	waitCh    chan struct{}
+	hasWaiter atomic.Bool
 
 	closedIdleCap  int64
 	closedIdleAge  int64
@@ -111,15 +115,35 @@ func (p *connPool) connReusable(cn wireConn) bool {
 // closeIdle closes cn and decrements the open-connection count.
 func (p *connPool) closeIdle(cn wireConn) {
 	_ = cn.closeSilent()
-	p.open.Add(-1)
+	p.releaseOpen()
 }
 
 // closeReaped silently closes sockets the cleaner dropped from the idle set.
 func (p *connPool) closeReaped(closing []wireConn) {
 	for _, cn := range closing {
 		_ = cn.closeSilent()
-		p.open.Add(-1)
+		p.releaseOpen()
 	}
+}
+
+// releaseOpen decrements open and wakes MaxOpen waiters.
+func (p *connPool) releaseOpen() {
+	p.open.Add(-1)
+	if !p.hasWaiter.Load() {
+		return
+	}
+	p.mu.Lock()
+	p.signalWaitersLocked()
+	p.mu.Unlock()
+}
+
+// signalWaitersLocked wakes every get waiting for a free MaxOpen slot.
+func (p *connPool) signalWaitersLocked() {
+	if p.waitCh != nil {
+		close(p.waitCh)
+		p.waitCh = nil
+	}
+	p.hasWaiter.Store(false)
 }
 
 // get returns an idle reusable conn or dials a new one, waiting if the pool is at maxOpen.
@@ -129,7 +153,7 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 		case cn := <-p.conns:
 			if p.closed.Load() {
 				_ = cn.Close()
-				p.open.Add(-1)
+				p.releaseOpen()
 				return nil, errPoolClosed
 			}
 			if p.connReusable(cn) {
@@ -146,18 +170,25 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 			return nil, errPoolClosed
 		}
 		if int(p.open.Load()) >= p.maxOpen {
+			if p.waitCh == nil {
+				p.waitCh = make(chan struct{})
+			}
+			p.hasWaiter.Store(true)
+			waitCh := p.waitCh
 			p.mu.Unlock()
 			select {
 			case cn := <-p.conns:
 				if p.closed.Load() {
 					_ = cn.Close()
-					p.open.Add(-1)
+					p.releaseOpen()
 					return nil, errPoolClosed
 				}
 				if p.connReusable(cn) {
 					return cn, nil
 				}
 				p.closeIdle(cn)
+				continue
+			case <-waitCh:
 				continue
 			case <-p.closedCh:
 				return nil, errPoolClosed
@@ -170,7 +201,7 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 
 		cn, err := p.createConn(ctx)
 		if err != nil {
-			p.open.Add(-1)
+			p.releaseOpen()
 			return nil, err
 		}
 		cn.setConnPool(p)
@@ -178,7 +209,7 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 		p.mu.Lock()
 		if p.closed.Load() {
 			p.mu.Unlock()
-			p.open.Add(-1)
+			p.releaseOpen()
 			return nil, errors.Join(errPoolClosed, cn.Close())
 		}
 		p.mu.Unlock()
@@ -192,7 +223,7 @@ func (p *connPool) discard(cn wireConn) error {
 		return nil
 	}
 	err := cn.closeSilent()
-	p.open.Add(-1)
+	p.releaseOpen()
 	return err
 }
 
@@ -202,11 +233,11 @@ func (p *connPool) put(cn wireConn) error {
 		panic("pool: put nil connection")
 	}
 	if p.closed.Load() {
-		p.open.Add(-1)
+		p.releaseOpen()
 		return cn.Close()
 	}
 	if p.maxIdle <= 0 {
-		p.open.Add(-1)
+		p.releaseOpen()
 		p.bumpClosedIdleCap()
 		return cn.closeSilent()
 	}
@@ -221,7 +252,7 @@ func (p *connPool) put(cn wireConn) error {
 		}
 		return nil
 	default:
-		p.open.Add(-1)
+		p.releaseOpen()
 		p.bumpClosedIdleCap()
 		return cn.closeSilent()
 	}
@@ -406,7 +437,7 @@ func (p *connPool) ensureMinIdle(ctx context.Context) {
 		p.mu.Unlock()
 		cn, err := p.createConn(ctx)
 		if err != nil {
-			p.open.Add(-1)
+			p.releaseOpen()
 			return
 		}
 		cn.setConnPool(p)
@@ -428,7 +459,7 @@ func (p *connPool) warmup(ctx context.Context, n int) {
 		p.open.Add(1)
 		cn, err := p.createConn(ctx)
 		if err != nil {
-			p.open.Add(-1)
+			p.releaseOpen()
 			return
 		}
 		cn.setConnPool(p)

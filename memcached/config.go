@@ -100,8 +100,10 @@ type Failover struct {
 	FailureLimit int
 	RetryAfter   time.Duration
 	DeadAfter    time.Duration
-	// Eject removes a node from the picker after FailureLimit. Without Eject,
-	// Get still hits a quarantined node; other ops skip it.
+	// Eject removes a quarantined node from Ketama/live picker snapshots after
+	// FailureLimit. When Eject is false, liveAddrs keeps the full membership so
+	// ordinary routed ops may still hit the node; only first-live paths can
+	// skip quarantined members.
 	Eject bool
 }
 

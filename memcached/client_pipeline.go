@@ -1005,6 +1005,15 @@ func (p *Pipeline) runFrames(
 				logical[j].result.Err = nil
 			}
 		}
+		if i == len(frames)-1 {
+			if err = ensureNoTrailingBytes(cn); err != nil {
+				opErr = wrapRecvError(err)
+				setPipelineResultError(logical, opErr)
+				failUnknown(ops[frame.end:], opErr)
+				p.c.noteFailure(node)
+				return errors.Join(append(joined, opErr)...)
+			}
+		}
 	}
 	p.c.noteSuccess(node)
 	return errors.Join(joined...)

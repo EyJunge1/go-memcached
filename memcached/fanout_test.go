@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func BenchmarkRunFanout256(b *testing.B) {
@@ -55,6 +56,43 @@ func TestFanoutPoolCloseCancelsActiveWork(t *testing.T) {
 	pool.close()
 	isTrue(t, <-result)
 	isTrue(t, errors.Is(<-cause, ErrClosed))
+}
+
+func TestFanoutPoolCloseWithFullQueue(t *testing.T) {
+	pool := newFanoutPool(1)
+	started := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_ = pool.run(context.Background(), 1, func(ctx context.Context, _ int) {
+			close(started)
+			<-ctx.Done()
+		})
+	})
+	<-started
+
+	const queued = 8
+	var pending sync.WaitGroup
+	pending.Add(queued)
+	for range queued {
+		go func() {
+			defer pending.Done()
+			_ = pool.run(context.Background(), 1, func(context.Context, int) {})
+		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		pool.close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close blocked on saturated fanout queue")
+	}
+	wg.Wait()
+	pending.Wait()
 }
 
 func BenchmarkFanoutPool256(b *testing.B) {

@@ -23,13 +23,20 @@ type SessionPool struct {
 
 // NewSessionPool opens size stream sessions for key's current node. It keeps
 // those connections checked out until Close. The caller must close the pool.
-// UDP does not support session pools.
+// UDP does not support session pools. size must not exceed Pool.MaxOpen.
 func (c *Client) NewSessionPool(ctx context.Context, key []byte, size int) (*SessionPool, error) {
 	if c == nil || c.closed.Load() {
 		return nil, ErrClosed
 	}
 	if size <= 0 {
 		return nil, fmt.Errorf("session pool size must be positive: %w", ErrInvalidArgument)
+	}
+	maxOpen := 100
+	if c.rt != nil && c.rt.maxOpen > 0 {
+		maxOpen = c.rt.maxOpen
+	}
+	if size > maxOpen {
+		return nil, fmt.Errorf("session pool size %d exceeds Pool.MaxOpen %d: %w", size, maxOpen, ErrInvalidArgument)
 	}
 	if err := c.checkKeyValue(key, nil); err != nil {
 		return nil, err

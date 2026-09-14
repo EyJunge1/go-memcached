@@ -226,9 +226,10 @@ type MetaArithmetic struct {
 
 // MetaOp is one step in Meta().Pipeline. Pipeline writes into a caller dst
 // of the same length; Key is copied only when the op asks to return it.
-// Exactly one of Get, Set, Delete, Arithmetic, or Noop must be set.
-// Debug (me) cannot be pipelined. Pipeline Noop writes no mn line; it only
-// puts ProxyHint/ProxyPath on the batch barrier.
+// Body is borrowed until Pipeline returns (PreparedMetaBatch.RunValues borrows
+// per-run set bodies). Exactly one of Get, Set, Delete, Arithmetic, or Noop
+// must be set. Debug (me) cannot be pipelined. Pipeline Noop writes no mn line;
+// it only puts ProxyHint/ProxyPath on the batch barrier.
 type MetaOp struct {
 	Key        []byte
 	Body       []byte

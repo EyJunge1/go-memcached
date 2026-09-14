@@ -598,6 +598,7 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	resp.metaPipeDst = out
 	resp.metaPipeGroup = group
 	resp.metaPipeIndex = index
+	resetMetaPipeSeen(resp, len(group))
 	defer releaseReqAndResp(req, resp)
 
 	return c.finishMetaPipelineDispatch(ctx, node, group, out, req, resp)
@@ -662,6 +663,10 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 	if ok {
 		prep = &resp.metaPipeGroup[pos]
 		idx = prep.idx
+		if metaPipeOpaqueSeen(resp, pos) {
+			return fmt.Errorf("duplicate meta opaque response: %w", ErrMalformedResponse)
+		}
+		markMetaPipeOpaqueSeen(resp, pos)
 	}
 
 	var item *MetaItem
@@ -706,6 +711,37 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 	}
 	finishMetaPipelineDest(resp.metaPipeC, resp.metaPipeDst, idx, prep)
 	return nil
+}
+
+func metaPipeOpaqueSeen(resp *response, pos int) bool {
+	byteIdx := pos >> 3
+	if byteIdx >= len(resp.metaPipeSeen) {
+		return false
+	}
+	return resp.metaPipeSeen[byteIdx]&(1<<uint(pos&7)) != 0
+}
+
+func markMetaPipeOpaqueSeen(resp *response, pos int) {
+	need := (pos >> 3) + 1
+	if len(resp.metaPipeSeen) < need {
+		grown := make([]byte, need)
+		copy(grown, resp.metaPipeSeen)
+		resp.metaPipeSeen = grown
+	}
+	resp.metaPipeSeen[pos>>3] |= 1 << uint(pos&7)
+}
+
+func resetMetaPipeSeen(resp *response, n int) {
+	if resp == nil {
+		return
+	}
+	need := (n + 7) >> 3
+	if cap(resp.metaPipeSeen) >= need {
+		resp.metaPipeSeen = resp.metaPipeSeen[:need]
+		clear(resp.metaPipeSeen)
+		return
+	}
+	resp.metaPipeSeen = make([]byte, need)
 }
 
 func finishMetaPipelineDest(c *Client, out []MetaResult, idx int, p *preparedMetaOp) {
@@ -829,6 +865,7 @@ func buildMetaPipelineIndex(group []preparedMetaOp) (*metaPipelineIndex, error) 
 	if len(group) < metaPipelineIndexThreshold {
 		for i := range group {
 			for j := i + 1; j < len(group); j++ {
+				// #nosec G602 -- j is bounded by len(group).
 				if samePreparedMetaOpaque(&group[i], &group[j]) {
 					return nil, fmt.Errorf("duplicate opaque: %w", ErrInvalidArgument)
 				}

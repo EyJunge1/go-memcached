@@ -12,16 +12,19 @@ import (
 const (
 	udpHeaderSize          = 8
 	maxUDPDatagram         = 65507
-	minUDPFragments        = 2048
+	minUDPFragments        = 1
 	maxUDPFragments        = 65535
 	udpFragmentPayloadSize = 1392
 	udpPooledBuf           = 8 << 10
 	udpMaxPooled           = 1 << 16
+	// udpAssemblyOverhead budgets protocol framing beyond the value body.
+	udpAssemblyOverhead = 4 << 10
 )
 
 var (
-	udpRequestID atomic.Uint32
-	udpBufPool   = sync.Pool{New: func() any {
+	udpRequestID    atomic.Uint32
+	udpRequestEpoch atomic.Uint64
+	udpBufPool      = sync.Pool{New: func() any {
 		b := make([]byte, 0, udpPooledBuf)
 		return &b
 	}}
@@ -63,6 +66,8 @@ func putUDPBuf(p *[]byte) {
 }
 
 // nextUDPRequestID returns a non-zero 16-bit id. Zero is reserved on the wire.
+// Wrapping bumps udpRequestEpoch so pooled UDP sockets are rotated before the
+// recycled id can match a late datagram from the previous epoch.
 func nextUDPRequestID() uint16 {
 	for {
 		// #nosec G115 -- wraparound is intentional for the 16-bit wire field.
@@ -70,7 +75,23 @@ func nextUDPRequestID() uint16 {
 		if id != 0 {
 			return id
 		}
+		udpRequestEpoch.Add(1)
 	}
+}
+
+// udpAssemblyBudget is the maximum reassembled payload accepted for maxValue.
+func udpAssemblyBudget(maxValue int) int {
+	if maxValue <= 0 {
+		maxValue = defaultMaxValueBytes
+	}
+	return maxValue + udpAssemblyOverhead
+}
+
+// udpFragmentCap returns how many UDP fragments a maxValue reply may use.
+func udpFragmentCap(maxValue int) int {
+	budget := udpAssemblyBudget(maxValue)
+	n := max((budget+udpFragmentPayloadSize-1)/udpFragmentPayloadSize, minUDPFragments)
+	return min(n, maxUDPFragments)
 }
 
 // isUDPNetwork reports whether network is udp, udp4, or udp6.
@@ -212,28 +233,22 @@ func fillUDPDatagram(buf []byte, req *request) {
 	copy(buf[off:], req.tail)
 }
 
-// udpFragmentCap returns how many UDP fragments a maxValue reply may use.
-func udpFragmentCap(maxValue int) int {
-	if maxValue <= 0 {
-		maxValue = defaultMaxValueBytes
-	}
-	n := min(max((maxValue+udpFragmentPayloadSize-1)/udpFragmentPayloadSize, minUDPFragments), maxUDPFragments)
-	return n
-}
-
 // assembleUDP reassembles datagrams with wantID into a pooled payload box.
 // The returned box is only valid until putUDPBuf; recv keeps it until release.
 func assembleUDP(rr wireConn, wantID uint16, maxFragments int) (*[]byte, error) {
-	box, _, err := assembleUDPPayload(rr, wantID, maxFragments, true)
+	box, _, err := assembleUDPPayload(rr, wantID, maxFragments, 0, true)
 	return box, err
 }
 
 // assembleUDPPayload reassembles wantID. If own is false and the reply is a
 // single fragment, payload is a view into the last datagram (valid until the
 // next readDatagram). Otherwise payload is backed by the returned box.
-func assembleUDPPayload(rr wireConn, wantID uint16, maxFragments int, own bool) (*[]byte, []byte, error) {
+func assembleUDPPayload(rr wireConn, wantID uint16, maxFragments, maxBytes int, own bool) (*[]byte, []byte, error) {
 	if maxFragments <= 0 {
 		maxFragments = udpFragmentCap(0)
+	}
+	if maxBytes <= 0 {
+		maxBytes = udpAssemblyBudget(0)
 	}
 	var (
 		box     *[]byte
@@ -269,6 +284,9 @@ func assembleUDPPayload(rr wireConn, wantID uint16, maxFragments int, own bool) 
 		}
 		payload := dgram[udpHeaderSize:]
 		if tot == 1 {
+			if len(payload) > maxBytes {
+				return udpAssembleFail(box, fmt.Errorf("udp payload too large: %w", ErrMalformedResponse))
+			}
 			if !own {
 				return nil, payload, nil
 			}
@@ -306,6 +324,9 @@ func assembleUDPPayload(rr wireConn, wantID uint16, maxFragments int, own bool) 
 				return udpAssembleFail(box, fmt.Errorf("udp fragment conflict: %w", ErrMalformedResponse))
 			}
 			continue
+		}
+		if len(*box)+len(payload) > maxBytes {
+			return udpAssembleFail(box, fmt.Errorf("udp assembly budget exceeded: %w", ErrMalformedResponse))
 		}
 		offs[seq] = len(*box)
 		lens[seq] = len(payload)

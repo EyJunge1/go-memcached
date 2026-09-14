@@ -13,7 +13,7 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 		return nil, ErrClosed
 	}
 	if pool := node.pool.Load(); pool != nil {
-		return pool.get(ctx)
+		return c.checkoutPool(ctx, pool)
 	}
 
 	key := node.id()
@@ -27,7 +27,7 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 	c.mu.RUnlock()
 	if ok {
 		node.pool.Store(pool)
-		return pool.get(ctx)
+		return c.checkoutPool(ctx, pool)
 	}
 
 	c.mu.Lock()
@@ -37,6 +37,19 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 	}
 	pool, ok = c.connPools[key]
 	if !ok {
+		member := false
+		for _, a := range c.addrs {
+			if a != nil && a.id() == key {
+				member = true
+				node = a
+				break
+			}
+		}
+		if !member {
+			c.mu.Unlock()
+			return nil, fmt.Errorf("server no longer configured: %w", ErrInvalidAddress)
+		}
+
 		wrapNewConn := func(ctx2 context.Context) (cn wireConn, err error) {
 			switch node.Network {
 			case
@@ -85,11 +98,20 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 		if !isUDPNetwork(node.Network) {
 			pool.warmup(ctx, c.rt.minIdle)
 		}
-		return pool.get(ctx)
+		return c.checkoutPool(ctx, pool)
 	}
 	c.mu.Unlock()
 	node.pool.Store(pool)
-	return pool.get(ctx)
+	return c.checkoutPool(ctx, pool)
+}
+
+// checkoutPool leases from pool and maps a closed-client race to ErrClosed.
+func (c *Client) checkoutPool(ctx context.Context, pool *connPool) (wireConn, error) {
+	cn, err := pool.get(ctx)
+	if err != nil && errors.Is(err, errPoolClosed) && c.closed.Load() {
+		return nil, ErrClosed
+	}
+	return cn, err
 }
 
 // callFunc runs one request on an already checked-out connection.
@@ -213,6 +235,14 @@ func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *r
 	}
 	if err := resp.recvReady(ctx, cn); err != nil {
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
+	}
+	if resp.afterRecv != nil {
+		if err := resp.afterRecv(resp); err != nil {
+			return wrapRecvError(err)
+		}
+	}
+	if err := ensureNoTrailingBytes(cn); err != nil {
+		return wrapRecvError(err)
 	}
 	return nil
 }
@@ -422,8 +452,15 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 	}
 	if resp.afterRecv != nil {
 		err = wrapRecvError(resp.afterRecv(resp))
+		if err != nil {
+			return sent, err
+		}
 	}
-	return sent, err
+	if err = ensureNoTrailingBytes(cn); err != nil {
+		err = wrapRecvError(err)
+		return sent, err
+	}
+	return sent, nil
 }
 
 func finishDispatch(cn wireConn, errp *error) {

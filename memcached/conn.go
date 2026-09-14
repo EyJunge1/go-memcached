@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -115,6 +116,7 @@ type conn struct {
 	batchIOV net.Buffers
 	udpIn    []byte
 	udpOut   []byte
+	udpEpoch uint64
 }
 
 // newConnContext dials node, applies TCP_NODELAY, and returns a buffered wireConn.
@@ -148,6 +150,7 @@ func newConnContext(ctx context.Context, node *addr, o *runtime) (*conn, error) 
 		// One raw Write is one datagram. bufio would copy and can split >16KiB.
 		cn.udpIn = make([]byte, 65535)
 		cn.udpOut = make([]byte, 0, defaultBufferSize)
+		cn.udpEpoch = udpRequestEpoch.Load()
 	} else {
 		cn.rr = bufio.NewReaderSize(rawConn, connWriteBufferSize)
 		cn.wr = bufio.NewWriterSize(rawConn, connWriteBufferSize)
@@ -196,6 +199,8 @@ func (c *conn) buffered() int {
 	return c.rr.Buffered()
 }
 
+const protocolLineLimit = 64 * 1024
+
 // readLine reads from the buffered socket through the next delim byte.
 func (c *conn) readLine(delim byte) ([]byte, error) {
 	if c.isClosed() {
@@ -204,8 +209,7 @@ func (c *conn) readLine(delim byte) ([]byte, error) {
 	if c.rr == nil {
 		return nil, fmt.Errorf("udp stream read: %w", ErrNotSupported)
 	}
-
-	return c.rr.ReadBytes(delim)
+	return readLimitedLine(c.rr, delim, protocolLineLimit)
 }
 
 // readSlice returns a line that is only valid until the next read.
@@ -217,10 +221,70 @@ func (c *conn) readSlice(delim byte) ([]byte, error) {
 		return nil, fmt.Errorf("udp stream read: %w", ErrNotSupported)
 	}
 	line, err := c.rr.ReadSlice(delim)
+	if err == nil {
+		if len(line) > protocolLineLimit {
+			return nil, fmt.Errorf("protocol line too long: %w", ErrMalformedResponse)
+		}
+		return line, nil
+	}
 	if errors.Is(err, bufio.ErrBufferFull) {
-		return c.rr.ReadBytes(delim)
+		return readLimitedLineContinue(c.rr, delim, protocolLineLimit, line)
 	}
 	return line, err
+}
+
+// readLimitedLine reads through delim with a hard byte cap.
+func readLimitedLine(r *bufio.Reader, delim byte, limit int) ([]byte, error) {
+	line, err := r.ReadSlice(delim)
+	if err == nil {
+		if len(line) > limit {
+			return nil, fmt.Errorf("protocol line too long: %w", ErrMalformedResponse)
+		}
+		return bytes.Clone(line), nil
+	}
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return readLimitedLineContinue(r, delim, limit, line)
+	}
+	if len(line) == 0 {
+		return nil, err
+	}
+	if len(line) > limit {
+		return nil, fmt.Errorf("protocol line too long: %w", ErrMalformedResponse)
+	}
+	return bytes.Clone(line), err
+}
+
+func readLimitedLineContinue(r *bufio.Reader, delim byte, limit int, first []byte) ([]byte, error) {
+	if len(first) >= limit {
+		return nil, fmt.Errorf("protocol line too long: %w", ErrMalformedResponse)
+	}
+	buf := make([]byte, len(first), min(limit, max(len(first)*2, 64)))
+	copy(buf, first)
+	for {
+		line, err := r.ReadSlice(delim)
+		if len(line) > 0 {
+			if len(buf)+len(line) > limit {
+				return nil, fmt.Errorf("protocol line too long: %w", ErrMalformedResponse)
+			}
+			buf = append(buf, line...)
+		}
+		if err == nil {
+			return buf, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			if len(buf) >= limit {
+				return nil, fmt.Errorf("protocol line too long: %w", ErrMalformedResponse)
+			}
+			continue
+		}
+		if len(buf) > 0 && errors.Is(err, io.EOF) {
+			return buf, io.EOF
+		}
+		if len(buf) == 0 {
+			return nil, err
+		}
+		return buf, err
+	}
 }
 
 // readExact reads exactly n bytes into a fresh buffer for VALUE/VA bodies.
@@ -486,7 +550,15 @@ func (c *conn) idle(since time.Time) (time.Duration, bool) {
 
 // release parks the conn. The next checkout overwrites the deadline; idle
 // tracking is stamped only when the pool enforces lifetime or idle time.
+// UDP sockets from a prior request-id epoch are discarded so a wrapped 16-bit
+// id cannot pick up a stale datagram on the reused socket.
 func (c *conn) release() error {
+	if isUDPNetwork(c.network) && c.udpEpoch != udpRequestEpoch.Load() {
+		if p := c.pool; p != nil {
+			return p.discard(c)
+		}
+		return c.closeSilent()
+	}
 	if p := c.pool; p != nil && (p.maxIdleTime > 0 || p.maxLifetime > 0) {
 		c.returnedAt = clock()
 	}

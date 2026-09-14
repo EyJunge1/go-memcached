@@ -15,6 +15,9 @@ type GetResult struct {
 }
 
 // Item is the Store / Pipeline.Store payload.
+// Key and Value are borrowed for the duration of the call (and until Pipeline.Run
+// returns for queued ops). Do not mutate them concurrently with the call.
+// PreparedBatch copies default values at Prepare; RunValues borrows per-run bodies.
 type Item struct {
 	Mode  StoreMode
 	Key   []byte

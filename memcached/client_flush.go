@@ -139,6 +139,11 @@ func (c *Client) flushAllOnAddr(ctx context.Context, node *addr, delay Exptime, 
 		}
 		return opErr
 	}
+	if err := ensureNoTrailingBytes(cn); err != nil {
+		opErr = wrapRecvError(err)
+		c.noteFailure(node)
+		return opErr
+	}
 	c.noteSuccess(node)
 	return nil
 }

@@ -38,7 +38,7 @@ func isAuthProbeKey(key string) bool {
 // validAuthSecret rejects credentials that contain whitespace or ASCII controls.
 func validAuthSecret(s string) error {
 	if strings.IndexFunc(s, func(r rune) bool {
-		return r == '\r' || r == '\n' || r == 0 || r == ' ' || r == '\t' || unicode.IsSpace(r)
+		return r <= 0x20 || r == 0x7f || unicode.IsSpace(r)
 	}) >= 0 {
 		return fmt.Errorf("auth credential invalid: %w", ErrInvalidArgument)
 	}

@@ -176,7 +176,14 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	return nil
 }
 
-// Close shuts idle sockets and stops resolver refresh. TCP and Unix send quit first; UDP does not.
+// Close stops resolver refresh, cancels persistent fanout work, and closes idle
+// pooled sockets (TCP/Unix send quit first; UDP does not).
+//
+// Close does not cancel an already checked-out single-node call that uses
+// context.Background() together with TimeoutNone; such I/O ends when the peer
+// responds or the caller cancels its own context. Dedicated admin streams
+// (Watch/Dump) likewise require the caller context. After Close, new API calls
+// return ErrClosed.
 func (c *Client) Close() error {
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()

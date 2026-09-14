@@ -357,9 +357,6 @@ func (s *Session) validateKey(key []byte) error {
 
 func (s *Session) execute(ctx context.Context, req *request, resp *response) error {
 	err := s.c.sendOnConn(ctx, s.node, s.cn, req, resp)
-	if err == nil && resp.afterRecv != nil {
-		err = wrapRecvError(resp.afterRecv(resp))
-	}
 	if shouldDiscardConn(err) {
 		s.c.noteFailure(s.node)
 	} else {

@@ -83,6 +83,7 @@ type response struct {
 	metaPipeDst   []MetaResult
 	metaPipeGroup []preparedMetaOp
 	metaPipeIndex *metaPipelineIndex
+	metaPipeSeen  []byte
 	metaSawReply  bool
 
 	arithValue    uint64
@@ -90,6 +91,7 @@ type response struct {
 	statsDst      *[]Stat
 	statsFilled   bool
 	statsDetail   bool
+	statsBytes    int
 	debugDst      *MetaItemDebug
 	debugBinary   bool
 	maxValueBytes int
@@ -176,12 +178,14 @@ func (resp *response) release() {
 	resp.metaPipeGroup = nil
 	putMetaPipelineIndex(resp.metaPipeIndex)
 	resp.metaPipeIndex = nil
+	resp.metaPipeSeen = resp.metaPipeSeen[:0]
 	resp.metaSawReply = false
 	resp.arithValue = 0
 	resp.versionDst = nil
 	resp.statsDst = nil
 	resp.statsFilled = false
 	resp.statsDetail = false
+	resp.statsBytes = 0
 	resp.debugDst = nil
 	resp.debugBinary = false
 	resp.maxValueBytes = 0
@@ -440,13 +444,16 @@ func (resp *response) doRecv(ctx context.Context, rr wireConn, readTimeout time.
 	}
 
 	if resp.udpEnabled {
-		box, payload, err := assembleUDPPayload(rr, resp.udpReqID, udpFragmentCap(resp.maxValueBytes), resp.udpMustOwnPayload())
+		box, payload, err := assembleUDPPayload(rr, resp.udpReqID, udpFragmentCap(resp.maxValueBytes), udpAssemblyBudget(resp.maxValueBytes), resp.udpMustOwnPayload())
 		if err != nil {
 			return err
 		}
 		resp.udpBox = box
 		resp.udpFrame = byteFrame{buf: payload}
 		if err = resp.recvFrom(&resp.udpFrame); err != nil {
+			return err
+		}
+		if err = ensureNoTrailingBytes(&resp.udpFrame); err != nil {
 			return err
 		}
 		if resp.udpBox == nil {
@@ -721,6 +728,8 @@ func (resp *response) read1(rr protocolReader) error {
 	return nil
 }
 
+const statsResponseBudget = 4 << 20
+
 // read2 reads until specEndLine. Bodies are length-framed.
 // collectFaults keeps EX/NF/NS/CLIENT_ERROR until MN.
 func (resp *response) read2(rr protocolReader, collectFaults bool) error {
@@ -757,6 +766,11 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 			if !resp.statsFilled {
 				*resp.statsDst = (*resp.statsDst)[:0]
 				resp.statsFilled = true
+				resp.statsBytes = 0
+			}
+			resp.statsBytes += len(line)
+			if resp.statsBytes > statsResponseBudget {
+				return fmt.Errorf("stats response too large: %w", ErrMalformedResponse)
 			}
 			if err = consumeStatsLine(resp.statsDst, line, resp.statsDetail); err != nil {
 				return err
@@ -959,6 +973,7 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 	for {
 		line, err := readProtocolLine(rr, sr, sliceOK)
 		if err != nil {
+			resp.invalidateRetrievalDest()
 			return fmt.Errorf("dispatchRequest read: %w", err)
 		}
 		trimmed := trimCRLF(line)
@@ -967,22 +982,27 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		}
 		if !bytes.HasPrefix(trimmed, _ValueSpaceBytes) {
 			if err = forecastCommonFaultLine(line); err != nil {
+				resp.invalidateRetrievalDest()
 				return err
 			}
+			resp.invalidateRetrievalDest()
 			return fmt.Errorf("unexpected retrieval line: %w", ErrMalformedResponse)
 		}
 
 		var parsed Item
 		dataLen, err := parseValueLineBorrowed(trimmed, &parsed, resp.withCAS)
 		if err != nil {
+			resp.invalidateRetrievalDest()
 			return err
 		}
 		valueLen, err := cappedValueSize(dataLen, resp.maxValueBytes)
 		if err != nil {
+			resp.invalidateRetrievalDest()
 			return err
 		}
 		slot, err := resp.retrievalSlot(parsed.Key, &cursor)
 		if err != nil {
+			resp.invalidateRetrievalDest()
 			return err
 		}
 
@@ -992,12 +1012,44 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		slot.Value = takeValueBuffer(slot.Value, valueLen)
 		err = readFramedValueInto(rr, slot.Value)
 		if err != nil {
+			resp.invalidateRetrievalDest()
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return fmt.Errorf("short data block: %w", ErrMalformedResponse)
 			}
 			return fmt.Errorf("read data block: %w", err)
 		}
 		refreshReadDeadlineIfIdle(resp, rr)
+	}
+}
+
+// invalidateRetrievalDest clears slots written by this retrieval wave so a
+// caller does not observe partial fills after a parse or transport error.
+// Other node groups sharing getDst stay untouched when getIdx is set.
+func (resp *response) invalidateRetrievalDest() {
+	clearSlot := func(slot *GetResult) {
+		if slot == nil {
+			return
+		}
+		val := slot.Value
+		*slot = GetResult{}
+		if val != nil {
+			slot.Value = val[:0]
+		}
+	}
+	if resp.getOneDst != nil {
+		clearSlot(resp.getOneDst)
+		return
+	}
+	if resp.getIdx != nil {
+		for _, dstIdx := range resp.getIdx {
+			if dstIdx >= 0 && dstIdx < len(resp.getDst) {
+				clearSlot(&resp.getDst[dstIdx])
+			}
+		}
+		return
+	}
+	for i := range resp.getDst {
+		clearSlot(&resp.getDst[i])
 	}
 }
 
@@ -1063,6 +1115,24 @@ func readerBuffered(rr protocolReader) int {
 		return b.buffered()
 	}
 	return -1
+}
+
+// ensureNoTrailingBytes reports ErrMalformedResponse when unread reply bytes
+// remain after a complete response wave. n < 0 means the reader cannot report
+// buffered size and the check is skipped.
+func ensureNoTrailingBytes(rr any) error {
+	type withBuf interface{ buffered() int }
+	n := -1
+	switch v := rr.(type) {
+	case withBuf:
+		n = v.buffered()
+	case protocolReader:
+		n = readerBuffered(v)
+	}
+	if n > 0 {
+		return fmt.Errorf("trailing bytes after response: %w", ErrMalformedResponse)
+	}
+	return nil
 }
 
 func refreshReadDeadlineIfIdle(resp *response, rr protocolReader) {

@@ -7,6 +7,18 @@
 // Reuse dst to avoid allocations. Check store outcomes with errors.Is.
 // Example shows a complete program.
 //
+// Ownership: Store/Item.Value and MetaOp.Body are borrowed until the call (or
+// Pipeline.Run) returns. GetResult.Value and MetaItem.Value remain valid until
+// that destination slot is filled again. On a retrieval parse/transport error
+// for one node wave, that wave's destination slots are cleared; successful
+// slots from other nodes may still be populated when the joined error is
+// non-nil (documented partial success).
+//
+// Close shuts idle pooled sockets and cancels persistent fanout workers. It
+// does not abort an already checked-out single-node call with TimeoutNone and
+// an uncancellable context. SetServers(nil) clears membership; changing the
+// ring remaps keys and does not migrate data.
+//
 // Meta() is the typed meta-protocol surface. Transport and parse failures are
 // the method error; protocol misses and conflicts live on dst.
 // Client.Pipeline is a text write-then-read batch for mixed mutations and
@@ -26,4 +38,7 @@
 // The default transport is plaintext TCP. UDP cannot share a Client with
 // TCP, Unix, TLS, or Auth, and it cannot mutate. Stats and Get with Touch
 // require TCP. SASL, binary, TAP, VBucket, and range ops are not implemented.
+// A custom Transport.Dial is a trust boundary: Auth plaintext policy still
+// keys off Config.Servers, so Dial must not silently redirect remote.
+// Unix socket mode checks are best-effort before connect (TOCTOU).
 package memcached

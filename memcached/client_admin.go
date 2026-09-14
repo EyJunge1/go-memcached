@@ -25,8 +25,8 @@ type AdminBroadcast struct {
 }
 
 // AdminOpts adds optional tokens for verbosity and cache_memlimit.
-// Quiet means only that the write was sent (no fault probe). Unlike FlushOpts.Quiet,
-// it does not discard the connection.
+// Quiet means only that the noreply write was sent; no fault probe is made.
+// The connection is discarded because reply position cannot be proven.
 type AdminOpts struct {
 	Quiet bool
 }

@@ -515,6 +515,59 @@ func Test_connPool_discard(t *testing.T) {
 	isTrue(t, cn.(*closeTrackingConn).closed.Load())
 }
 
+func TestConnPoolWaiterWakesAfterDiscard(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var dials atomic.Int32
+		pool := newConnPool(1, 1, 0, 0, func(context.Context) (wireConn, error) {
+			dials.Add(1)
+			return newMockConn(), nil
+		})
+		cn, err := pool.get(context.Background())
+		noError(t, err)
+		equal(t, int32(1), dials.Load())
+
+		started := make(chan struct{})
+		got := make(chan error, 1)
+		go func() {
+			close(started)
+			_, getErr := pool.get(context.Background())
+			got <- getErr
+		}()
+		<-started
+		time.Sleep(10 * time.Millisecond)
+		noError(t, pool.discard(cn))
+		noError(t, <-got)
+		equal(t, int32(2), dials.Load())
+		noError(t, pool.close())
+	})
+}
+
+func TestConnPoolWaiterWakesWithNoIdleRetention(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var dials atomic.Int32
+		pool := newConnPool(0, 1, 0, 0, func(context.Context) (wireConn, error) {
+			dials.Add(1)
+			return newMockConn(), nil
+		})
+		cn, err := pool.get(context.Background())
+		noError(t, err)
+
+		started := make(chan struct{})
+		got := make(chan error, 1)
+		go func() {
+			close(started)
+			_, getErr := pool.get(context.Background())
+			got <- getErr
+		}()
+		<-started
+		time.Sleep(10 * time.Millisecond)
+		noError(t, pool.put(cn))
+		noError(t, <-got)
+		equal(t, int32(2), dials.Load())
+		noError(t, pool.close())
+	})
+}
+
 func TestMinIdleDoesNotRetainIdleExpired(t *testing.T) {
 	var created atomic.Int32
 	pool := newConnPool(2, 4, 0, time.Hour, func(context.Context) (wireConn, error) {
