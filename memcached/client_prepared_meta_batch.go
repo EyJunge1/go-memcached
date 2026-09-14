@@ -10,9 +10,11 @@ import (
 	"sync/atomic"
 )
 
-// PreparedMetaBatch is an immutable, reusable Meta().Pipeline plan. It caches
-// validation, namespaced keys, routing, and complete per-node wire batches.
-// Result destinations remain borrowed and the batch must not run concurrently.
+// PreparedMetaBatch is a reusable prepared Meta().Pipeline execution plan. It
+// owns validation data, namespaced keys, default set bodies, routing metadata,
+// per-node wire batches, and opaque indexes. Result destinations remain
+// borrowed. RunValues may supply per-run set bodies without changing the
+// captured defaults. A PreparedMetaBatch must not be run concurrently.
 type PreparedMetaBatch struct {
 	c   *Client
 	ops []preparedMetaOp
@@ -45,8 +47,8 @@ type preparedMetaBatchGroup struct {
 }
 
 // PreparePipeline prepares mixed meta operations for repeated execution.
-// Keys, set bodies, flags, routing, and wire bytes are owned by the returned
-// batch. dst and its reusable buffers must remain valid until Close.
+// The returned batch owns keys, default set bodies, flags, routing metadata,
+// and wire bytes. dst and its reusable buffers must remain valid until Close.
 func (m *MetaClient) PreparePipeline(ops []MetaOp, dst []MetaResult) (*PreparedMetaBatch, error) {
 	if m == nil || m.c == nil {
 		return nil, ErrClosed
@@ -92,14 +94,16 @@ func (m *MetaClient) PreparePipeline(ops []MetaOp, dst []MetaResult) (*PreparedM
 	return b, nil
 }
 
-// Run executes the cached meta batch and refreshes its groups when cluster
-// membership or failover health changes.
+// Run executes the prepared meta batch with its default set bodies. Cluster
+// membership or failover changes refresh its routing. Transport and parse
+// failures are returned; protocol statuses remain in the corresponding dst.
 func (b *PreparedMetaBatch) Run(ctx context.Context) error {
 	return b.run(ctx, nil)
 }
 
-// RunValues executes the cached plan with replacement Meta Set bodies in
-// enqueue order. Values are borrowed only until RunValues returns.
+// RunValues executes the prepared meta batch with replacement Meta Set bodies
+// in enqueue order. Values are borrowed only until RunValues returns.
+// Transport and parse failures are returned; protocol statuses remain in dst.
 func (b *PreparedMetaBatch) RunValues(ctx context.Context, values [][]byte) error {
 	if b == nil || b.c == nil || b.closed.Load() {
 		return ErrClosed

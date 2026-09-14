@@ -11,12 +11,13 @@
 // the method error; protocol misses and conflicts live on dst.
 // Client.Pipeline is a text write-then-read batch for mixed mutations and
 // retrievals. Optional PipelineResult destinations retain each operation's
-// outcome. Pipeline.Prepare retains a reusable plan; PreparedBatch.RunValues
-// borrows dynamic storage values. Meta().PreparePipeline caches an owned quiet
-// meta plan and RunValues replaces its set bodies. Client.Session leases one
-// routed connection for direct sequential work; NewSessionPool supplies fixed
-// parallel session leases. Cluster.FanoutWorkers optionally enables persistent,
-// bounded multi-node workers.
+// outcome. Pipeline.Prepare creates a reusable prepared execution plan;
+// PreparedBatch.RunValues borrows per-run storage values.
+// Meta().PreparePipeline creates the corresponding quiet meta plan, and
+// PreparedMetaBatch.RunValues borrows per-run set bodies. Client.Session leases
+// one routed connection for direct sequential work; Client.NewSessionPool
+// supplies fixed parallel Session leases. Cluster.FanoutWorkers optionally
+// enables persistent, bounded multi-node workers.
 //
 // Admin commands, Flush, and membership changes are opt-in (AllowAdmin,
 // AllowFlushAll, AllowSetServers). Admin().On targets one node; Admin().All

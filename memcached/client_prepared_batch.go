@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 )
 
-// PreparedBatch is an immutable, reusable Pipeline plan. Preparation owns
-// queued keys, values, and wire frames; result destinations remain borrowed.
-// A PreparedBatch must not be run concurrently.
+// PreparedBatch is a reusable prepared Pipeline execution plan. It owns the
+// queued keys, default storage values, and wire metadata; result destinations
+// remain borrowed. RunValues may supply per-run values without changing the
+// captured defaults. A PreparedBatch must not be run concurrently.
 type PreparedBatch struct {
 	c *Client
 	p *Pipeline
@@ -33,9 +34,9 @@ type preparedBatchGroup struct {
 	frames *pipelineFrameScratch
 }
 
-// Prepare transfers this Pipeline's queued operations into a reusable plan.
-// The Pipeline must not be used afterward. Store values are copied once;
-// destination pointers must remain valid until the PreparedBatch is closed.
+// Prepare transfers this Pipeline's queued operations into a PreparedBatch.
+// The Pipeline must not be used afterward. Storage values are copied as the
+// defaults; destination pointers must remain valid until the batch is closed.
 func (p *Pipeline) Prepare() (*PreparedBatch, error) {
 	if p == nil || p.c == nil {
 		return nil, fmt.Errorf("nil pipeline: %w", ErrInvalidArgument)

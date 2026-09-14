@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 )
 
-// Session owns one pooled connection for several sequential operations.
-// It is bound to the node selected by key and must not be used concurrently.
+// Session exclusively holds one pooled stream connection for sequential
+// operations on a single routed node. It must not be used concurrently.
 type Session struct {
 	c       *Client
 	node    *addr
@@ -19,8 +19,9 @@ type Session struct {
 	closed  atomic.Bool
 }
 
-// Session checks out the connection for key's current node. Close must be
-// called to return it to the pool. UDP does not support stream sessions.
+// Session checks out a connection for key's current node. Every later key must
+// route to that node. Close returns a healthy connection to its pool. UDP does
+// not support stream sessions.
 func (c *Client) Session(ctx context.Context, key []byte) (*Session, error) {
 	if c == nil || c.closed.Load() {
 		return nil, ErrClosed
@@ -55,8 +56,8 @@ func (s *Session) Server() Server {
 	return addrToServer(s.node)
 }
 
-// Run executes a Pipeline on the held connection. Every queued key must still
-// route to this session's node. The Pipeline is released after the call.
+// Run executes and releases a Pipeline on the held connection. Every queued
+// key must route to this Session's node.
 func (s *Session) Run(ctx context.Context, p *Pipeline) error {
 	if p == nil {
 		return fmt.Errorf("nil pipeline: %w", ErrInvalidArgument)
@@ -91,7 +92,8 @@ func (s *Session) Run(ctx context.Context, p *Pipeline) error {
 }
 
 // RunPrepared executes a single-node PreparedBatch on the held connection,
-// avoiding pool checkout, validation, encoding, and routing in the steady state.
+// avoiding connection checkout, validation, encoding, and routing in the
+// steady state.
 func (s *Session) RunPrepared(ctx context.Context, b *PreparedBatch) error {
 	return s.runPrepared(ctx, b, nil)
 }
@@ -168,7 +170,9 @@ func (s *Session) runPrepared(ctx context.Context, b *PreparedBatch, values [][]
 	return err
 }
 
-// Store executes one storage command on the held connection.
+// Store executes one storage command on the held connection. The key must
+// route to the Session's node. Item.Quiet returns ErrInvalidArgument because
+// noreply would make a reusable Session connection unsafe.
 func (s *Session) Store(ctx context.Context, item Item) error {
 	if s == nil || s.c == nil {
 		return ErrClosed
@@ -205,7 +209,8 @@ func (s *Session) Store(ctx context.Context, item Item) error {
 	return s.execute(ctx, req, resp)
 }
 
-// GetOne executes one retrieval on the held connection.
+// GetOne retrieves one key on the held connection. A miss leaves dst.Found
+// false and is not ErrNotFound. The key must route to the Session's node.
 func (s *Session) GetOne(ctx context.Context, key []byte, dst *GetResult, opts GetOpts) error {
 	if s == nil || s.c == nil {
 		return ErrClosed
@@ -234,7 +239,7 @@ func (s *Session) GetOne(ctx context.Context, key []byte, dst *GetResult, opts G
 	return s.execute(ctx, req, resp)
 }
 
-// Delete executes one delete on the held connection.
+// Delete removes one key on the held connection. A miss is ErrNotFound.
 func (s *Session) Delete(ctx context.Context, key []byte) error {
 	if s == nil || s.c == nil {
 		return ErrClosed
@@ -254,7 +259,7 @@ func (s *Session) Delete(ctx context.Context, key []byte) error {
 	return s.execute(ctx, req, resp)
 }
 
-// Touch executes one touch on the held connection.
+// Touch changes one key's expiration on the held connection.
 func (s *Session) Touch(ctx context.Context, key []byte, expiry Exptime) error {
 	if s == nil || s.c == nil {
 		return ErrClosed
@@ -274,7 +279,7 @@ func (s *Session) Touch(ctx context.Context, key []byte, expiry Exptime) error {
 	return s.execute(ctx, req, resp)
 }
 
-// Incr executes one increment and writes the updated counter into dst.
+// Incr increments one key and writes the updated counter into dst.
 func (s *Session) Incr(ctx context.Context, key []byte, delta uint64, dst *uint64) error {
 	if s == nil || s.c == nil {
 		return ErrClosed
@@ -282,7 +287,7 @@ func (s *Session) Incr(ctx context.Context, key []byte, delta uint64, dst *uint6
 	return s.arithmetic(ctx, "incr", key, delta, dst)
 }
 
-// Decr executes one decrement and writes the updated counter into dst.
+// Decr decrements one key and writes the updated counter into dst.
 func (s *Session) Decr(ctx context.Context, key []byte, delta uint64, dst *uint64) error {
 	if s == nil || s.c == nil {
 		return ErrClosed
@@ -364,8 +369,9 @@ func (s *Session) execute(ctx context.Context, req *request, resp *response) err
 	return err
 }
 
-// Close returns a healthy connection to the pool. A connection with an
-// indeterminate protocol position is discarded by the operation itself.
+// Close returns a healthy connection to its pool. An operation automatically
+// discards the connection and closes the Session when protocol position becomes
+// indeterminate.
 func (s *Session) Close() error {
 	if s == nil || s.closed.Load() {
 		return nil

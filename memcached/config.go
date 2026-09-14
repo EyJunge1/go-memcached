@@ -74,14 +74,15 @@ type Pool struct {
 	MaxIdleTime time.Duration
 }
 
-// Cluster holds the key namespace and optional DNS refresh.
-// The picker is always weighted Ketama/MD5.
+// Cluster configures key routing, bounded fanout, and optional DNS refresh.
+// Routing always uses weighted Ketama/MD5.
 type Cluster struct {
 	// Namespace is prepended on the wire only (250-byte key limit includes it).
 	// Dumps and watch streams still show the wired key.
 	Namespace string
-	// FanoutWorkers bounds parallel node work for very large clusters.
-	// Zero starts one goroutine per participating node for minimum latency.
+	// FanoutWorkers creates this many persistent workers and bounds concurrent
+	// node operations for large clusters. Zero uses one temporary goroutine per
+	// participating node for minimum latency and retains no workers.
 	FanoutWorkers int
 	// ResolverRefresh > 0 re-resolves ResolveSpec (or formatted Servers) on that interval.
 	// AllowSetServers is required.

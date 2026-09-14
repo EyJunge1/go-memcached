@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 )
 
-// SessionPool owns a fixed number of node-bound Sessions for concurrent
-// workers. Each callback receives exclusive use of one session.
+// SessionPool owns a fixed number of Sessions bound to the node selected by
+// its key. Concurrent Do calls wait for and exclusively lease one Session.
 type SessionPool struct {
 	c    *Client
 	key  []byte
@@ -21,8 +21,9 @@ type SessionPool struct {
 	mu     sync.Mutex
 }
 
-// NewSessionPool opens size stream sessions for key's current node. The pool
-// keeps those connections checked out until Close and rejects UDP.
+// NewSessionPool opens size stream sessions for key's current node. It keeps
+// those connections checked out until Close. The caller must close the pool.
+// UDP does not support session pools.
 func (c *Client) NewSessionPool(ctx context.Context, key []byte, size int) (*SessionPool, error) {
 	if c == nil || c.closed.Load() {
 		return nil, ErrClosed
@@ -51,8 +52,8 @@ func (c *Client) NewSessionPool(ctx context.Context, key []byte, size int) (*Ses
 	return p, nil
 }
 
-// Do leases one session until fn returns. A session broken by fn is replaced
-// lazily before the next callback. Waiting for a worker honors ctx.
+// Do exclusively leases one Session until fn returns. Waiting for a Session
+// honors ctx. A broken Session is replaced lazily before a later callback.
 func (p *SessionPool) Do(ctx context.Context, fn func(*Session) error) error {
 	if p == nil || p.c == nil || p.closed.Load() {
 		return ErrClosed
@@ -90,7 +91,7 @@ func (p *SessionPool) Do(ctx context.Context, fn func(*Session) error) error {
 	return fn(session)
 }
 
-// Size returns the fixed number of worker slots.
+// Size returns the fixed number of Session leases.
 func (p *SessionPool) Size() int {
 	if p == nil {
 		return 0
@@ -98,8 +99,8 @@ func (p *SessionPool) Size() int {
 	return p.size
 }
 
-// Close releases all currently idle sessions. Sessions active in Do are
-// released automatically when their callbacks return.
+// Close releases all idle Sessions and prevents new leases. Sessions active in
+// Do are released when their callbacks return; Close does not wait for them.
 func (p *SessionPool) Close() error {
 	if p == nil || !p.closed.CompareAndSwap(false, true) {
 		return nil
