@@ -3,6 +3,7 @@ package memcached
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,6 +13,8 @@ type addr struct {
 	Address string
 	Weight  uint32 // 0 is treated as 1 by Ketama
 	ident   string
+	udp     bool
+	pool    atomic.Pointer[connPool]
 }
 
 // newAddrWeighted returns a cluster addr with the given network, host, and Ketama weight.
@@ -20,6 +23,7 @@ func newAddrWeighted(network, address string, weight uint32) *addr {
 		Network: network,
 		Address: address,
 		Weight:  weight,
+		udp:     isUDPNetwork(network),
 	}
 	a.ident = network + "\x00" + address
 	return a

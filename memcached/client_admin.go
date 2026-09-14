@@ -77,10 +77,7 @@ func (c *Client) Admin() (*Admin, error) {
 	if c == nil || c.rt == nil || !c.rt.allowAdmin {
 		return nil, ErrAdminNotEnabled
 	}
-	c.mu.RLock()
-	closed := c.closed
-	c.mu.RUnlock()
-	if closed {
+	if c.closed.Load() {
 		return nil, ErrClosed
 	}
 	return &Admin{c: c}, nil

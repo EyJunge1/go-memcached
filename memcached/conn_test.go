@@ -13,11 +13,14 @@ import (
 var _ wireConn = (*mockConn)(nil)
 
 type mockConn struct {
-	createdAt     time.Time
-	returnedAt    time.Time
-	readDeadline  time.Time
-	writeDeadline time.Time
-	pool          *connPool
+	createdAt          time.Time
+	returnedAt         time.Time
+	readDeadline       time.Time
+	writeDeadline      time.Time
+	pool               *connPool
+	deadlineCalls      int
+	readDeadlineCalls  int
+	writeDeadlineCalls int
 }
 
 type closeTrackingConn struct {
@@ -26,6 +29,11 @@ type closeTrackingConn struct {
 }
 
 func (m *closeTrackingConn) Close() error {
+	m.closed.Store(true)
+	return nil
+}
+
+func (m *closeTrackingConn) closeSilent() error {
 	m.closed.Store(true)
 	return nil
 }
@@ -84,6 +92,7 @@ func (m *mockConn) setConnPool(pool *connPool) { m.pool = pool }
 func (m *mockConn) getConnPool() *connPool { return m.pool }
 
 func (m *mockConn) setReadDeadline(d time.Time) error {
+	m.readDeadlineCalls++
 	if d.IsZero() {
 		m.readDeadline = zeroTime
 		return nil
@@ -94,6 +103,7 @@ func (m *mockConn) setReadDeadline(d time.Time) error {
 }
 
 func (m *mockConn) setWriteDeadline(d time.Time) error {
+	m.writeDeadlineCalls++
 	if d.IsZero() {
 		m.writeDeadline = zeroTime
 		return nil
@@ -101,6 +111,22 @@ func (m *mockConn) setWriteDeadline(d time.Time) error {
 
 	m.writeDeadline = d
 	return nil
+}
+
+func (m *mockConn) setDeadline(d time.Time) error {
+	m.deadlineCalls++
+	if d.IsZero() {
+		m.readDeadline = zeroTime
+		m.writeDeadline = zeroTime
+		return nil
+	}
+	m.readDeadline = d
+	m.writeDeadline = d
+	return nil
+}
+
+func (m *mockConn) closeSilent() error {
+	return m.Close()
 }
 
 func createConn(_ context.Context) (wireConn, error) {
@@ -156,4 +182,123 @@ func TestConnClosedIO(t *testing.T) {
 	_, err = cn.readExact(1)
 	isError(t, err)
 	contains(t, err.Error(), "closed")
+}
+
+type deadlineCountConn struct {
+	net.Conn
+	deadline atomic.Int32
+	read     atomic.Int32
+	write    atomic.Int32
+}
+
+func (c *deadlineCountConn) SetDeadline(t time.Time) error {
+	c.deadline.Add(1)
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *deadlineCountConn) SetReadDeadline(t time.Time) error {
+	c.read.Add(1)
+	return c.Conn.SetReadDeadline(t)
+}
+
+func (c *deadlineCountConn) SetWriteDeadline(t time.Time) error {
+	c.write.Add(1)
+	return c.Conn.SetWriteDeadline(t)
+}
+
+type writeCountConn struct {
+	net.Conn
+	n atomic.Int32
+}
+
+func (c *writeCountConn) Write(p []byte) (int, error) {
+	c.n.Add(1)
+	return c.Conn.Write(p)
+}
+
+func TestConnSetDeadlineCoalesces(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	})
+	dc := &deadlineCountConn{Conn: c1}
+	cn := &conn{raw: dc}
+	far := clock().Add(5 * time.Second)
+	noError(t, cn.setDeadline(far))
+	noError(t, cn.setDeadline(clock().Add(5*time.Second)))
+	equal(t, int32(1), dc.deadline.Load())
+	noError(t, cn.setDeadline(clock().Add(100*time.Millisecond)))
+	equal(t, int32(2), dc.deadline.Load())
+}
+
+func TestConnReleaseLeavesDeadline(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	})
+	dc := &deadlineCountConn{Conn: c1}
+	pool := newConnPool(1, 1, 0, 0, createConn)
+	cn := &conn{raw: dc, pool: pool, wr: bufio.NewWriter(dc)}
+	cn.setConnPool(pool)
+	pool.open.Add(1)
+	noError(t, cn.release())
+	equal(t, int32(0), dc.deadline.Load())
+	equal(t, int32(0), dc.read.Load())
+	equal(t, int32(0), dc.write.Load())
+}
+
+func Test_requestSendWritevLargeBody(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	})
+	go func() { _, _ = io.Copy(io.Discard, c2) }()
+	wc := &writeCountConn{Conn: c1}
+	cn := &conn{raw: wc, wr: bufio.NewWriterSize(wc, connWriteBufferSize)}
+	req := &request{
+		raw:  []byte("set k 0 0 2048\r\n"),
+		body: make([]byte, writevBodyThreshold),
+		tail: []byte("\r\n"),
+	}
+	noError(t, req.sendReady(context.Background(), cn))
+	equal(t, 0, cn.wr.Buffered())
+	greater(t, int(wc.n.Load()), 1)
+}
+
+func Test_requestSendSmallUsesBufio(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	})
+	go func() { _, _ = io.Copy(io.Discard, c2) }()
+	wc := &writeCountConn{Conn: c1}
+	cn := &conn{raw: wc, wr: bufio.NewWriterSize(wc, connWriteBufferSize)}
+	req := &request{raw: []byte("get k\r\n")}
+	noError(t, req.sendReady(context.Background(), cn))
+	equal(t, 1, int(wc.n.Load()))
+}
+
+func Test_requestWriteKeepsPipelineBuffered(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	})
+	go func() { _, _ = io.Copy(io.Discard, c2) }()
+	wc := &writeCountConn{Conn: c1}
+	cn := &conn{raw: wc, wr: bufio.NewWriterSize(wc, connWriteBufferSize)}
+	req := &request{
+		raw:  []byte("set k 0 0 2048\r\n"),
+		body: make([]byte, writevBodyThreshold),
+		tail: []byte("\r\n"),
+	}
+	noError(t, req.write(cn))
+	equal(t, 0, int(wc.n.Load()))
+	greater(t, cn.wr.Buffered(), 0)
+	noError(t, cn.Flush())
+	equal(t, 1, int(wc.n.Load()))
 }

@@ -220,6 +220,40 @@ func Test_selectProximateDeadline(t *testing.T) {
 	}
 }
 
+func Test_prepareOpIOBackgroundIsNop(t *testing.T) {
+	cn := newMockConn()
+	stop := prepareOpIO(context.Background(), cn, time.Second, time.Second)
+	stop()
+	equal(t, 1, cn.deadlineCalls)
+}
+
+func Test_applyOpDeadlinesCombined(t *testing.T) {
+	mockNow := func() time.Time {
+		return time.Date(2021, 7, 5, 0, 0, 0, 0, time.UTC)
+	}
+	cn := newMockConn()
+	applyOpDeadlinesAt(context.Background(), cn, time.Second, time.Second, mockNow)
+	want := mockNow().Add(time.Second)
+	equal(t, want, cn.readDeadline)
+	equal(t, want, cn.writeDeadline)
+	equal(t, 1, cn.deadlineCalls)
+	equal(t, 0, cn.readDeadlineCalls)
+	equal(t, 0, cn.writeDeadlineCalls)
+}
+
+func Test_applyOpDeadlinesSplit(t *testing.T) {
+	mockNow := func() time.Time {
+		return time.Date(2021, 7, 5, 0, 0, 0, 0, time.UTC)
+	}
+	cn := newMockConn()
+	applyOpDeadlinesAt(context.Background(), cn, 2*time.Second, time.Second, mockNow)
+	equal(t, mockNow().Add(time.Second), cn.writeDeadline)
+	equal(t, mockNow().Add(2*time.Second), cn.readDeadline)
+	equal(t, 0, cn.deadlineCalls)
+	equal(t, 1, cn.readDeadlineCalls)
+	equal(t, 1, cn.writeDeadlineCalls)
+}
+
 func Test_cappedValueSize(t *testing.T) {
 	n, err := cappedValueSize(4, 0)
 	noError(t, err)

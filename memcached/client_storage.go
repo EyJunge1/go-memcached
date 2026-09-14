@@ -157,7 +157,9 @@ func (c *Client) sendQuietToAddr(ctx context.Context, node *addr, req *request, 
 		return wrapTransport(fmt.Errorf("alloc connection failed: %w", err))
 	}
 	c.enableUDPFraming(node, req, resp)
-	sendErr := req.send(ctx, cn, c.rt.writeTimeout)
+	stop := prepareOpIO(ctx, cn, c.rt.readTimeout, c.rt.writeTimeout)
+	sendErr := req.sendReady(ctx, cn)
+	stop()
 	var fault error
 	if sendErr == nil && probeFault {
 		fault = readQuietFault(ctx, cn)
@@ -165,7 +167,7 @@ func (c *Client) sendQuietToAddr(ctx context.Context, node *addr, req *request, 
 	if p := cn.getConnPool(); p != nil {
 		_ = p.discard(cn)
 	} else {
-		_ = cn.Close()
+		_ = cn.closeSilent()
 	}
 	if sendErr != nil {
 		c.noteFailure(node)

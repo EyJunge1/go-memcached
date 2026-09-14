@@ -123,7 +123,7 @@ func finishPipelineConn(cn wireConn, errp *error) {
 			_ = pool.discard(cn)
 			return
 		}
-		_ = cn.Close()
+		_ = cn.closeSilent()
 		return
 	}
 	_ = cn.release()
@@ -202,13 +202,8 @@ func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error 
 	var opErr error
 	defer finishPipelineConn(cn, &opErr)
 
-	if ctx != nil && ctx.Done() != nil {
-		stop := watchContextCancel(ctx, cn)
-		defer stop()
-	}
-	if selectProximateDeadline(ctx, cn, p.c.rt.writeTimeout, clock, false) {
-		defer clearWriteDeadline(cn)
-	}
+	stop := prepareOpIO(ctx, cn, p.c.rt.readTimeout, p.c.rt.writeTimeout)
+	defer stop()
 	for _, op := range ops {
 		if err = op.req.write(cn); err != nil {
 			opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
@@ -221,7 +216,6 @@ func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error 
 		p.c.noteFailure(node)
 		return opErr
 	}
-	_ = cn.setWriteDeadline(zeroTime)
 
 	var joined []error
 	for _, op := range ops {
@@ -231,7 +225,7 @@ func (p *Pipeline) runAddr(ctx context.Context, node *addr, ops []pipeOp) error 
 			op.resp.readCtx = ctx
 			op.resp.readConn = cn
 		}
-		if err = op.resp.recv(ctx, cn, p.c.rt.readTimeout); err != nil {
+		if err = op.resp.recvReady(ctx, cn); err != nil {
 			opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 			if shouldDiscardPipelineConn(opErr) {
 				p.c.noteFailure(node)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,7 +32,8 @@ type Client struct {
 	resolverMu  sync.Mutex
 	resolverErr error
 
-	closed bool
+	closed atomic.Bool
+	single atomic.Pointer[addr]
 	meta   MetaClient
 }
 
@@ -66,6 +68,7 @@ func New(cfg Config) (*Client, error) {
 		deadUntil:        make(map[string]time.Time),
 	}
 	c.meta.c = c
+	c.publishSingleLocked()
 	c.startResolverRefresh()
 	return c, nil
 }
@@ -112,7 +115,7 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return ErrClosed
 	}
 
@@ -141,6 +144,15 @@ func (c *Client) applyServers(servers []Server, updateSpec bool) error {
 	c.addrs = addrs
 	c.picker = picker
 	c.connPools = next
+	c.publishSingleLocked()
+	for _, a := range addrs {
+		if a == nil {
+			continue
+		}
+		if p, ok := next[a.id()]; ok {
+			a.pool.Store(p)
+		}
+	}
 	if updateSpec && !c.resolveSpecFixed {
 		c.resolveSpec = formatServerSpec(servers)
 	}
@@ -157,10 +169,11 @@ func (c *Client) Close() error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return nil
 	}
-	c.closed = true
+	c.closed.Store(true)
+	c.single.Store(nil)
 
 	var errs []error
 	for _, pool := range c.connPools {
@@ -175,11 +188,40 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// publishSingleLocked caches the only member when failover does not eject.
+func (c *Client) publishSingleLocked() {
+	if len(c.addrs) == 1 && (c.rt == nil || !c.rt.failover.Eject) {
+		c.single.Store(c.addrs[0])
+		return
+	}
+	c.single.Store(nil)
+}
+
 // snapshotCluster copies the current address list and picker under read lock.
 func (c *Client) snapshotCluster() ([]*addr, picker) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.addrs, c.picker
+}
+
+// pickNode returns the node for key. One member and no eject skips the lock.
+func (c *Client) pickNode(key []byte) (*addr, error) {
+	if a := c.single.Load(); a != nil {
+		return a, nil
+	}
+	addrs, picker := c.snapshotCluster()
+	if picker == nil || len(addrs) == 0 {
+		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
+	}
+	addrs = c.liveAddrs(addrs)
+	if len(addrs) == 1 {
+		return addrs[0], nil
+	}
+	addr, err := picker.Pick(addrs, key)
+	if err != nil {
+		return nil, fmt.Errorf("pick node failed: %w", err)
+	}
+	return addr, nil
 }
 
 // Servers returns a snapshot of the configured members.

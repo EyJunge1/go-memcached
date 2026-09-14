@@ -65,9 +65,7 @@ func putUDPBuf(p *[]byte) {
 // nextUDPRequestID returns a non-zero 16-bit id. Zero is reserved on the wire.
 func nextUDPRequestID() uint16 {
 	for {
-		var buf [4]byte
-		binary.LittleEndian.PutUint32(buf[:], udpRequestID.Add(1))
-		id := binary.LittleEndian.Uint16(buf[:2])
+		id := uint16(udpRequestID.Add(1))
 		if id != 0 {
 			return id
 		}

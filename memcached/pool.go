@@ -20,7 +20,7 @@ type connPool struct {
 	conns      chan wireConn
 	createConn func(ctx context.Context) (wireConn, error)
 	open       atomic.Int32
-	closed     bool
+	closed     atomic.Bool
 	// closedCh is closed once so get waiters unblock.
 	closedCh  chan struct{}
 	cleanerCh chan struct{}
@@ -38,12 +38,16 @@ func newConnPool(
 	maxLifetime, maxIdleTime time.Duration,
 	createConn func(ctx context.Context) (wireConn, error),
 ) *connPool {
+	idleCap := max(maxIdle, 1)
+	if maxOpen > 0 && idleCap > maxOpen {
+		idleCap = maxOpen
+	}
 	p := &connPool{
 		maxIdle:     maxIdle,
 		maxOpen:     maxOpen,
 		maxLifetime: maxLifetime,
 		maxIdleTime: maxIdleTime,
-		conns:       make(chan wireConn, maxOpen),
+		conns:       make(chan wireConn, idleCap),
 		createConn:  createConn,
 		closedCh:    make(chan struct{}),
 	}
@@ -54,12 +58,12 @@ func newConnPool(
 // close shuts the pool, drains idle sockets, and wakes waiters.
 func (p *connPool) close() error {
 	p.mu.Lock()
-	if p.closed {
+	if p.closed.Load() {
 		p.mu.Unlock()
 		return nil
 	}
 
-	p.closed = true
+	p.closed.Store(true)
 	close(p.closedCh)
 
 	// Drain idle sockets; closing the idle channel would race with lock-free get.
@@ -87,6 +91,9 @@ drained:
 
 // connReusable reports whether cn is still within maxLifetime and maxIdleTime.
 func (p *connPool) connReusable(cn wireConn) bool {
+	if p.maxLifetime <= 0 && p.maxIdleTime <= 0 {
+		return true
+	}
 	now := clock()
 	if p.maxLifetime > 0 {
 		if _, expired := cn.expired(now.Add(-p.maxLifetime)); expired {
@@ -103,8 +110,16 @@ func (p *connPool) connReusable(cn wireConn) bool {
 
 // closeIdle closes cn and decrements the open-connection count.
 func (p *connPool) closeIdle(cn wireConn) {
-	_ = cn.Close()
+	_ = cn.closeSilent()
 	p.open.Add(-1)
+}
+
+// closeReaped silently closes sockets the cleaner dropped from the idle set.
+func (p *connPool) closeReaped(closing []wireConn) {
+	for _, cn := range closing {
+		_ = cn.closeSilent()
+		p.open.Add(-1)
+	}
 }
 
 // get returns an idle reusable conn or dials a new one, waiting if the pool is at maxOpen.
@@ -112,6 +127,11 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 	for {
 		select {
 		case cn := <-p.conns:
+			if p.closed.Load() {
+				_ = cn.Close()
+				p.open.Add(-1)
+				return nil, errPoolClosed
+			}
 			if p.connReusable(cn) {
 				return cn, nil
 			}
@@ -121,7 +141,7 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 		}
 
 		p.mu.Lock()
-		if p.closed {
+		if p.closed.Load() {
 			p.mu.Unlock()
 			return nil, errPoolClosed
 		}
@@ -129,6 +149,11 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 			p.mu.Unlock()
 			select {
 			case cn := <-p.conns:
+				if p.closed.Load() {
+					_ = cn.Close()
+					p.open.Add(-1)
+					return nil, errPoolClosed
+				}
 				if p.connReusable(cn) {
 					return cn, nil
 				}
@@ -151,7 +176,7 @@ func (p *connPool) get(ctx context.Context) (wireConn, error) {
 		cn.setConnPool(p)
 
 		p.mu.Lock()
-		if p.closed {
+		if p.closed.Load() {
 			p.mu.Unlock()
 			p.open.Add(-1)
 			return nil, errors.Join(errPoolClosed, cn.Close())
@@ -166,7 +191,7 @@ func (p *connPool) discard(cn wireConn) error {
 	if cn == nil {
 		return nil
 	}
-	err := cn.Close()
+	err := cn.closeSilent()
 	p.open.Add(-1)
 	return err
 }
@@ -176,30 +201,36 @@ func (p *connPool) put(cn wireConn) error {
 	if cn == nil {
 		panic("pool: put nil connection")
 	}
-
-	p.mu.Lock()
-	maxIdleClose := p.maxIdle <= 0 || len(p.conns) >= p.maxIdle
-	if p.closed || (p.maxOpen > 0 && int(p.open.Load()) > p.maxOpen) || maxIdleClose {
-		_ = cn.Close()
-		p.open.Add(-1)
-		if maxIdleClose {
-			p.closedIdleCap++
-		}
-
-		p.mu.Unlock()
-		return nil
-	}
-
-	select {
-	case p.conns <- cn:
-		p.startCleanerLocked()
-		p.mu.Unlock()
-		return nil
-	default:
-		p.mu.Unlock()
+	if p.closed.Load() {
 		p.open.Add(-1)
 		return cn.Close()
 	}
+	if p.maxIdle <= 0 {
+		p.open.Add(-1)
+		p.bumpClosedIdleCap()
+		return cn.closeSilent()
+	}
+	select {
+	case p.conns <- cn:
+		if p.maxLifetime > 0 || p.maxIdleTime > 0 {
+			p.mu.Lock()
+			if !p.closed.Load() {
+				p.startCleanerLocked()
+			}
+			p.mu.Unlock()
+		}
+		return nil
+	default:
+		p.open.Add(-1)
+		p.bumpClosedIdleCap()
+		return cn.closeSilent()
+	}
+}
+
+func (p *connPool) bumpClosedIdleCap() {
+	p.mu.Lock()
+	p.closedIdleCap++
+	p.mu.Unlock()
 }
 
 // startCleanerLocked starts one cleaner goroutine under mu to reap aged sockets.
@@ -227,7 +258,7 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 
 		p.mu.Lock()
 		d = p.shortestIdleTimeLocked()
-		if p.closed || p.open.Load() == 0 || d <= 0 {
+		if p.closed.Load() || p.open.Load() == 0 || d <= 0 {
 			p.cleanerCh = nil
 			p.mu.Unlock()
 			return
@@ -236,10 +267,7 @@ func (p *connPool) connectionsCleaner(d time.Duration) {
 		d, closing := p.connectionCleanerRunLocked(d)
 		p.mu.Unlock()
 
-		for _, cn := range closing {
-			_ = cn.Close()
-			p.open.Add(-1)
-		}
+		p.closeReaped(closing)
 		p.ensureMinIdle(context.Background())
 
 		if d < minInterval {
@@ -361,7 +389,7 @@ func (p *connPool) ensureMinIdle(ctx context.Context) {
 	}
 	for {
 		p.mu.Lock()
-		if p.closed || len(p.conns) >= p.minIdle || int(p.open.Load()) >= p.maxOpen {
+		if p.closed.Load() || len(p.conns) >= p.minIdle || int(p.open.Load()) >= p.maxOpen {
 			p.mu.Unlock()
 			return
 		}

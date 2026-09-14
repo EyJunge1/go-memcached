@@ -54,28 +54,16 @@ func (c *Client) GetOne(ctx context.Context, key []byte, dst *GetResult, opts Ge
 		exp = *opts.Touch
 	}
 
-	addrs, picker := c.snapshotCluster()
-	if picker == nil || len(addrs) == 0 {
-		return fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
-	}
-	addrs = c.liveAddrs(addrs)
-
 	wired, keyBox := c.nsKey(key)
 	if err := validateKeyAndValue(wired, nil); err != nil {
 		putBuilderBox(keyBox)
 		return err
 	}
 
-	var node *addr
-	if len(addrs) == 1 {
-		node = addrs[0]
-	} else {
-		picked, err := picker.Pick(addrs, wired)
-		if err != nil {
-			putBuilderBox(keyBox)
-			return fmt.Errorf("pick node failed: %w", err)
-		}
-		node = picked
+	node, err := c.pickNode(wired)
+	if err != nil {
+		putBuilderBox(keyBox)
+		return err
 	}
 
 	req := encodeGetOneCommand(command, exp, wired)

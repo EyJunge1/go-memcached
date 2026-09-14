@@ -9,21 +9,29 @@ import (
 
 // getConn checks out a live socket from the node's pool.
 func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
+	if c.closed.Load() {
+		return nil, ErrClosed
+	}
+	if pool := node.pool.Load(); pool != nil {
+		return pool.get(ctx)
+	}
+
 	key := node.id()
 
 	c.mu.RLock()
-	if c.closed {
+	if c.closed.Load() {
 		c.mu.RUnlock()
 		return nil, ErrClosed
 	}
 	pool, ok := c.connPools[key]
 	c.mu.RUnlock()
 	if ok {
+		node.pool.Store(pool)
 		return pool.get(ctx)
 	}
 
 	c.mu.Lock()
-	if c.closed {
+	if c.closed.Load() {
 		c.mu.Unlock()
 		return nil, ErrClosed
 	}
@@ -72,6 +80,7 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 			pool.minIdle = c.rt.minIdle
 		}
 		c.connPools[key] = pool
+		node.pool.Store(pool)
 		c.mu.Unlock()
 		if !isUDPNetwork(node.Network) {
 			pool.warmup(ctx, c.rt.minIdle)
@@ -79,7 +88,7 @@ func (c *Client) getConn(ctx context.Context, node *addr) (wireConn, error) {
 		return pool.get(ctx)
 	}
 	c.mu.Unlock()
-
+	node.pool.Store(pool)
 	return pool.get(ctx)
 }
 
@@ -177,7 +186,7 @@ func finishConn(cn wireConn, err error) {
 			_ = p.discard(cn)
 			return
 		}
-		_ = cn.Close()
+		_ = cn.closeSilent()
 		return
 	}
 	_ = cn.release()
@@ -197,10 +206,12 @@ func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *r
 		resp.readCtx = ctx
 		resp.readConn = cn
 	}
-	if err := req.send(ctx, cn, c.rt.writeTimeout); err != nil {
+	stop := prepareOpIO(ctx, cn, c.rt.readTimeout, c.rt.writeTimeout)
+	defer stop()
+	if err := req.sendReady(ctx, cn); err != nil {
 		return wrapTransport(fmt.Errorf("send failed: %w", err))
 	}
-	if err := resp.recv(ctx, cn, c.rt.readTimeout); err != nil {
+	if err := resp.recvReady(ctx, cn); err != nil {
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 	}
 	return nil
@@ -208,7 +219,7 @@ func (c *Client) sendOnConn(ctx context.Context, node *addr, cn wireConn, req *r
 
 // enableUDPFraming attaches a shared request id to req and resp when node uses UDP.
 func (c *Client) enableUDPFraming(node *addr, req *request, resp *response) {
-	if node == nil || !isUDPNetwork(node.Network) {
+	if node == nil || !node.udp {
 		req.udpEnabled = false
 		resp.udpEnabled = false
 		return
@@ -288,17 +299,12 @@ func (c *Client) broadcastOne(ctx context.Context, node *addr, call callFunc) er
 
 // dispatchRequest picks a live cluster member for req.key and runs the request there.
 func (c *Client) dispatchRequest(ctx context.Context, req *request, resp *response) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	addrs, picker := c.snapshotCluster()
-	addrs = c.liveAddrs(addrs)
-	addr, err := picker.Pick(addrs, req.key)
+	addr, err := c.pickNode(req.key)
 	if err != nil {
-		return fmt.Errorf("pick node failed: %w", err)
+		return err
 	}
 	return c.dispatchToAddr(ctx, addr, req, resp)
 }
@@ -403,12 +409,14 @@ func (c *Client) dispatchOnce(ctx context.Context, node *addr, req *request, res
 		resp.readConn = cn
 	}
 
-	if err = req.send(ctx, cn, c.rt.writeTimeout); err != nil {
+	stop := prepareOpIO(ctx, cn, c.rt.readTimeout, c.rt.writeTimeout)
+	defer stop()
+	if err = req.sendReady(ctx, cn); err != nil {
 		err = wrapTransport(fmt.Errorf("send failed: %w", err))
 		return false, err
 	}
 	sent = true
-	if err = resp.recv(ctx, cn, c.rt.readTimeout); err != nil {
+	if err = resp.recvReady(ctx, cn); err != nil {
 		err = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 		return sent, err
 	}
@@ -436,10 +444,7 @@ func (c *Client) valueLimit() int {
 
 // dialDedicated opens an unpooled TCP or Unix socket for admin streams, with auth when configured.
 func (c *Client) dialDedicated(ctx context.Context, node *addr) (wireConn, error) {
-	c.mu.RLock()
-	closed := c.closed
-	c.mu.RUnlock()
-	if closed {
+	if c.closed.Load() {
 		return nil, ErrClosed
 	}
 	if node == nil {

@@ -55,7 +55,7 @@ func Test_connPool_new(t *testing.T) {
 			equal(t, tt.maxIdleTime, pool.maxIdleTime)
 			equal(t, 0, pool.stats().IdleConns)
 			equal(t, 0, int(pool.open.Load()))
-			isFalse(t, pool.closed)
+			isFalse(t, pool.closed.Load())
 			notNil(t, pool.closedCh)
 			isNil(t, pool.cleanerCh)
 			equal(t, int64(0), pool.closedIdleCap)
@@ -216,7 +216,7 @@ func Test_connPool_cleanup_maxIdle(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
-		isFalse(t, pool.closed)
+		isFalse(t, pool.closed.Load())
 
 		stat = pool.stats()
 		t.Logf("After cleanup: %+v", stat)
@@ -262,7 +262,7 @@ func Test_connPool_cleanup_maxLife(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		equal(t, 0, int(pool.open.Load()))
 		equal(t, 0, pool.stats().IdleConns)
-		isFalse(t, pool.closed)
+		isFalse(t, pool.closed.Load())
 
 		stat = pool.stats()
 		t.Logf("After cleanup: %+v", stat)

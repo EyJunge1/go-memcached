@@ -118,12 +118,14 @@ func (c *Client) flushAllOnAddr(ctx context.Context, node *addr, delay Exptime, 
 	defer func() { finishConn(cn, opErr) }()
 
 	c.enableUDPFraming(node, req, resp)
-	if err := req.send(ctx, cn, c.rt.writeTimeout); err != nil {
+	stop := prepareOpIO(ctx, cn, c.rt.readTimeout, c.rt.writeTimeout)
+	defer stop()
+	if err := req.sendReady(ctx, cn); err != nil {
 		opErr = wrapTransport(fmt.Errorf("send failed: %w", err))
 		c.noteFailure(node)
 		return opErr
 	}
-	if err := resp.recv(ctx, cn, c.rt.readTimeout); err != nil {
+	if err := resp.recvReady(ctx, cn); err != nil {
 		opErr = wrapRecvError(fmt.Errorf("recv failed: %w", err))
 		c.noteFailure(node)
 		return opErr

@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const writevBodyThreshold = 2048
+
 var requestPool = sync.Pool{
 	New: func() any {
 		return &request{
@@ -94,16 +96,32 @@ func (req *request) adoptKeyBox(box *[]byte) {
 
 // send writes the request over TCP or UDP and flushes.
 func (req *request) send(ctx context.Context, rr wireConn, writeTimeout time.Duration) (err error) {
-	if has := selectProximateDeadline(ctx, rr, writeTimeout, clock, false); has {
-		defer clearWriteDeadline(rr)
+	return req.doSend(ctx, rr, writeTimeout, true)
+}
+
+// sendReady writes without arming or clearing deadlines. The caller already set them.
+func (req *request) sendReady(ctx context.Context, rr wireConn) error {
+	return req.doSend(ctx, rr, 0, false)
+}
+
+func (req *request) doSend(ctx context.Context, rr wireConn, writeTimeout time.Duration, armDeadline bool) (err error) {
+	if armDeadline {
+		if has := selectProximateDeadline(ctx, rr, writeTimeout, clock, false); has {
+			defer clearWriteDeadline(rr)
+		}
 	}
-	if ctx != nil && ctx.Done() != nil {
+	if armDeadline && ctx != nil && ctx.Done() != nil {
 		stop := watchContextCancel(ctx, rr)
 		defer stop()
 	}
 
 	if req.udpEnabled {
 		return req.sendUDP(rr)
+	}
+	if len(req.body) >= writevBodyThreshold {
+		if c, ok := rr.(*conn); ok && c.wr != nil && c.wr.Buffered() == 0 {
+			return c.writeLargeBody(req.raw, req.body, req.tail)
+		}
 	}
 	if err = req.write(rr); err != nil {
 		return err
@@ -133,15 +151,15 @@ func clearWriteDeadline(rr wireConn) { _ = rr.setWriteDeadline(zeroTime) }
 
 func clearReadDeadline(rr wireConn) { _ = rr.setReadDeadline(zeroTime) }
 
+func clearDeadlines(rr wireConn) { _ = rr.setDeadline(zeroTime) }
+
 // watchContextCancel shortens the conn deadlines when ctx is canceled.
 func watchContextCancel(ctx context.Context, rr wireConn) (stop func()) {
 	if ctx == nil || ctx.Done() == nil {
 		return nopStop
 	}
 	cancelWatch := context.AfterFunc(ctx, func() {
-		now := clock()
-		_ = rr.setReadDeadline(now)
-		_ = rr.setWriteDeadline(now)
+		_ = rr.setDeadline(clock())
 	})
 	return func() { _ = cancelWatch() }
 }

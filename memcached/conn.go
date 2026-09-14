@@ -76,6 +76,8 @@ type wireConn interface {
 
 	setReadDeadline(d time.Time) error
 	setWriteDeadline(d time.Time) error
+	setDeadline(d time.Time) error
+	closeSilent() error
 	Flush() error
 }
 
@@ -87,6 +89,7 @@ type conn struct {
 	addr       net.Addr
 	network    string
 	returnedAt time.Time
+	deadline   time.Time
 
 	sync.Mutex // guards Close
 	raw        net.Conn
@@ -95,6 +98,8 @@ type conn struct {
 
 	rr     *bufio.Reader
 	wr     *bufio.Writer
+	iov    net.Buffers
+	iovBuf [3][]byte
 	udpIn  []byte
 	udpOut []byte
 }
@@ -131,7 +136,7 @@ func newConnContext(ctx context.Context, node *addr, o *runtime) (*conn, error) 
 		cn.udpIn = make([]byte, 65535)
 		cn.udpOut = make([]byte, 0, defaultBufferSize)
 	} else {
-		cn.rr = bufio.NewReader(rawConn)
+		cn.rr = bufio.NewReaderSize(rawConn, connWriteBufferSize)
 		cn.wr = bufio.NewWriterSize(rawConn, connWriteBufferSize)
 	}
 
@@ -166,6 +171,25 @@ func (c *conn) setWriteDeadline(d time.Time) error {
 	}
 
 	return c.raw.SetWriteDeadline(d)
+}
+
+// setDeadline applies one combined read/write deadline; a zero time clears both.
+// A far existing deadline is kept so sequential ops skip the syscall.
+func (c *conn) setDeadline(d time.Time) error {
+	if d.IsZero() {
+		if c.deadline.IsZero() {
+			return nil
+		}
+		c.deadline = zeroTime
+		return c.raw.SetDeadline(zeroTime)
+	}
+	now := clock()
+	soon := now.Add(time.Second)
+	if !c.deadline.IsZero() && c.deadline.After(soon) && !d.Before(soon) {
+		return nil
+	}
+	c.deadline = d
+	return c.raw.SetDeadline(d)
 }
 
 // isClosed reports whether Close has already been called.
@@ -285,8 +309,40 @@ func (c *conn) Flush() error {
 	return c.wr.Flush()
 }
 
+// writeLargeBody writes header, body, and tail with writev so the payload
+// is not copied through bufio. Caller must have an empty writer.
+// iovBuf is the stable backing store: Buffers.WriteTo consume() advances
+// the slice start and would otherwise drop cap to 0 (alloc per call).
+func (c *conn) writeLargeBody(raw, body, tail []byte) error {
+	if c.isClosed() {
+		return errConnClosed
+	}
+	n := 2
+	c.iovBuf[0] = raw
+	c.iovBuf[1] = body
+	if len(tail) > 0 {
+		c.iovBuf[2] = tail
+		n = 3
+	}
+	c.iov = c.iovBuf[:n]
+	_, err := c.iov.WriteTo(c.raw)
+	c.iovBuf = [3][]byte{}
+	c.iov = c.iovBuf[:0]
+	return err
+}
+
 // Close implements io.Closer on the buffered socket.
 func (c *conn) Close() error {
+	return c.shutdown(true)
+}
+
+// closeSilent closes the socket without sending quit. Pool overflow and
+// transport discard use this; Client.Close still sends quit.
+func (c *conn) closeSilent() error {
+	return c.shutdown(false)
+}
+
+func (c *conn) shutdown(quit bool) error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
 	if c.closed.Load() {
@@ -295,7 +351,7 @@ func (c *conn) Close() error {
 
 	c.closed.Store(true)
 
-	if !isUDPNetwork(c.network) {
+	if quit && !isUDPNetwork(c.network) {
 		_ = c.raw.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 		_, _ = c.raw.Write(_QuitCRLFBytes)
 	}
@@ -328,10 +384,11 @@ func (c *conn) idle(since time.Time) (time.Duration, bool) {
 	return c.returnedAt.Sub(since), false
 }
 
-// release clears I/O deadlines, stamps returnedAt, and returns the conn to its pool.
+// release parks the conn. The next checkout overwrites the deadline; idle
+// tracking is stamped only when the pool enforces lifetime or idle time.
 func (c *conn) release() error {
-	_ = c.setReadDeadline(zeroTime)
-	_ = c.setWriteDeadline(zeroTime)
-	c.returnedAt = clock()
+	if p := c.pool; p != nil && (p.maxIdleTime > 0 || p.maxLifetime > 0) {
+		c.returnedAt = clock()
+	}
 	return c.pool.put(c)
 }
