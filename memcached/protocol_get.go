@@ -15,15 +15,16 @@ func pickKey(keys [][]byte) []byte {
 
 // encodeGetsCommand encodes get/gets <key>*\r\n.
 func encodeGetsCommand(command string, keys ...[]byte) *request {
+	cmd := verbBytes(command)
 	b := newProtocolBuilder().
-		AddString(command)
+		AddBytes(cmd)
 	defer b.release()
 
 	for _, key := range keys {
 		b.AddBytes(key)
 	}
 	b.AddCRLF()
-	return b.request(verbBytes(command), pickKey(keys))
+	return b.request(cmd, pickKey(keys))
 }
 
 // buildGetsCommand encodes get/gets and reads until END (auth and tests).
@@ -35,8 +36,9 @@ func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
 
 // encodeGetAndTouchesCommand encodes gat/gats <exptime> <key>*\r\n.
 func encodeGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) *request {
+	cmd := verbBytes(command)
 	b := newProtocolBuilder().
-		AddString(command).
+		AddBytes(cmd).
 		AddInt64(expiryToken(expiry))
 	defer b.release()
 
@@ -44,7 +46,7 @@ func encodeGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) 
 		b.AddBytes(key)
 	}
 	b.AddCRLF()
-	return b.request(verbBytes(command), pickKey(keys))
+	return b.request(cmd, pickKey(keys))
 }
 
 // buildGetAndTouchesCommand encodes gat/gats and reads until END.

@@ -5,30 +5,36 @@ import (
 	"fmt"
 )
 
-// Debug sends me. A protocol miss is MetaItemDebug.Err, not the returned error.
-func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug) (MetaItemDebug, error) {
+// Debug sends me and writes the outcome into dst. dst must be non-nil.
+// A protocol miss is dst.Err / Status, not the returned error.
+func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug, dst *MetaItemDebug) error {
+	if dst == nil {
+		return fmt.Errorf("meta debug dst: %w", ErrInvalidArgument)
+	}
 	c := m.c
 	if err := f.validate(); err != nil {
-		return MetaItemDebug{}, err
+		return err
 	}
 	mdFlags := f.toFlags()
 	key = c.nsBytes(key)
 	if err := c.checkKeyValueFlags(key, nil, mdFlags.b); err != nil {
-		return MetaItemDebug{}, err
+		return err
 	}
 
+	*dst = MetaItemDebug{Key: key}
 	req, resp := buildMetaDebugCommand(key, &mdFlags)
 	defer releaseReqAndResp(req, resp)
 
-	item := MetaItemDebug{Key: key}
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		return MetaItemDebug{}, fmt.Errorf("request failed: %w", err)
+		*dst = MetaItemDebug{}
+		return fmt.Errorf("request failed: %w", err)
 	}
-	if err := parseMetaItemDebug(resp.rawLines, &item, mdFlags.b); err != nil {
-		if item.Status.Err() != nil {
-			return item, nil
+	if err := parseMetaItemDebug(resp.rawLines, dst, mdFlags.b); err != nil {
+		if dst.Status.Err() != nil {
+			return nil
 		}
-		return MetaItemDebug{}, fmt.Errorf("request failed: %w", err)
+		*dst = MetaItemDebug{}
+		return fmt.Errorf("request failed: %w", err)
 	}
-	return item, nil
+	return nil
 }

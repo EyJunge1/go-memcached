@@ -59,7 +59,7 @@ func metaGetWireKey(key []byte, flags *metaGetFlags) []byte {
 }
 
 func writeMetaGet(b *protocolBuilder, wireKey []byte, flags *metaGetFlags) {
-	b.AddString("mg").AddBytes(wireKey)
+	b.AddBytes(_MgBytes).AddBytes(wireKey)
 	if flags == nil {
 		b.AddCRLF()
 		return
@@ -87,7 +87,7 @@ func writeMetaGet(b *protocolBuilder, wireKey []byte, flags *metaGetFlags) {
 }
 
 func writeMetaNoop(b *protocolBuilder, f MetaNoop) {
-	b.AddString("mn")
+	b.AddBytes(_MnBytes)
 	b.AddFlagString("P", f.P)
 	b.AddFlagString("L", f.L)
 	b.AddCRLF()
@@ -336,7 +336,7 @@ func applyMetaFlag(tok []byte, item *MetaItem) error {
 		}
 		item.HitBefore = n == 1
 	case 'k':
-		item.WireKey = append([]byte(nil), value...)
+		item.WireKey = append(item.WireKey[:0], value...)
 		item.Key = item.WireKey
 	case 'b':
 		item.KeyBase64 = true
@@ -358,11 +358,22 @@ func internDecOpaque(n uint64) string {
 }
 
 func opaqueIsCanonical(b []byte, n uint64) bool {
-	if n == 0 {
-		return len(b) == 1 && b[0] == '0'
-	}
 	var buf [20]byte
 	return bytes.Equal(b, strconv.AppendUint(buf[:0], n, 10))
+}
+
+func opaqueStringIsCanonical(token string, n uint64) bool {
+	var buf [20]byte
+	enc := strconv.AppendUint(buf[:0], n, 10)
+	if len(enc) != len(token) {
+		return false
+	}
+	for i, c := range enc {
+		if token[i] != c {
+			return false
+		}
+	}
+	return true
 }
 
 // parseFlags applies meta reply tokens (c, f, t, l, s, O, h, W, X, Z, k, b).

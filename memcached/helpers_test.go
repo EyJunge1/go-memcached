@@ -85,6 +85,36 @@ func doMetaGet(c *Client, ctx context.Context, key []byte, f MetaGet) (MetaResul
 	return dst, err
 }
 
+func doMetaSet(c *Client, ctx context.Context, key, value []byte, f MetaSet) (MetaResult, error) {
+	var dst MetaResult
+	err := c.Meta().Set(ctx, key, value, f, &dst)
+	return dst, err
+}
+
+func doMetaDelete(c *Client, ctx context.Context, key []byte, f MetaDelete) (MetaResult, error) {
+	var dst MetaResult
+	err := c.Meta().Delete(ctx, key, f, &dst)
+	return dst, err
+}
+
+func doMetaArith(c *Client, ctx context.Context, key []byte, delta uint64, f MetaArithmetic) (MetaResult, error) {
+	var dst MetaResult
+	err := c.Meta().Arithmetic(ctx, key, delta, f, &dst)
+	return dst, err
+}
+
+func doMetaNoop(c *Client, ctx context.Context, f MetaNoop) (MetaResult, error) {
+	var dst MetaResult
+	err := c.Meta().Noop(ctx, f, &dst)
+	return dst, err
+}
+
+func doMetaDebug(c *Client, ctx context.Context, key []byte, f MetaDebug) (MetaItemDebug, error) {
+	var dst MetaItemDebug
+	err := c.Meta().Debug(ctx, key, f, &dst)
+	return dst, err
+}
+
 func doMetaPipeline(c *Client, ctx context.Context, ops []MetaOp) ([]MetaResult, error) {
 	dst := make([]MetaResult, len(ops))
 	err := c.Meta().Pipeline(ctx, ops, dst)

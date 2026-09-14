@@ -10,7 +10,7 @@ func TestMetaArithmeticRejectsInjectedMode(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
 
-	_, err := client.Meta().Arithmetic(context.Background(), []byte("k"), 1, MetaArithmetic{Mode: "I\r\nflush_all\r\n"})
+	_, err := doMetaArith(client, context.Background(), []byte("k"), 1, MetaArithmetic{Mode: "I\r\nflush_all\r\n"})
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -22,7 +22,7 @@ func TestMetaArithmeticAutoCreate(t *testing.T) {
 	newCAS := uint64(9)
 	ttl := Rel(time.Second)
 
-	res, err := client.Meta().Arithmetic(context.Background(), []byte("n"), 2, MetaArithmetic{
+	res, err := doMetaArith(client, context.Background(), []byte("n"), 2, MetaArithmetic{
 		AutoCreate:  delayPtr(ttl),
 		Initial:     &init,
 		ReturnValue: true,

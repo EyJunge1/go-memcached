@@ -54,7 +54,7 @@ func validMetaSetMode(m MetaSetMode) bool {
 }
 
 func writeMetaSet(b *protocolBuilder, key []byte, valueLen int, flags *metaSetFlags) {
-	b.AddString("ms").AddBytes(key).AddInt(valueLen)
+	b.AddBytes(_MsBytes).AddBytes(key).AddInt(valueLen)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagBool("c", flags.c)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)

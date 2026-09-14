@@ -167,12 +167,17 @@ func BenchmarkTCPMetaSetGet(b *testing.B) {
 			mg := ours.MetaGet{Return: ours.MetaGetReturn{Value: true}}
 			var res ours.MetaResult
 			res.Item.Value = make([]byte, 0, len(size.val)+8)
+			var setRes ours.MetaResult
+			key := make([]byte, 0, 128)
+			prefix := []byte(b.Name())
 			b.ReportAllocs()
 			b.ResetTimer()
 			i := 0
 			for b.Loop() {
-				key := []byte(benchKey(b.Name(), uint64(i)))
-				if _, err := c.Meta().Set(ctx, key, size.val, ours.MetaSet{}); err != nil {
+				key = append(key[:0], prefix...)
+				key = append(key, '/')
+				key = strconv.AppendUint(key, uint64(i), 10)
+				if err := c.Meta().Set(ctx, key, size.val, ours.MetaSet{}, &setRes); err != nil {
 					b.Fatal(err)
 				}
 				if err := c.Meta().Get(ctx, key, mg, &res); err != nil {
@@ -238,18 +243,20 @@ func BenchmarkTCPPipelineStore(b *testing.B) {
 	c := newOursTCP(b)
 	ctx := context.Background()
 	const batch = 8
+	keys := asKeyBytes(makeBenchKeys(b, batch))
+	items := make([]ours.Item, batch)
+	for i := range items {
+		items[i] = ours.Item{Key: keys[i], Value: smallValue}
+	}
 	p := c.Pipeline()
 	b.ReportAllocs()
 	b.ResetTimer()
-	i := 0
 	for b.Loop() {
-		for j := range batch {
-			key := []byte(benchKey(b.Name(), uint64(i*batch+j)))
-			p.Store(ours.Item{Key: key, Value: smallValue})
+		for i := range items {
+			p.Store(items[i])
 		}
 		if err := p.Run(ctx); err != nil {
 			b.Fatal(err)
 		}
-		i++
 	}
 }

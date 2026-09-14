@@ -74,11 +74,11 @@ func Test_recacheToken(t *testing.T) {
 }
 
 func Test_buildStorageCommand_expiryWire(t *testing.T) {
-	req, resp := buildStorageCommand("set", []byte("k"), []byte("v"), 0, Rel(500*time.Millisecond), false)
+	req, resp := buildStorageCommand(_SetBytes, []byte("k"), []byte("v"), 0, Rel(500*time.Millisecond), false)
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("set k 0 1 1\r\nv\r\n"), req.wire())
 
-	req, resp = buildStorageCommand("set", []byte("k"), []byte("v"), 0, ExptimeImmediate, false)
+	req, resp = buildStorageCommand(_SetBytes, []byte("k"), []byte("v"), 0, ExptimeImmediate, false)
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("set k 0 -1 1\r\nv\r\n"), req.wire())
 }

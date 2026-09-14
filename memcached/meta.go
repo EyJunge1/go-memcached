@@ -233,7 +233,7 @@ func applyOpaque(token string, flagsO *uint64, flagsOset *bool, flagsTok *string
 	if token == "" {
 		return
 	}
-	if v, err := strconv.ParseUint(token, 10, 64); err == nil && strconv.FormatUint(v, 10) == token {
+	if v, err := strconv.ParseUint(token, 10, 64); err == nil && opaqueStringIsCanonical(token, v) {
 		*flagsO = v
 		*flagsOset = true
 		return

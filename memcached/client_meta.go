@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -18,30 +19,72 @@ func (c *Client) Meta() *MetaClient {
 	return &c.meta
 }
 
-// finishMeta returns a MetaResult from item, treating protocol status errors as success.
-func finishMeta(item *MetaItem, err error) (MetaResult, error) {
-	if err != nil {
-		if item != nil {
-			if cd := item.status.Err(); cd != nil && errors.Is(err, cd) {
-				return metaResultFrom(item, item.status), nil
-			}
-		}
-		return MetaResult{}, err
-	}
-	st := MetaStatusUnknown
-	if item != nil {
-		st = item.status
-	}
-	return metaResultFrom(item, st), nil
+type metaKeep struct {
+	value []byte
+	key   []byte
 }
 
-func finishMetaParse(item *MetaItem, dispatchErr, parseErr error) (MetaResult, error) {
-	if dispatchErr != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", dispatchErr)
+func takeMetaKeep(dst *MetaResult) metaKeep {
+	keep := metaKeep{value: dst.Item.Value, key: dst.Item.WireKey}
+	*dst = MetaResult{}
+	restoreMetaKeep(dst, keep)
+	return keep
+}
+
+func restoreMetaKeep(dst *MetaResult, keep metaKeep) {
+	if keep.value != nil {
+		dst.Item.Value = keep.value[:0]
 	}
-	res, err := finishMeta(item, parseErr)
-	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
+	if keep.key != nil {
+		dst.Item.WireKey = keep.key[:0]
 	}
-	return res, nil
+}
+
+func prepareMetaDest(dst *MetaResult) (metaKeep, error) {
+	if dst == nil {
+		return metaKeep{}, fmt.Errorf("meta dst: %w", ErrInvalidArgument)
+	}
+	return takeMetaKeep(dst), nil
+}
+
+func (m *MetaClient) finishMetaDest(ctx context.Context, req *request, resp *response, dst *MetaResult, keep metaKeep, quiet, quietMiss bool) error {
+	resp.metaItem = &dst.Item
+	defer releaseReqAndResp(req, resp)
+	if err := m.c.dispatchRequest(ctx, req, resp); err != nil {
+		resetMetaGetDest(dst, keep)
+		return fmt.Errorf("request failed: %w", err)
+	}
+	if err := resp.metaStatusErr(quiet, quietMiss); err != nil {
+		if cd := dst.Item.status.Err(); cd != nil && errors.Is(err, cd) {
+			applyMetaDestStatus(dst, keep)
+			return nil
+		}
+		resetMetaGetDest(dst, keep)
+		return fmt.Errorf("request failed: %w", err)
+	}
+	applyMetaDestStatus(dst, keep)
+	return nil
+}
+
+func applyMetaDestStatus(dst *MetaResult, keep metaKeep) {
+	dst.Status = dst.Item.status
+	dst.Item.status = 0
+	if dst.Status != MetaStatusVA {
+		if keep.value != nil {
+			dst.Item.Value = keep.value[:0]
+		} else {
+			dst.Item.Value = nil
+		}
+	}
+}
+
+func (resp *response) metaStatusErr(noReply, quietMissAsNotFound bool) error {
+	item := resp.metaItem
+	if item == nil {
+		item = &resp.metaSlot
+	}
+	if resp.metaFilled {
+		return metaItemStatusErr(item, noReply, quietMissAsNotFound)
+	}
+	return parseMetaItem(resp.rawLines, item, noReply, quietMissAsNotFound)
 }

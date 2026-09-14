@@ -56,7 +56,7 @@ func TestUDPMetaDebugAllowed(t *testing.T) {
 	srv.items["k"] = []byte("v")
 	srv.mu.Unlock()
 	client := testClient(t, srv.Addr())
-	item, err := client.Meta().Debug(context.Background(), []byte("k"), MetaDebug{})
+	item, err := doMetaDebug(client, context.Background(), []byte("k"), MetaDebug{})
 	noError(t, err)
 	equal(t, MetaStatusME, item.Status)
 	equal(t, []byte("k"), item.Key)

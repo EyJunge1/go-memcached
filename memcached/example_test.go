@@ -360,7 +360,7 @@ func ExampleMetaClient_Get_recache() {
 		log.Fatal(err)
 	}
 	if res.Item.Won {
-		_, _ = client.Meta().Set(ctx, []byte("key"), []byte("fresh"), memcached.MetaSet{})
+		_ = client.Meta().Set(ctx, []byte("key"), []byte("fresh"), memcached.MetaSet{}, &res)
 	}
 }
 

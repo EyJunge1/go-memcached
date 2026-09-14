@@ -331,15 +331,13 @@ func TestMetaPipelineChargeKeepsSiblingHD(t *testing.T) {
 }
 
 func TestParseArithmeticAfterRecvForecastsFaults(t *testing.T) {
-	var value uint64
-	fn := parseArithmeticAfterRecv(&value)
 	resp := &response{rawLines: [][]byte{[]byte("CLIENT_ERROR cannot increment or decrement non-numeric value\r\n")}}
-	err := fn(resp)
+	err := mapArithmeticReply(resp)
 	isErrorIs(t, err, ErrClientError)
 	isFalse(t, errors.Is(err, ErrMalformedResponse))
 
 	resp = &response{rawLines: [][]byte{[]byte("NOT_FOUND\r\n")}}
-	err = fn(resp)
+	err = mapArithmeticReply(resp)
 	isErrorIs(t, err, ErrNotFound)
 	isFalse(t, errors.Is(err, ErrMalformedResponse))
 }
@@ -528,10 +526,10 @@ func TestMetaRejectsWikiSTAndSpecDE(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.Meta().Delete(context.Background(), []byte("k"), MetaDelete{})
+	_, err := doMetaDelete(client, context.Background(), []byte("k"), MetaDelete{})
 	isErrorIs(t, err, ErrMalformedResponse)
 	isTrue(t, shouldDiscardConn(err))
-	_, err = client.Meta().Set(context.Background(), []byte("k"), []byte("v"), MetaSet{})
+	_, err = doMetaSet(client, context.Background(), []byte("k"), []byte("v"), MetaSet{})
 	isErrorIs(t, err, ErrMalformedResponse)
 	isTrue(t, shouldDiscardConn(err))
 }

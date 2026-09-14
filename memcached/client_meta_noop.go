@@ -5,29 +5,26 @@ import (
 	"fmt"
 )
 
-// Noop sends mn.
-func (m *MetaClient) Noop(ctx context.Context, f MetaNoop) (MetaResult, error) {
+// Noop sends mn and writes the outcome into dst. dst must be non-nil.
+func (m *MetaClient) Noop(ctx context.Context, f MetaNoop, dst *MetaResult) error {
+	keep, err := prepareMetaDest(dst)
+	if err != nil {
+		return err
+	}
 	if err := f.validate(); err != nil {
-		return MetaResult{}, err
+		return err
 	}
 	req, resp := buildMetaNoopCommand(f)
 	defer releaseReqAndResp(req, resp)
 
-	item := MetaItem{}
-	err := m.c.dispatchRequest(ctx, req, resp)
-	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
+	if err := m.c.dispatchRequest(ctx, req, resp); err != nil {
+		resetMetaGetDest(dst, keep)
+		return fmt.Errorf("request failed: %w", err)
 	}
 	if err := mapStatusLine(resp, _MetaMNCRLFBytes); err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
+		resetMetaGetDest(dst, keep)
+		return fmt.Errorf("request failed: %w", err)
 	}
-	item.status = MetaStatusMN
-	res, err := finishMeta(&item, nil)
-	if err != nil {
-		return MetaResult{}, fmt.Errorf("request failed: %w", err)
-	}
-	if res.Status == MetaStatusUnknown {
-		res.Status = MetaStatusMN
-	}
-	return res, nil
+	dst.Status = MetaStatusMN
+	return nil
 }

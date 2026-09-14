@@ -32,38 +32,55 @@ func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet, dst *MetaRe
 		}
 	}
 
-	keep := dst.Item.Value
-	*dst = MetaResult{}
-	item := MetaItem{Value: keep}
+	keep := takeMetaKeep(dst)
 	req, resp := buildMetaGetCommand(key, &mgFlags)
-	resp.metaItem = &item
+	resp.metaItem = &dst.Item
 	defer releaseReqAndResp(req, resp)
 
-	dispatchErr := c.dispatchRequest(ctx, req, resp)
-	parseErr := error(nil)
-	if resp.metaFilled {
-		parseErr = metaItemStatusErr(&item, mgFlags.q, true)
-	} else {
-		parseErr = parseMetaItem(resp.rawLines, &item, mgFlags.q, true)
+	if err := c.dispatchRequest(ctx, req, resp); err != nil {
+		resetMetaGetDest(dst, keep)
+		return fmt.Errorf("request failed: %w", err)
 	}
-	res, err := finishMetaParse(&item, dispatchErr, parseErr)
-	if err != nil {
-		*dst = MetaResult{}
-		dst.Item.Value = keep
-		return err
+	if err := resp.metaStatusErr(mgFlags.q, true); err != nil {
+		if cd := dst.Item.status.Err(); cd == nil || !errors.Is(err, cd) {
+			resetMetaGetDest(dst, keep)
+			return fmt.Errorf("request failed: %w", err)
+		}
 	}
-	applyCheckCAS(&item, &mgFlags)
-	res.Item.CASMatched = item.CASMatched
-	if !f.Return.Key {
-		res.Item.Key = nil
-		res.Item.WireKey = nil
-	} else if len(res.Item.Key) == 0 {
-		res.Item.Key = append([]byte(nil), c.stripNS(key)...)
-	} else if c.hasNS() {
-		res.Item.Key = c.stripNS(res.Item.Key)
-	}
-	*dst = res
+	applyMetaGetDest(dst, keep, c, key, f, &mgFlags)
 	return nil
+}
+
+func resetMetaGetDest(dst *MetaResult, keep metaKeep) {
+	*dst = MetaResult{}
+	restoreMetaKeep(dst, keep)
+}
+
+func applyMetaGetDest(dst *MetaResult, keep metaKeep, c *Client, key []byte, f MetaGet, flags *metaGetFlags) {
+	item := &dst.Item
+	applyCheckCAS(item, flags)
+	if item.status != MetaStatusVA {
+		if keep.value != nil {
+			item.Value = keep.value[:0]
+		} else {
+			item.Value = nil
+		}
+	}
+	dst.Status = item.status
+	item.status = 0
+	if !f.Return.Key {
+		item.Key = nil
+		if keep.key != nil {
+			item.WireKey = keep.key[:0]
+		} else {
+			item.WireKey = nil
+		}
+	} else if len(item.Key) == 0 {
+		item.Key = append(keep.key[:0], c.stripNS(key)...)
+		item.WireKey = item.Key
+	} else if c.hasNS() {
+		item.Key = c.stripNS(item.Key)
+	}
 }
 
 func metaItemStatusErr(item *MetaItem, noReply, quietMissAsNotFound bool) error {
@@ -98,12 +115,13 @@ func metaItemStatusErr(item *MetaItem, noReply, quietMissAsNotFound bool) error 
 	}
 }
 
-// applyCheckCAS sets CASMatched when mg used C and the server returned HD without a value.
+// applyCheckCAS sets CASMatched when mg used C+v and the server returned HD.
+// A reused dest buffer must not hide the match: HD has no VA body.
 func applyCheckCAS(item *MetaItem, flags *metaGetFlags) {
 	if item == nil || flags == nil {
 		return
 	}
-	item.CASMatched = flags.Cset && flags.v && item.gotHD && item.Value == nil
+	item.CASMatched = flags.Cset && flags.v && item.gotHD && item.status != MetaStatusVA
 }
 
 // preparedMetaOp is one encoded Meta().Pipeline step plus its opaque token.
@@ -123,6 +141,42 @@ type preparedMetaOp struct {
 	returnKey bool
 	noop      bool
 	barrier   MetaNoop
+}
+
+const maxPooledPreparedMeta = 256
+
+var preparedMetaPool = sync.Pool{
+	New: func() any {
+		s := make([]preparedMetaOp, 0, 16)
+		return &s
+	},
+}
+
+func getPreparedMeta(n int) *[]preparedMetaOp {
+	p := preparedMetaPool.Get().(*[]preparedMetaOp)
+	if cap(*p) < n {
+		s := make([]preparedMetaOp, 0, n)
+		*p = s
+		return p
+	}
+	*p = (*p)[:0]
+	return p
+}
+
+func putPreparedMeta(p *[]preparedMetaOp) {
+	if p == nil {
+		return
+	}
+	s := *p
+	for i := range s {
+		putBuilderBox(s[i].lineBox)
+		s[i] = preparedMetaOp{}
+	}
+	if cap(s) > maxPooledPreparedMeta {
+		return
+	}
+	*p = s[:0]
+	preparedMetaPool.Put(p)
 }
 
 // metaOpKinds counts how many of Get, Set, Del, Arith, and Noop are set on op.
@@ -346,20 +400,22 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResul
 		return nil
 	}
 	for i := range dst {
-		keep := dst[i].Item.Value
-		dst[i] = MetaResult{}
-		if keep != nil {
-			dst[i].Item.Value = keep[:0]
-		}
+		_ = takeMetaKeep(&dst[i])
 	}
 
-	prepared := make([]preparedMetaOp, 0, len(ops))
+	prepBox := getPreparedMeta(len(ops))
+	prepared := *prepBox
+	defer func() {
+		*prepBox = prepared
+		putPreparedMeta(prepBox)
+	}()
 	out := dst
 	for i, op := range ops {
 		p, err := encodeMetaPipelineOp(c, op, i)
 		if err != nil {
-			for _, prev := range prepared {
-				putBuilderBox(prev.lineBox)
+			for j := range prepared {
+				putBuilderBox(prepared[j].lineBox)
+				prepared[j].lineBox = nil
 			}
 			return err
 		}
@@ -385,6 +441,9 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResul
 			return fmt.Errorf("pick node failed: %w", err)
 		}
 		groups[addr] = append(groups[addr], p)
+	}
+	for i := range prepared {
+		prepared[i].lineBox = nil
 	}
 
 	if len(groups) == 1 {
@@ -413,7 +472,11 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResul
 
 // metaPipelineDispatch writes a node's quiet meta batch, then maps replies onto out by opaque.
 func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []preparedMetaOp, out []MetaResult) error {
-	var raw []byte
+	if len(group) == 0 {
+		return nil
+	}
+	box := takeBuilderBox()
+	raw := (*box)[:0]
 	var barrier MetaNoop
 	var byOpaque map[string]int
 	for i := range group {
@@ -433,13 +496,21 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 			byOpaque = make(map[string]int, len(group))
 		}
 		if _, exists := byOpaque[p.tok]; exists {
+			*box = raw
+			putBuilderBox(box)
+			for j := i + 1; j < len(group); j++ {
+				putBuilderBox(group[j].lineBox)
+				group[j].lineBox = nil
+			}
 			return fmt.Errorf("duplicate opaque %q: %w", p.tok, ErrInvalidArgument)
 		}
 		byOpaque[p.tok] = p.idx
 	}
 	raw = appendMetaQuietBarrier(raw, barrier)
+	*box = raw
 
 	req := buildRequest(group[0].cmd, group[0].key, raw)
+	req.rawBox = box
 	resp := buildQuietBarrierResponse()
 	resp.metaPipeC = c
 	resp.metaPipeDst = out
@@ -481,15 +552,22 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 		return fmt.Errorf("missing meta pipeline dest: %w", ErrMalformedResponse)
 	}
 	resp.metaSawReply = true
-	var item MetaItem
-	_, size, hasSize, err := parseMetaHeader(header, &item)
+	idx, ok := matchMetaPipelineOpaque(header, resp.metaPipeGroup, resp.metaPipeByOpaque)
+
+	var item *MetaItem
+	var scratch MetaItem
+	if ok {
+		item = &resp.metaPipeDst[idx].Item
+	} else {
+		item = &scratch
+	}
+	_, size, hasSize, err := parseMetaHeader(header, item)
 	if err != nil {
 		return err
 	}
 	if item.status == MetaStatusHD {
 		item.gotHD = true
 	}
-	idx, ok := matchMetaPipelineOp(&item, resp.metaPipeGroup, resp.metaPipeByOpaque)
 	if item.status == MetaStatusVA {
 		if !hasSize {
 			return fmt.Errorf("missing value size: %w", ErrMalformedResponse)
@@ -503,15 +581,13 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 		}
 		n := int(size) //nolint:gosec // G115: size is bounded above
 		if ok {
-			keep := resp.metaPipeDst[idx].Item.Value
-			buf := takeValueBuffer(keep, n)
-			if err = readFramedValueInto(rr, buf); err != nil {
+			item.Value = takeValueBuffer(item.Value, n)
+			if err = readFramedValueInto(rr, item.Value); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 					return fmt.Errorf("short data block: %w", ErrMalformedResponse)
 				}
 				return fmt.Errorf("read data block: %w", err)
 			}
-			item.Value = buf
 		} else if err = discardFramedValue(rr, n); err != nil {
 			return err
 		}
@@ -524,41 +600,98 @@ func (resp *response) fillMetaPipe(rr protocolReader, header []byte) error {
 		if resp.metaPipeGroup[i].idx == idx {
 			prep = &resp.metaPipeGroup[i]
 			if prep.hasGet {
-				applyCheckCAS(&item, &prep.getFlags)
+				applyCheckCAS(item, &prep.getFlags)
 			}
 			break
 		}
 	}
-	storeMetaPipelineResult(resp.metaPipeC, resp.metaPipeDst, idx, prep, metaResultFrom(&item, item.status))
+	finishMetaPipelineDest(resp.metaPipeC, resp.metaPipeDst, idx, prep)
 	return nil
 }
 
+func finishMetaPipelineDest(c *Client, out []MetaResult, idx int, p *preparedMetaOp) {
+	dst := &out[idx]
+	dst.Status = dst.Item.status
+	dst.Item.status = 0
+	if p == nil || !p.returnKey {
+		dst.Item.Key = nil
+		if dst.Item.WireKey != nil {
+			dst.Item.WireKey = dst.Item.WireKey[:0]
+		}
+		return
+	}
+	if len(dst.Item.Key) == 0 {
+		dst.Item.Key = append(dst.Item.WireKey[:0], c.stripNS(p.key)...)
+		dst.Item.WireKey = dst.Item.Key
+	} else if c.hasNS() {
+		dst.Item.Key = c.stripNS(dst.Item.Key)
+	}
+}
+
 func storeMetaPipelineResult(c *Client, out []MetaResult, idx int, p *preparedMetaOp, res MetaResult) {
-	keep := out[idx].Item.Value
+	keep := metaKeep{value: out[idx].Item.Value, key: out[idx].Item.WireKey}
 	if p == nil || !p.returnKey {
 		res.Item.Key = nil
 		res.Item.WireKey = nil
 	} else if len(res.Item.Key) == 0 {
-		res.Item.Key = append([]byte(nil), c.stripNS(p.key)...)
+		res.Item.Key = append(keep.key[:0], c.stripNS(p.key)...)
+		res.Item.WireKey = res.Item.Key
 	} else if c.hasNS() {
 		res.Item.Key = c.stripNS(res.Item.Key)
 	}
-	res.Item.Value = ownValue(keep, res.Item.Value)
+	res.Item.Value = ownValue(keep.value, res.Item.Value)
 	out[idx] = res
+	if (p == nil || !p.returnKey) && keep.key != nil {
+		out[idx].Item.WireKey = keep.key[:0]
+	}
 }
 
-func matchMetaPipelineOp(item *MetaItem, group []preparedMetaOp, byOpaque map[string]int) (int, bool) {
-	if item.hasOpaqueNum {
+func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp, byOpaque map[string]int) (int, bool) {
+	num, hasNum, tok := scanMetaOpaque(header)
+	if hasNum {
 		for _, p := range group {
-			if p.tok == "" && p.hasTok && p.tokNum == item.opaqueNum {
+			if p.tok == "" && p.hasTok && p.tokNum == num {
 				return p.idx, true
 			}
 		}
 	}
-	if item.Opaque != "" {
-		if idx, ok := byOpaque[item.Opaque]; ok {
+	if len(tok) > 0 {
+		if idx, ok := byOpaque[string(tok)]; ok {
 			return idx, true
 		}
 	}
 	return 0, false
 }
+
+func scanMetaOpaque(header []byte) (num uint64, hasNum bool, tok []byte) {
+	line := trimCRLF(header)
+	end := bytes.IndexByte(line, ' ')
+	if end < 0 {
+		return 0, false, nil
+	}
+	cd := line[:end]
+	rest := line[end+1:]
+	if bytes.Equal(cd, _VABytes) {
+		sp := bytes.IndexByte(rest, ' ')
+		if sp < 0 {
+			return 0, false, nil
+		}
+		rest = rest[sp+1:]
+	}
+	start := 0
+	for i := 0; i <= len(rest); i++ {
+		if i < len(rest) && rest[i] != ' ' {
+			continue
+		}
+		if i > start && rest[start] == 'O' {
+			val := rest[start+1 : i]
+			if n, err := parseUintFromBytes(val); err == nil && opaqueIsCanonical(val, n) {
+				return n, true, nil
+			}
+			return 0, false, val
+		}
+		start = i + 1
+	}
+	return 0, false, nil
+}
+

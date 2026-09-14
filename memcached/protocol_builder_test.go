@@ -310,4 +310,7 @@ func Test_forecastCommonFaultLine(t *testing.T) {
 	isErrorIs(t, forecastCommonFaultLine([]byte("NOT_STORED\n")), ErrNotStored)
 	isErrorIs(t, forecastCommonFaultLine([]byte("SERVER_ERROR oom")), ErrServerError)
 	equal(t, error(nil), forecastCommonFaultLine([]byte("CLIENT_ERRORFOO\r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("12\r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("12 \r\n")))
+	equal(t, error(nil), forecastCommonFaultLine([]byte("NF kfoo\r\n")))
 }

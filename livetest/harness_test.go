@@ -175,6 +175,36 @@ func doMetaGet(c *memcached.Client, ctx context.Context, key []byte, f memcached
 	return dst, err
 }
 
+func doMetaSet(c *memcached.Client, ctx context.Context, key, value []byte, f memcached.MetaSet) (memcached.MetaResult, error) {
+	var dst memcached.MetaResult
+	err := c.Meta().Set(ctx, key, value, f, &dst)
+	return dst, err
+}
+
+func doMetaDelete(c *memcached.Client, ctx context.Context, key []byte, f memcached.MetaDelete) (memcached.MetaResult, error) {
+	var dst memcached.MetaResult
+	err := c.Meta().Delete(ctx, key, f, &dst)
+	return dst, err
+}
+
+func doMetaArith(c *memcached.Client, ctx context.Context, key []byte, delta uint64, f memcached.MetaArithmetic) (memcached.MetaResult, error) {
+	var dst memcached.MetaResult
+	err := c.Meta().Arithmetic(ctx, key, delta, f, &dst)
+	return dst, err
+}
+
+func doMetaNoop(c *memcached.Client, ctx context.Context, f memcached.MetaNoop) (memcached.MetaResult, error) {
+	var dst memcached.MetaResult
+	err := c.Meta().Noop(ctx, f, &dst)
+	return dst, err
+}
+
+func doMetaDebug(c *memcached.Client, ctx context.Context, key []byte, f memcached.MetaDebug) (memcached.MetaItemDebug, error) {
+	var dst memcached.MetaItemDebug
+	err := c.Meta().Debug(ctx, key, f, &dst)
+	return dst, err
+}
+
 func doMetaPipeline(c *memcached.Client, ctx context.Context, ops []memcached.MetaOp) ([]memcached.MetaResult, error) {
 	dst := make([]memcached.MetaResult, len(ops))
 	err := c.Meta().Pipeline(ctx, ops, dst)

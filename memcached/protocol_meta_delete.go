@@ -23,7 +23,7 @@ type metaDeleteFlags struct {
 }
 
 func writeMetaDelete(b *protocolBuilder, key []byte, flags *metaDeleteFlags) {
-	b.AddString("md").AddBytes(key)
+	b.AddBytes(_MdBytes).AddBytes(key)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)

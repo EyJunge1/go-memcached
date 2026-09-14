@@ -34,11 +34,11 @@ func TestUDPGetAndMeta(t *testing.T) {
 	noError(t, got.Err())
 	equal(t, []byte("via-tcp"), got.Item.Value)
 
-	noop, err := udp.Meta().Noop(ctx, memcached.MetaNoop{})
+	noop, err := doMetaNoop(udp, ctx, memcached.MetaNoop{})
 	noError(t, err)
 	equal(t, memcached.MetaStatusMN, noop.Status)
 
-	dbg, err := udp.Meta().Debug(ctx, key, memcached.MetaDebug{})
+	dbg, err := doMetaDebug(udp, ctx, key, memcached.MetaDebug{})
 	noError(t, err)
 	noError(t, dbg.Err())
 }

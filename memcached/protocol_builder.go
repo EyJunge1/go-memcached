@@ -154,11 +154,44 @@ func isKnownNominalLine(t []byte) bool {
 		bytes.HasPrefix(t, _MESpaceBytes),
 		bytes.Equal(t, _MEBytes),
 		bytes.HasPrefix(t, _VersionBytes),
-		bytes.HasPrefix(t, _STATBytes):
+		bytes.HasPrefix(t, _STATBytes),
+		isMetaStatusLine(t),
+		isArithmeticLine(t):
 		return true
 	default:
 		return false
 	}
+}
+
+// isMetaStatusLine reports a two-letter meta CD, optionally followed by flags.
+func isMetaStatusLine(t []byte) bool {
+	if len(t) < 2 || (len(t) > 2 && t[2] != ' ') {
+		return false
+	}
+	a, b := t[0], t[1]
+	return (a == 'H' && b == 'D') ||
+		(a == 'V' && b == 'A') ||
+		(a == 'E' && b == 'N') ||
+		(a == 'N' && b == 'F') ||
+		(a == 'N' && b == 'S') ||
+		(a == 'E' && b == 'X') ||
+		(a == 'M' && b == 'N') ||
+		(a == 'M' && b == 'E')
+}
+
+// isArithmeticLine reports an incr/decr decimal reply (spaces allowed).
+func isArithmeticLine(t []byte) bool {
+	seen := false
+	for _, c := range t {
+		if c == ' ' || c == '\t' {
+			continue
+		}
+		if c < '0' || c > '9' {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }
 
 // prefixedProtocolError maps a prefix-matched status line onto sentinel.
@@ -177,8 +210,8 @@ func prefixedProtocolError(line []byte, prefix string, sentinel error) error {
 }
 
 const (
-	// defaultBufferSize fits typical short headers; larger frames grow once.
-	defaultBufferSize = 64
+	// defaultBufferSize fits get/set/ms plus a max-length key without growing.
+	defaultBufferSize = 320
 
 	// maxPooledBufferCap stops large writes from pinning huge buffers.
 	maxPooledBufferCap = 4 << 10 // 4 KiB
@@ -199,12 +232,9 @@ var (
 )
 
 func putBuilderBuf(b []byte) {
-	if cap(b) < defaultBufferSize || cap(b) > maxPooledBufferCap {
-		return
-	}
-	p := builderBufPool.Get().(*[]byte)
-	*p = b[:0]
-	builderBufPool.Put(p)
+	// A bare slice has no pool slot. Stealing one to wrap it drains the pool
+	// and can pin a string constant. Drop unboxed raw; boxed paths use rawBox.
+	_ = b
 }
 
 func putBuilderBox(box *[]byte) {
@@ -216,6 +246,12 @@ func putBuilderBox(box *[]byte) {
 	}
 	*box = (*box)[:0]
 	builderBufPool.Put(box)
+}
+
+func takeBuilderBox() *[]byte {
+	p := builderBufPool.Get().(*[]byte)
+	*p = (*p)[:0]
+	return p
 }
 
 // protocolBuilder is a pooled space-separated command encoder.

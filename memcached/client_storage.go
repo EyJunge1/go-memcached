@@ -19,22 +19,22 @@ const (
 )
 
 // storeCommand maps StoreMode to the text storage verb.
-func storeCommand(mode StoreMode) (string, error) {
+func storeCommand(mode StoreMode) ([]byte, error) {
 	switch mode {
 	case StoreSet:
-		return "set", nil
+		return _SetBytes, nil
 	case StoreAdd:
-		return "add", nil
+		return _AddBytes, nil
 	case StoreReplace:
-		return "replace", nil
+		return _ReplaceBytes, nil
 	case StoreAppend:
-		return "append", nil
+		return _AppendBytes, nil
 	case StorePrepend:
-		return "prepend", nil
+		return _PrependBytes, nil
 	case StoreCAS:
-		return "cas", nil
+		return _CasBytes, nil
 	default:
-		return "", fmt.Errorf("store mode: %w", ErrInvalidArgument)
+		return nil, fmt.Errorf("store mode: %w", ErrInvalidArgument)
 	}
 }
 

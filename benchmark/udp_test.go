@@ -16,6 +16,7 @@ func BenchmarkUDPGet(b *testing.B) {
 			nseed = 32
 		}
 		keys := seedKeys(b, size.val, nseed)
+		keyBytes := asKeyBytes(keys)
 
 		b.Run("ours/"+size.name, func(b *testing.B) {
 			c := newOursUDP(b)
@@ -26,7 +27,7 @@ func BenchmarkUDPGet(b *testing.B) {
 			b.ResetTimer()
 			i := 0
 			for b.Loop() {
-				one[0] = []byte(keys[i%len(keys)])
+				one[0] = keyBytes[i%len(keyBytes)]
 				if err := c.Get(ctx, one[:], dst[:], ours.GetOpts{}); err != nil {
 					b.Fatal(err)
 				}

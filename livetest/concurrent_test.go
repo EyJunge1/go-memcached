@@ -65,7 +65,7 @@ func TestConcurrent(t *testing.T) {
 		cas := uint64(0)
 
 		for counter <= 20 {
-			item, err := client.Meta().Set(ctx, key, []byte(value), msOptions(cas, 0x1234))
+			item, err := doMetaSet(client, ctx, key, []byte(value), msOptions(cas, 0x1234))
 			if err != nil {
 				t.Errorf("meta set: %v", err)
 				return

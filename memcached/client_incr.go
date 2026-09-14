@@ -25,29 +25,26 @@ func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta u
 	req, resp := buildArithmeticCommand(cmd, key, delta, false)
 	defer releaseReqAndResp(req, resp)
 
-	var value uint64
-	resp.afterRecv = parseArithmeticAfterRecv(&value)
+	resp.afterRecv = mapArithmeticReply
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
 		return 0, fmt.Errorf("request failed: %w", err)
 	}
 
-	return value, nil
+	return resp.arithValue, nil
 }
 
-// parseArithmeticAfterRecv maps a numeric reply into dst after recv.
-func parseArithmeticAfterRecv(dst *uint64) func(*response) error {
-	return func(resp *response) error {
-		if len(resp.rawLines) == 0 {
-			return fmt.Errorf("empty arithmetic reply: %w", ErrMalformedResponse)
-		}
-		if err := forecastCommonFaultLine(resp.rawLines[0]); err != nil {
-			return err
-		}
-		value, err := parseArithmetic(resp.rawLines[0])
-		if err != nil {
-			return fmt.Errorf("%s: %w", err.Error(), ErrMalformedResponse)
-		}
-		*dst = value
+// mapArithmeticReply maps a numeric reply into resp.arithValue.
+func mapArithmeticReply(resp *response) error {
+	if len(resp.rawLines) == 0 {
+		return fmt.Errorf("empty arithmetic reply: %w", ErrMalformedResponse)
+	}
+	line := resp.rawLines[0]
+	if value, err := parseArithmetic(line); err == nil {
+		resp.arithValue = value
 		return nil
 	}
+	if err := forecastCommonFaultLine(line); err != nil {
+		return err
+	}
+	return fmt.Errorf("invalid arithmetic reply: %w", ErrMalformedResponse)
 }

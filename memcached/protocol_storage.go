@@ -2,7 +2,7 @@ package memcached
 
 // buildStorageCommand encodes <verb> <key> <flags> <exptime> <bytes> [noreply]\r\n plus the body.
 func buildStorageCommand(
-	command string,
+	command []byte,
 	key []byte,
 	value []byte,
 	flags uint32,
@@ -10,7 +10,7 @@ func buildStorageCommand(
 	noReply bool,
 ) (*request, *response) {
 	b := newProtocolBuilder().
-		AddString(command).
+		AddBytes(command).
 		AddBytes(key).
 		AddUint(uint64(flags)).
 		AddInt64(expiryToken(exptime)).
@@ -22,7 +22,7 @@ func buildStorageCommand(
 	}
 
 	b.AddCRLF()
-	req := b.request(verbBytes(command), key)
+	req := b.request(command, key)
 	req.body = value
 	req.tail = _CRLFBytes
 
@@ -41,7 +41,7 @@ func buildCasCommand(
 	key []byte, value []byte, flag uint32, expTime Exptime, casUnique uint64, noReply bool,
 ) (*request, *response) {
 	b := newProtocolBuilder().
-		AddString("cas").
+		AddBytes(_CasBytes).
 		AddBytes(key).
 		AddUint(uint64(flag)).
 		AddInt64(expiryToken(expTime)).

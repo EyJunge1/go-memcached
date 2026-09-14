@@ -12,7 +12,8 @@
 //   - Incr and Decr always return the new counter. Quiet arithmetic is
 //     Meta().Arithmetic with q.
 //   - Meta() exposes mg, ms, md, mn, ma, me (Get, Set, Delete, Noop,
-//     Arithmetic, Debug, Pipeline).
+//     Arithmetic, Debug, Pipeline). Each command writes into a caller
+//     dest; reuse dest for the zero-allocation path.
 //   - Version / VersionAll and Stats / StatsAll are the health and stats
 //     entry points. reset and sizes are on Admin; detail is AdminNode.StatsDetail.
 //   - flush_all is Admin().On or All Flush and requires Config.AllowFlushAll.

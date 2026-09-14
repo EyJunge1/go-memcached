@@ -5,34 +5,34 @@ import (
 	"fmt"
 )
 
-// Set sends ms for key using flags f.
-func (m *MetaClient) Set(ctx context.Context, key, value []byte, f MetaSet) (MetaResult, error) {
+// Set sends ms for key using flags f and writes the outcome into dst.
+// dst must be non-nil. Reusing dst is the zero-allocation path.
+func (m *MetaClient) Set(ctx context.Context, key, value []byte, f MetaSet, dst *MetaResult) error {
 	c := m.c
+	keep, err := prepareMetaDest(dst)
+	if err != nil {
+		return err
+	}
 	if err := f.validate(); err != nil {
-		return MetaResult{}, err
+		return err
 	}
 	msFlags := f.toFlags()
 	key = c.nsBytes(key)
 	if err := c.checkKeyValueFlags(key, value, msFlags.b); err != nil {
-		return MetaResult{}, err
+		return err
 	}
 	if !validMetaSetMode(msFlags.M) {
-		return MetaResult{}, fmt.Errorf("invalid meta set mode: %w", ErrInvalidArgument)
+		return fmt.Errorf("invalid meta set mode: %w", ErrInvalidArgument)
 	}
 	if msFlags.OtokenSet {
 		if err := validOpaqueToken(msFlags.Otoken); err != nil {
-			return MetaResult{}, err
+			return err
 		}
 	}
-	clientFlags := msFlags.F
+	dst.Item.Key = key
+	dst.Item.TTL = msFlags.T
+	dst.Item.Flags = msFlags.F
 
 	req, resp := buildMetaSetCommand(key, value, &msFlags)
-	defer releaseReqAndResp(req, resp)
-
-	item := MetaItem{
-		Key:   key,
-		TTL:   msFlags.T,
-		Flags: clientFlags,
-	}
-	return finishMetaParse(&item, c.dispatchRequest(ctx, req, resp), parseMetaItem(resp.rawLines, &item, msFlags.q, false))
+	return m.finishMetaDest(ctx, req, resp, dst, keep, msFlags.q, false)
 }

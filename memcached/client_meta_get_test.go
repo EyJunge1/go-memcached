@@ -13,7 +13,7 @@ func TestMetaQuietHitReturnsValue(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	_, err := client.Meta().Set(ctx, []byte("k"), []byte("hello\nworld"), MetaSet{})
+	_, err := doMetaSet(client, ctx, []byte("k"), []byte("hello\nworld"), MetaSet{})
 	noError(t, err)
 
 	item, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
@@ -29,7 +29,7 @@ func TestMetaQuietMissWithValueIsNotFound(t *testing.T) {
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 
-	_, err = client.Meta().Set(context.Background(), []byte("k"), []byte("v"), MetaSet{})
+	_, err = doMetaSet(client, context.Background(), []byte("k"), []byte("v"), MetaSet{})
 	noError(t, err)
 	item, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
@@ -41,7 +41,7 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	client := testClient(t, srv.Addr())
 
 	ctx := context.Background()
-	_, err := client.Meta().Set(ctx, []byte("k"), []byte("v"), MetaSet{ReturnCAS: true})
+	_, err := doMetaSet(client, ctx, []byte("k"), []byte("v"), MetaSet{ReturnCAS: true})
 	noError(t, err)
 	item, err := doMetaGet(client, ctx, []byte("k"), MetaGet{Return: MetaGetReturn{CAS: true, Value: true}})
 	noError(t, err)
@@ -79,6 +79,35 @@ func TestMetaGetCheckCASAndPipeline(t *testing.T) {
 	hasLen(t, piped, 1)
 	isTrue(t, piped[0].Item.CASMatched)
 	isNil(t, piped[0].Item.Value)
+}
+
+func TestMetaGetCheckCASReusesValueCap(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	_, err := doMetaSet(client, ctx, []byte("k"), []byte("v"), MetaSet{ReturnCAS: true})
+	noError(t, err)
+	var dst MetaResult
+	dst.Item.Value = make([]byte, 0, 32)
+	mg := MetaGet{Return: MetaGetReturn{CAS: true, Value: true}}
+	noError(t, client.Meta().Get(ctx, []byte("k"), mg, &dst))
+	cas := dst.Item.CAS
+	equal(t, []byte("v"), dst.Item.Value)
+	equal(t, 32, cap(dst.Item.Value))
+
+	mg.CompareCAS = &cas
+	noError(t, client.Meta().Get(ctx, []byte("k"), mg, &dst))
+	noError(t, dst.Err())
+	isTrue(t, dst.Item.CASMatched)
+	equal(t, 0, len(dst.Item.Value))
+	equal(t, 32, cap(dst.Item.Value))
+
+	wrong := cas + 1
+	mg.CompareCAS = &wrong
+	noError(t, client.Meta().Get(ctx, []byte("k"), mg, &dst))
+	equal(t, []byte("v"), dst.Item.Value)
+	isFalse(t, dst.Item.CASMatched)
+	equal(t, 32, cap(dst.Item.Value))
 }
 
 func TestMetaPipelineReusesValueCap(t *testing.T) {
@@ -131,6 +160,17 @@ func TestMetaGetReturnsWireKey(t *testing.T) {
 	equal(t, []byte("foo"), got.Item.WireKey)
 	equal(t, []byte("foo"), got.Item.Key)
 	isFalse(t, got.Item.KeyBase64)
+
+	var dst MetaResult
+	dst.Item.WireKey = make([]byte, 0, 32)
+	mg := MetaGet{Return: MetaGetReturn{Key: true, Value: true}}
+	noError(t, client.Meta().Get(ctx, []byte("foo"), mg, &dst))
+	buf := dst.Item.WireKey
+	noError(t, client.Meta().Get(ctx, []byte("foo"), mg, &dst))
+	if cap(dst.Item.WireKey) != cap(buf) || (cap(buf) > 0 && &dst.Item.WireKey[:cap(dst.Item.WireKey)][0] != &buf[:cap(buf)][0]) {
+		t.Fatal("WireKey cap was not reused")
+	}
+	equal(t, []byte("foo"), dst.Item.WireKey)
 }
 
 func TestMetaPipelineRejectsInvalidOp(t *testing.T) {

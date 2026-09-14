@@ -49,7 +49,7 @@ func validAuthSecret(s string) error {
 // buildAuthCommand encodes the set used to plant the -Y token-auth probe item.
 func buildAuthCommand(username, password string, key []byte) (*request, *response) {
 	payload := []byte(username + " " + password)
-	return buildStorageCommand("set", key, payload, 0, ExptimeNever, false)
+	return buildStorageCommand(_SetBytes, key, payload, 0, ExptimeNever, false)
 }
 
 // authHandshake runs -Y token auth on a new connection and fails if the probe item remains.

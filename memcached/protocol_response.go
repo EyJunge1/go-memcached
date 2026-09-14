@@ -55,6 +55,9 @@ type response struct {
 	// udpEnabled is set by the client before send when the node is UDP.
 	udpEnabled bool
 	udpReqID   uint16
+	// udpBox holds the assembled datagram until release; udpFrame reads it.
+	udpBox   *[]byte
+	udpFrame byteFrame
 
 	// afterRecv parses the frame before the socket returns to the pool.
 	afterRecv func(*response) error
@@ -66,7 +69,9 @@ type response struct {
 	getIdx  []int
 	withCAS bool
 
-	// metaItem is filled in-place for a single Meta().Get when set.
+	// metaSlot is filled in-place for a single Meta Get/Set. metaItem points
+	// at it (or a caller dest) so the item does not escape to a new heap alloc.
+	metaSlot   MetaItem
 	metaItem   *MetaItem
 	metaFilled bool
 
@@ -77,6 +82,7 @@ type response struct {
 	metaPipeByOpaque map[string]int
 	metaSawReply     bool
 
+	arithValue    uint64
 	maxValueBytes int
 	readTimeout   time.Duration
 	readCtx       context.Context
@@ -141,11 +147,17 @@ func (resp *response) release() {
 	}
 	resp.udpEnabled = false
 	resp.udpReqID = 0
+	resp.udpFrame = byteFrame{}
+	if resp.udpBox != nil {
+		putUDPBuf(resp.udpBox)
+		resp.udpBox = nil
+	}
 	resp.afterRecv = nil
 	resp.getDst = nil
 	resp.getKeys = nil
 	resp.getIdx = nil
 	resp.withCAS = false
+	resp.metaSlot = MetaItem{}
 	resp.metaItem = nil
 	resp.metaFilled = false
 	resp.metaPipeC = nil
@@ -153,6 +165,7 @@ func (resp *response) release() {
 	resp.metaPipeGroup = nil
 	resp.metaPipeByOpaque = nil
 	resp.metaSawReply = false
+	resp.arithValue = 0
 	resp.maxValueBytes = 0
 	resp.readTimeout = 0
 	resp.readCtx = nil
@@ -221,7 +234,7 @@ func appendMetaQuietBarrier(raw []byte, f MetaNoop) []byte {
 	if f.P == "" && f.L == "" {
 		return append(raw, _MnCRLFBytes...)
 	}
-	b := newProtocolBuilder().AddString("mn")
+	b := newProtocolBuilder().AddBytes(_MnBytes)
 	defer b.release()
 	b.AddFlagString("P", f.P)
 	b.AddFlagString("L", f.L)
@@ -279,6 +292,94 @@ func (p *payloadReader) buffered() int {
 	return p.r.Buffered()
 }
 
+// byteFrame is an in-memory protocolReader over an assembled UDP payload.
+// Lines from readSlice are views into buf and are only valid until release.
+type byteFrame struct {
+	buf []byte
+	off int
+}
+
+func (f *byteFrame) readLine(delim byte) ([]byte, error) {
+	line, err := f.readSlice(delim)
+	if err != nil {
+		if len(line) == 0 {
+			return nil, err
+		}
+		return bytes.Clone(line), err
+	}
+	return bytes.Clone(line), nil
+}
+
+func (f *byteFrame) readSlice(delim byte) ([]byte, error) {
+	if f.off >= len(f.buf) {
+		return nil, io.EOF
+	}
+	i := bytes.IndexByte(f.buf[f.off:], delim)
+	if i < 0 {
+		line := f.buf[f.off:]
+		f.off = len(f.buf)
+		return line, io.EOF
+	}
+	end := f.off + i + 1
+	line := f.buf[f.off:end]
+	f.off = end
+	return line, nil
+}
+
+func (f *byteFrame) readExact(n int) ([]byte, error) {
+	if n < 0 {
+		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
+	}
+	if f.off+n > len(f.buf) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	out := make([]byte, n)
+	copy(out, f.buf[f.off:f.off+n])
+	f.off += n
+	return out, nil
+}
+
+func (f *byteFrame) readFramedValueInto(dst []byte) error {
+	need := len(dst) + 2
+	if f.off+need > len(f.buf) {
+		return io.ErrUnexpectedEOF
+	}
+	copy(dst, f.buf[f.off:f.off+len(dst)])
+	crlf := f.buf[f.off+len(dst) : f.off+need]
+	f.off += need
+	if crlf[0] != '\r' || crlf[1] != '\n' {
+		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+	}
+	return nil
+}
+
+func (f *byteFrame) buffered() int {
+	if f == nil {
+		return 0
+	}
+	n := len(f.buf) - f.off
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+func (f *byteFrame) discardFramed(n int) error {
+	if n < 0 {
+		return fmt.Errorf("negative read: %w", ErrMalformedResponse)
+	}
+	need := n + 2
+	if f.off+need > len(f.buf) {
+		return fmt.Errorf("short data block: %w", ErrMalformedResponse)
+	}
+	crlf := f.buf[f.off+n : f.off+need]
+	f.off += need
+	if crlf[0] != '\r' || crlf[1] != '\n' {
+		return fmt.Errorf("data block missing CRLF: %w", ErrMalformedResponse)
+	}
+	return nil
+}
+
 type wireProtocolReader struct{ c wireConn }
 
 func (w wireProtocolReader) readLine(delim byte) ([]byte, error) {
@@ -300,16 +401,45 @@ func (resp *response) recv(ctx context.Context, rr wireConn, readTimeout time.Du
 	}
 
 	if resp.udpEnabled {
-		payload, err := assembleUDP(rr, resp.udpReqID, udpFragmentCap(resp.maxValueBytes))
+		box, payload, err := assembleUDPPayload(rr, resp.udpReqID, udpFragmentCap(resp.maxValueBytes), resp.udpMustOwnPayload())
 		if err != nil {
 			return err
 		}
-		return resp.recvFrom(newPayloadReader(payload))
+		resp.udpBox = box
+		resp.udpFrame = byteFrame{buf: payload}
+		if err = resp.recvFrom(&resp.udpFrame); err != nil {
+			return err
+		}
+		if resp.udpBox == nil {
+			ownRawLines(resp)
+		}
+		return nil
 	}
 	if c, ok := rr.(*conn); ok {
 		return resp.recvFrom(c)
 	}
 	return resp.recvFrom(wireProtocolReader{rr})
+}
+
+// udpMustOwnPayload reports whether assembled UDP bytes must outlive the conn.
+// Get and dest Meta.Get copy bodies during recv, so a tot=1 view is enough.
+func (resp *response) udpMustOwnPayload() bool {
+	if resp.endIndicator == endIndicatorRetrieval {
+		return false
+	}
+	if resp.metaItem != nil {
+		switch resp.endIndicator {
+		case endIndicatorLimitedLines, endIndicatorSpecificEndLine, endIndicatorQuietBarrier:
+			return false
+		}
+	}
+	return true
+}
+
+func ownRawLines(resp *response) {
+	for i, line := range resp.rawLines {
+		resp.rawLines[i] = bytes.Clone(line)
+	}
 }
 
 func (resp *response) recvFrom(reader protocolReader) error {
@@ -667,6 +797,8 @@ func discardFramedValue(rr protocolReader, n int) error {
 		return discardFramedValueFrom(r.rr, n)
 	case *payloadReader:
 		return discardFramedValueFrom(r.r, n)
+	case *byteFrame:
+		return r.discardFramed(n)
 	default:
 		buf := make([]byte, n)
 		return readFramedValueInto(rr, buf)

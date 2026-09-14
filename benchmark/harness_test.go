@@ -176,6 +176,16 @@ func asKeyBytes(keys []string) [][]byte {
 	return out
 }
 
+func makeBenchKeys(tb testing.TB, n int) []string {
+	tb.Helper()
+	keys := make([]string, n)
+	prefix := benchKey(tb.Name(), uint64(time.Now().UnixNano()))
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%s/%d", prefix, i)
+	}
+	return keys
+}
+
 type setGetter interface {
 	set(ctx context.Context, key string, value []byte) error
 	get(ctx context.Context, key string) error

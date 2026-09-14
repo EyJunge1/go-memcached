@@ -8,6 +8,7 @@ import (
 
 func BenchmarkTCPSetGet(b *testing.B) {
 	requireTCP(b)
+	keys := makeBenchKeys(b, 256)
 	for _, size := range payloadSizes() {
 		for _, cl := range tcpFactories() {
 			b.Run(cl.name+"/"+size.name, func(b *testing.B) {
@@ -17,7 +18,7 @@ func BenchmarkTCPSetGet(b *testing.B) {
 				b.ResetTimer()
 				i := 0
 				for b.Loop() {
-					key := benchKey(b.Name(), uint64(i))
+					key := keys[i%len(keys)]
 					if err := sg.set(ctx, key, size.val); err != nil {
 						b.Fatal(err)
 					}
@@ -59,6 +60,7 @@ func BenchmarkTCPGet(b *testing.B) {
 
 func BenchmarkTCPSetGetParallel(b *testing.B) {
 	requireTCP(b)
+	keys := makeBenchKeys(b, 4096)
 	for _, size := range payloadSizes() {
 		for _, cl := range tcpFactories() {
 			b.Run(cl.name+"/"+size.name, func(b *testing.B) {
@@ -70,7 +72,7 @@ func BenchmarkTCPSetGetParallel(b *testing.B) {
 					ctx := context.Background()
 					w := worker(sg)
 					for pb.Next() {
-						key := benchKey(b.Name(), n.Add(1))
+						key := keys[int(n.Add(1)-1)%len(keys)]
 						if err := w.set(ctx, key, size.val); err != nil {
 							b.Fatal(err)
 						}

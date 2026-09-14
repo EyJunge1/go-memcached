@@ -292,13 +292,13 @@ func TestGetStoreHotPathAllocs(t *testing.T) {
 
 	meta := client.Meta()
 	mg := MetaGet{Return: MetaGetReturn{Value: true}}
-	_, err := meta.Set(ctx, key, val, MetaSet{})
-	noError(t, err)
+	var metaSet MetaResult
+	noError(t, meta.Set(ctx, key, val, MetaSet{}, &metaSet))
 	var metaDst MetaResult
 	metaDst.Item.Value = make([]byte, 0, 64)
 	noError(t, meta.Get(ctx, key, mg, &metaDst))
 	metaAllocs := testing.AllocsPerRun(200, func() {
-		if _, err := meta.Set(ctx, key, val, MetaSet{}); err != nil {
+		if err := meta.Set(ctx, key, val, MetaSet{}, &metaSet); err != nil {
 			t.Fatalf("meta set: %v", err)
 		}
 		if err := meta.Get(ctx, key, mg, &metaDst); err != nil || metaDst.Err() != nil {

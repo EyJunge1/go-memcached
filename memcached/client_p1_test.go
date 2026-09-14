@@ -83,7 +83,7 @@ func TestIncrNonNumericDecrUnderflowWrap(t *testing.T) {
 }
 
 func TestExpiryTokenThirtyDaysAndMetaT(t *testing.T) {
-	req, resp := buildStorageCommand("set", []byte("k"), []byte("v"), 0, Rel(30*24*time.Hour), false)
+	req, resp := buildStorageCommand(_SetBytes, []byte("k"), []byte("v"), 0, Rel(30*24*time.Hour), false)
 	defer releaseReqAndResp(req, resp)
 	equal(t, []byte("set k 0 2592000 1\r\nv\r\n"), req.wire())
 
@@ -91,7 +91,7 @@ func TestExpiryTokenThirtyDaysAndMetaT(t *testing.T) {
 	if unix <= 2592000 {
 		t.Fatalf("31d must be unix, got %d", unix)
 	}
-	req, resp = buildStorageCommand("set", []byte("k"), []byte("v"), 0, unix, false)
+	req, resp = buildStorageCommand(_SetBytes, []byte("k"), []byte("v"), 0, unix, false)
 	defer releaseReqAndResp(req, resp)
 	contains(t, string(req.wire()), "set k 0 ")
 
@@ -243,7 +243,7 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 func TestMetaSetHonorsMaxValueBytes(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.MaxValueBytes = 4 })
-	_, err := client.Meta().Set(context.Background(), []byte("k"), []byte("too-long"), MetaSet{})
+	_, err := doMetaSet(client, context.Background(), []byte("k"), []byte("too-long"), MetaSet{})
 	isErrorIs(t, err, ErrInvalidValue)
 }
 

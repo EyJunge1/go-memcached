@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"testing"
@@ -61,7 +62,8 @@ func Test_assembleUDPReassemblesAndDropsWrongID(t *testing.T) {
 	}
 	got, err := assembleUDP(cn, 3, udpFragmentCap(0))
 	noError(t, err)
-	equal(t, []byte("VALUE k 0 3\r\nabc\r\nEND\r\n"), got)
+	defer putUDPBuf(got)
+	equal(t, []byte("VALUE k 0 3\r\nabc\r\nEND\r\n"), *got)
 }
 
 func Test_enableUDPFramingOnlyOnUDP(t *testing.T) {
@@ -113,7 +115,8 @@ func Test_assembleUDPAcceptsNineFragments(t *testing.T) {
 	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: datagrams}
 	got, err := assembleUDP(cn, 3, udpFragmentCap(0))
 	noError(t, err)
-	equal(t, want, got)
+	defer putUDPBuf(got)
+	equal(t, want, *got)
 }
 
 func Test_assembleUDPRejectsReserved(t *testing.T) {
@@ -154,10 +157,112 @@ func Test_udpFragmentCap(t *testing.T) {
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 
+func Test_udpMetaRawAllowedAllocs(t *testing.T) {
+	raw := []byte("mg k v\r\n")
+	allocs := testing.AllocsPerRun(200, func() {
+		if err := udpMetaRawAllowed(raw); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("udpMetaRawAllowed allocs = %v, want 0", allocs)
+	}
+}
+
+func Test_udpMetaRawAllowedRejectsSideEffect(t *testing.T) {
+	isErrorIs(t, udpMetaRawAllowed([]byte("mg k T30\r\n")), ErrNotSupported)
+	isErrorIs(t, udpMetaRawAllowed([]byte("ms k\r\n")), ErrNotSupported)
+	noError(t, udpMetaRawAllowed([]byte("mg k v\r\n")))
+	noError(t, udpMetaRawAllowed([]byte("mn\r\n")))
+	noError(t, udpMetaRawAllowed([]byte("me k\r\n")))
+}
+
 func Test_sendUDPRejectsOversized(t *testing.T) {
 	req := buildRequest([]byte("get"), []byte("k"), make([]byte, maxUDPDatagram))
 	req.udpEnabled = true
 	req.udpReqID = 1
 	err := req.sendUDP(&recordUDPConn{mockConn: newMockConn()})
 	isErrorIs(t, err, ErrNotSupported)
+}
+
+func Test_assembleUDPThreeFragmentsInOrderAllocs(t *testing.T) {
+	makeDgram := func(seq, total uint16, payload []byte) []byte {
+		h := make([]byte, 8+len(payload))
+		binary.BigEndian.PutUint16(h[0:2], 3)
+		binary.BigEndian.PutUint16(h[2:4], seq)
+		binary.BigEndian.PutUint16(h[4:6], total)
+		copy(h[8:], payload)
+		return h
+	}
+	datagrams := [][]byte{
+		makeDgram(0, 3, bytes.Repeat([]byte("A"), 1392)),
+		makeDgram(1, 3, bytes.Repeat([]byte("B"), 1392)),
+		makeDgram(2, 3, bytes.Repeat([]byte("C"), 1400)),
+	}
+	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: datagrams}
+	allocs := testing.AllocsPerRun(200, func() {
+		cn.di = 0
+		box, err := assembleUDP(cn, 3, udpFragmentCap(0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		putUDPBuf(box)
+	})
+	if allocs != 0 {
+		t.Fatalf("assembleUDP tot=3 allocs = %v, want 0", allocs)
+	}
+}
+
+func Test_assembleUDPPayloadInPlaceTot1(t *testing.T) {
+	payload := []byte("VALUE k 0 1\r\nx\r\nEND\r\n")
+	d := make([]byte, 8+len(payload))
+	binary.BigEndian.PutUint16(d[0:2], 3)
+	binary.BigEndian.PutUint16(d[4:6], 1)
+	copy(d[8:], payload)
+	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{d}}
+	box, view, err := assembleUDPPayload(cn, 3, udpFragmentCap(0), false)
+	noError(t, err)
+	if box != nil {
+		t.Fatal("tot=1 in-place must not take a pool box")
+	}
+	equal(t, payload, view)
+	if &view[0] != &d[8] {
+		t.Fatal("tot=1 in-place must view the datagram")
+	}
+}
+
+func Test_assembleUDPSingleFragmentAllocs(t *testing.T) {
+	payload := []byte("VALUE k 0 1\r\nx\r\nEND\r\n")
+	d := make([]byte, 8+len(payload))
+	binary.BigEndian.PutUint16(d[0:2], 3)
+	binary.BigEndian.PutUint16(d[4:6], 1)
+	copy(d[8:], payload)
+	cn := &recordUDPConn{mockConn: newMockConn(), datagrams: [][]byte{d}}
+	allocs := testing.AllocsPerRun(200, func() {
+		cn.di = 0
+		box, err := assembleUDP(cn, 3, udpFragmentCap(0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		putUDPBuf(box)
+	})
+	if allocs != 0 {
+		t.Fatalf("assembleUDP tot=1 allocs = %v, want 0", allocs)
+	}
+}
+
+func Test_sendUDPAllocs(t *testing.T) {
+	cn := newMockConn()
+	req := buildRequest([]byte("version"), nil, []byte("version\r\n"))
+	req.udpEnabled = true
+	req.udpReqID = 7
+	defer req.release()
+	allocs := testing.AllocsPerRun(200, func() {
+		if err := req.sendUDP(cn); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("sendUDP allocs = %v, want 0", allocs)
+	}
 }

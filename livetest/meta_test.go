@@ -17,7 +17,7 @@ func TestMetaSetModesAndStatus(t *testing.T) {
 	noError(t, err)
 	isErrorIs(t, res.Err(), memcached.ErrNotFound)
 
-	_, err = c.Meta().Set(ctx, key, []byte("v"), memcached.MetaSet{Flags: 0x11, ReturnCAS: true})
+	_, err = doMetaSet(c, ctx, key, []byte("v"), memcached.MetaSet{Flags: 0x11, ReturnCAS: true})
 	noError(t, err)
 	got, err := doMetaGet(c, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, Flags: true, CAS: true, Key: true}})
 	noError(t, err)
@@ -27,15 +27,15 @@ func TestMetaSetModesAndStatus(t *testing.T) {
 	notZero(t, got.Item.CAS)
 	equal(t, key, got.Item.Key)
 
-	res, err = c.Meta().Set(ctx, key, []byte("v2"), memcached.MetaSet{Mode: memcached.MetaSetModeAdd})
+	res, err = doMetaSet(c, ctx, key, []byte("v2"), memcached.MetaSet{Mode: memcached.MetaSetModeAdd})
 	noError(t, err)
 	isErrorIs(t, res.Err(), memcached.ErrNotStored)
 
-	_, err = c.Meta().Set(ctx, key, []byte("v"), memcached.MetaSet{Mode: memcached.MetaSetModeReplace, Flags: 0x11})
+	_, err = doMetaSet(c, ctx, key, []byte("v"), memcached.MetaSet{Mode: memcached.MetaSetModeReplace, Flags: 0x11})
 	noError(t, err)
-	_, err = c.Meta().Set(ctx, key, []byte("X"), memcached.MetaSet{Mode: memcached.MetaSetModePrepend})
+	_, err = doMetaSet(c, ctx, key, []byte("X"), memcached.MetaSet{Mode: memcached.MetaSetModePrepend})
 	noError(t, err)
-	_, err = c.Meta().Set(ctx, key, []byte("Y"), memcached.MetaSet{Mode: memcached.MetaSetModeAppend})
+	_, err = doMetaSet(c, ctx, key, []byte("Y"), memcached.MetaSet{Mode: memcached.MetaSetModeAppend})
 	noError(t, err)
 	got, err = doMetaGet(c, ctx, key, memcached.MetaGet{Return: memcached.MetaGetReturn{Value: true, CAS: true}})
 	noError(t, err)
@@ -43,7 +43,7 @@ func TestMetaSetModesAndStatus(t *testing.T) {
 	equal(t, []byte("XvY"), got.Item.Value)
 
 	wrong := got.Item.CAS + 1
-	res, err = c.Meta().Set(ctx, key, []byte("nope"), memcached.MetaSet{CompareCAS: &wrong})
+	res, err = doMetaSet(c, ctx, key, []byte("nope"), memcached.MetaSet{CompareCAS: &wrong})
 	noError(t, err)
 	isErrorIs(t, res.Err(), memcached.ErrExists)
 }
@@ -53,17 +53,17 @@ func TestMetaDeleteArithmeticDebugNoop(t *testing.T) {
 	ctx := context.Background()
 	key := liveKey(t, "n")
 
-	res, err := c.Meta().Delete(ctx, key, memcached.MetaDelete{})
+	res, err := doMetaDelete(c, ctx, key, memcached.MetaDelete{})
 	noError(t, err)
 	isErrorIs(t, res.Err(), memcached.ErrNotFound)
 
-	dbg, err := c.Meta().Debug(ctx, key, memcached.MetaDebug{})
+	dbg, err := doMetaDebug(c, ctx, key, memcached.MetaDebug{})
 	noError(t, err)
 	isErrorIs(t, dbg.Err(), memcached.ErrNotFound)
 
 	ttl := memcached.Rel(time.Hour)
 	initial := uint64(10)
-	arith, err := c.Meta().Arithmetic(ctx, key, 2, memcached.MetaArithmetic{
+	arith, err := doMetaArith(c, ctx, key, 2, memcached.MetaArithmetic{
 		AutoCreate:  &ttl,
 		Initial:     &initial,
 		ReturnValue: true,
@@ -73,12 +73,12 @@ func TestMetaDeleteArithmeticDebugNoop(t *testing.T) {
 	noError(t, arith.Err())
 	equal(t, []byte("10"), arith.Item.Value)
 
-	arith, err = c.Meta().Arithmetic(ctx, key, 2, memcached.MetaArithmetic{ReturnValue: true})
+	arith, err = doMetaArith(c, ctx, key, 2, memcached.MetaArithmetic{ReturnValue: true})
 	noError(t, err)
 	noError(t, arith.Err())
 	equal(t, []byte("12"), arith.Item.Value)
 
-	arith, err = c.Meta().Arithmetic(ctx, key, 1, memcached.MetaArithmetic{
+	arith, err = doMetaArith(c, ctx, key, 1, memcached.MetaArithmetic{
 		Mode:        memcached.MetaArithmeticModeDecr,
 		ReturnValue: true,
 	})
@@ -86,17 +86,17 @@ func TestMetaDeleteArithmeticDebugNoop(t *testing.T) {
 	noError(t, arith.Err())
 	equal(t, []byte("11"), arith.Item.Value)
 
-	dbg, err = c.Meta().Debug(ctx, key, memcached.MetaDebug{})
+	dbg, err = doMetaDebug(c, ctx, key, memcached.MetaDebug{})
 	noError(t, err)
 	noError(t, dbg.Err())
 	equal(t, key, dbg.Key)
 	notZero(t, dbg.CAS)
 
-	noop, err := c.Meta().Noop(ctx, memcached.MetaNoop{})
+	noop, err := doMetaNoop(c, ctx, memcached.MetaNoop{})
 	noError(t, err)
 	equal(t, memcached.MetaStatusMN, noop.Status)
 
-	_, err = c.Meta().Delete(ctx, key, memcached.MetaDelete{})
+	_, err = doMetaDelete(c, ctx, key, memcached.MetaDelete{})
 	noError(t, err)
 	mustMiss(t, c, ctx, key)
 }
@@ -124,6 +124,6 @@ func TestMetaVivifyRecacheInvalidate(t *testing.T) {
 	equal(t, []byte("fresh"), res.Item.Value)
 
 	ttl := memcached.Rel(time.Second)
-	_, err = c.Meta().Delete(ctx, key, memcached.MetaDelete{Invalidate: true, TTL: &ttl})
+	_, err = doMetaDelete(c, ctx, key, memcached.MetaDelete{Invalidate: true, TTL: &ttl})
 	noError(t, err)
 }

@@ -48,7 +48,7 @@ func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 }
 
 func writeMetaArithmetic(b *protocolBuilder, key []byte, flags *metaArithmeticFlags) {
-	b.AddString("ma").AddBytes(key)
+	b.AddBytes(_MaBytes).AddBytes(key)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)

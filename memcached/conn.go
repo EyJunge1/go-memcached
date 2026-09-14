@@ -23,11 +23,6 @@ var clock clockFunc = time.Now
 
 const connWriteBufferSize = 16 << 10
 
-var udpScratchPool = sync.Pool{New: func() any {
-	b := make([]byte, 65535)
-	return &b
-}}
-
 // applyTCPNoDelay sets TCP_NODELAY on c when it unwraps to a *net.TCPConn.
 func applyTCPNoDelay(c net.Conn, on bool) {
 	type netConner interface{ NetConn() net.Conn }
@@ -98,8 +93,10 @@ type conn struct {
 	closed     atomic.Bool
 	pool       *connPool
 
-	rr *bufio.Reader
-	wr *bufio.Writer
+	rr     *bufio.Reader
+	wr     *bufio.Writer
+	udpIn  []byte
+	udpOut []byte
 }
 
 // newConnContext dials node, applies TCP_NODELAY, and returns a buffered wireConn.
@@ -128,8 +125,14 @@ func newConnContext(ctx context.Context, node *addr, o *runtime) (*conn, error) 
 		raw:        rawConn,
 		addr:       rawConn.RemoteAddr(),
 		network:    network,
-		rr:         bufio.NewReader(rawConn),
-		wr:         bufio.NewWriterSize(rawConn, connWriteBufferSize),
+	}
+	if isUDPNetwork(network) {
+		// One raw Write is one datagram. bufio would copy and can split >16KiB.
+		cn.udpIn = make([]byte, 65535)
+		cn.udpOut = make([]byte, 0, defaultBufferSize)
+	} else {
+		cn.rr = bufio.NewReader(rawConn)
+		cn.wr = bufio.NewWriterSize(rawConn, connWriteBufferSize)
 	}
 
 	return cn, nil
@@ -183,6 +186,9 @@ func (c *conn) readLine(delim byte) ([]byte, error) {
 	if c.isClosed() {
 		return nil, errConnClosed
 	}
+	if c.rr == nil {
+		return nil, fmt.Errorf("udp stream read: %w", ErrNotSupported)
+	}
 
 	return c.rr.ReadBytes(delim)
 }
@@ -191,6 +197,9 @@ func (c *conn) readLine(delim byte) ([]byte, error) {
 func (c *conn) readSlice(delim byte) ([]byte, error) {
 	if c.isClosed() {
 		return nil, errConnClosed
+	}
+	if c.rr == nil {
+		return nil, fmt.Errorf("udp stream read: %w", ErrNotSupported)
 	}
 	line, err := c.rr.ReadSlice(delim)
 	if errors.Is(err, bufio.ErrBufferFull) {
@@ -204,6 +213,9 @@ func (c *conn) readExact(n int) ([]byte, error) {
 	if c.isClosed() {
 		return nil, errConnClosed
 	}
+	if c.rr == nil {
+		return nil, fmt.Errorf("udp stream read: %w", ErrNotSupported)
+	}
 	if n < 0 {
 		return nil, fmt.Errorf("negative read: %w", ErrMalformedResponse)
 	}
@@ -216,30 +228,35 @@ func (c *conn) readFramedValueInto(dst []byte) error {
 	if c.isClosed() {
 		return errConnClosed
 	}
+	if c.rr == nil {
+		return fmt.Errorf("udp stream read: %w", ErrNotSupported)
+	}
 	return readFramedValueIntoBufio(c.rr, dst)
 }
 
-// readDatagram reads one UDP datagram from the raw socket into a copied buffer.
+// readDatagram reads one UDP datagram. The slice is valid until the next
+// readDatagram or Close on this conn; assembleUDP copies what it keeps.
 func (c *conn) readDatagram() ([]byte, error) {
 	if c.isClosed() {
 		return nil, errConnClosed
 	}
-	scratch := udpScratchPool.Get().(*[]byte)
-	n, err := c.raw.Read(*scratch)
+	if c.udpIn == nil {
+		c.udpIn = make([]byte, 65535)
+	}
+	n, err := c.raw.Read(c.udpIn)
 	if err != nil {
-		udpScratchPool.Put(scratch)
 		return nil, err
 	}
-	out := make([]byte, n)
-	copy(out, (*scratch)[:n])
-	udpScratchPool.Put(scratch)
-	return out, nil
+	return c.udpIn[:n], nil
 }
 
 // Read implements io.Reader on the buffered socket.
 func (c *conn) Read(p []byte) (n int, err error) {
 	if c.isClosed() {
 		return 0, errConnClosed
+	}
+	if c.rr == nil {
+		return c.raw.Read(p)
 	}
 
 	return c.rr.Read(p)
@@ -250,6 +267,9 @@ func (c *conn) Write(p []byte) (n int, err error) {
 	if c.isClosed() {
 		return 0, errConnClosed
 	}
+	if c.wr == nil {
+		return c.raw.Write(p)
+	}
 
 	return c.wr.Write(p)
 }
@@ -258,6 +278,9 @@ func (c *conn) Write(p []byte) (n int, err error) {
 func (c *conn) Flush() error {
 	if c.isClosed() {
 		return errConnClosed
+	}
+	if c.wr == nil {
+		return nil
 	}
 	return c.wr.Flush()
 }

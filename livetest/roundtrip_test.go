@@ -58,7 +58,7 @@ func TestMetaReadRoundTrip(t *testing.T) {
 	value := []byte("hello hello hello hello hello hello")
 	flag := uint32(0x2345)
 
-	stored, err := client.Meta().Set(ctx, key, value, memcached.MetaSet{Flags: flag})
+	stored, err := doMetaSet(client, ctx, key, value, memcached.MetaSet{Flags: flag})
 	noError(t, err)
 	equal(t, flag, stored.Item.Flags)
 
