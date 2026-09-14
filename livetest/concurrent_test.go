@@ -86,7 +86,7 @@ func TestConcurrent(t *testing.T) {
 				t.Errorf("get: %v", err)
 				return
 			}
-			if len(items) > 0 {
+			if items[0].Found {
 				if string(items[0].Value) != value {
 					t.Errorf("want %q, got %q", value, items[0].Value)
 					return

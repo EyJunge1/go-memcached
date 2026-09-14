@@ -261,17 +261,15 @@ func parseIntFromBytes(bs []byte) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if neg {
-		if u > uint64(math.MaxInt64)+1 {
+	if u > math.MaxInt64 {
+		if !neg || u != uint64(math.MaxInt64)+1 {
 			return 0, fmt.Errorf("int number overflows int64: %w", ErrMalformedResponse)
 		}
-		if u == uint64(math.MaxInt64)+1 {
-			return math.MinInt64, nil
-		}
-		return -int64(u), nil
+		return math.MinInt64, nil
 	}
-	if u > math.MaxInt64 {
-		return 0, fmt.Errorf("int number overflows int64: %w", ErrMalformedResponse)
+	n := int64(u)
+	if neg {
+		return -n, nil
 	}
-	return int64(u), nil
+	return n, nil
 }
