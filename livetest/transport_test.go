@@ -12,7 +12,7 @@ func TestUDP(t *testing.T) {
 	c := setupUDPClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ver, err := c.Version(ctx)
+	ver, err := doVersion(c, ctx)
 	noError(t, err)
 	notEmpty(t, ver)
 }
@@ -53,7 +53,7 @@ func TestUDPRejectsMutation(t *testing.T) {
 	_, err := doGet(udp, ctx, [][]byte{key}, memcached.GetOpts{Touch: &exp})
 	isErrorIs(t, err, memcached.ErrNotSupported)
 
-	_, err = udp.StatsAll(ctx)
+	_, err = doStatsAll(udp, ctx)
 	isErrorIs(t, err, memcached.ErrNotSupported)
 }
 
@@ -61,7 +61,7 @@ func TestUnix(t *testing.T) {
 	c := setupUnixClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ver, err := c.Version(ctx)
+	ver, err := doVersion(c, ctx)
 	noError(t, err)
 	notEmpty(t, ver)
 

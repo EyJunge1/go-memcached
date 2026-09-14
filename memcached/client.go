@@ -215,10 +215,6 @@ func (c *Client) pickFirstLiveAddr() (*addr, error) {
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
 	}
-	dead := make(map[string]struct{}, 4)
-	for _, s := range c.DeadServers() {
-		dead[serverKey(s)] = struct{}{}
-	}
 	var first *addr
 	for _, a := range addrs {
 		if a == nil {
@@ -227,7 +223,7 @@ func (c *Client) pickFirstLiveAddr() (*addr, error) {
 		if first == nil {
 			first = a
 		}
-		if _, ok := dead[serverKey(addrToServer(a))]; !ok {
+		if !c.isDead(a) {
 			return a, nil
 		}
 	}
@@ -279,14 +275,22 @@ func (c *Client) PoolStats() []PoolStat {
 	return out
 }
 
-// nsBytes prefixes key with Config.Cluster.Namespace.
-func (c *Client) nsBytes(key []byte) []byte {
-	if c.rt == nil || len(c.rt.nsPrefix) == 0 {
-		return key
+// nsKey prefixes key with Config.Cluster.Namespace.
+// The box must be adopted by a request or returned with putBuilderBox.
+func (c *Client) nsKey(key []byte) (wired []byte, box *[]byte) {
+	if c == nil || c.rt == nil || len(c.rt.nsPrefix) == 0 {
+		return key, nil
 	}
-	out := make([]byte, 0, len(c.rt.nsPrefix)+len(key))
-	out = append(out, c.rt.nsPrefix...)
-	return append(out, key...)
+	need := len(c.rt.nsPrefix) + len(key)
+	box = takeBuilderBox()
+	buf := (*box)[:0]
+	if cap(buf) < need {
+		buf = make([]byte, 0, need)
+	}
+	buf = append(buf, c.rt.nsPrefix...)
+	buf = append(buf, key...)
+	*box = buf
+	return buf, box
 }
 
 // stripNS removes the configured namespace from a returned key.
@@ -298,4 +302,67 @@ func (c *Client) stripNS(key []byte) []byte {
 		return key
 	}
 	return key[len(c.rt.nsPrefix):]
+}
+
+var (
+	nsHdrPool = sync.Pool{
+		New: func() any {
+			s := make([][]byte, 0, 8)
+			return &s
+		},
+	}
+)
+
+func releaseWiredGetKeys(box *[]byte, hdrp *[][]byte) {
+	putBuilderBox(box)
+	if hdrp != nil {
+		*hdrp = (*hdrp)[:0]
+		nsHdrPool.Put(hdrp)
+	}
+}
+
+// wireGetKeys prefixes keys with the namespace when one is configured.
+// The caller must defer releaseWiredGetKeys(box, hdrp). On error both are nil.
+func (c *Client) wireGetKeys(keys [][]byte) (wired [][]byte, box *[]byte, hdrp *[][]byte, err error) {
+	if !c.hasNS() {
+		for _, key := range keys {
+			if err := validateKeyAndValue(key, nil); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		return keys, nil, nil, nil
+	}
+	n := len(keys)
+	need := len(c.rt.nsPrefix) * n
+	for _, k := range keys {
+		need += len(k)
+	}
+	box = takeBuilderBox()
+	buf := (*box)[:0]
+	if cap(buf) < need {
+		buf = make([]byte, 0, need)
+	}
+	hdrp = nsHdrPool.Get().(*[][]byte)
+	if cap(*hdrp) < n {
+		*hdrp = make([][]byte, n)
+	} else {
+		*hdrp = (*hdrp)[:n]
+	}
+	hdr := *hdrp
+	for i, key := range keys {
+		start := len(buf)
+		buf = append(buf, c.rt.nsPrefix...)
+		buf = append(buf, key...)
+		wiredKey := buf[start:]
+		if err := validateKeyAndValue(wiredKey, nil); err != nil {
+			putBuilderBox(box)
+			*hdrp = (*hdrp)[:0]
+			nsHdrPool.Put(hdrp)
+			return nil, nil, nil, err
+		}
+		hdr[i] = wiredKey
+	}
+	*box = buf
+	*hdrp = hdr
+	return hdr, box, hdrp, nil
 }

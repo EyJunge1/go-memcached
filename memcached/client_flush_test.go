@@ -70,23 +70,25 @@ func TestFlushAllAfterAndStatsArgs(t *testing.T) {
 	equal(t, "1", srv.lastFlushDelay)
 	srv.mu.Unlock()
 
-	all, err := client.StatsAll(ctx, "items")
+	all, err := doStatsAll(client, ctx, "items")
 	noError(t, err)
 	hasLen(t, all, 1)
 	for _, got := range all {
-		equal(t, "items", got.Stats["arg"])
+		v, ok := lookupStat(got.Stats, "arg")
+		isTrue(t, ok)
+		equal(t, "items", v)
 	}
 
-	_, err = client.StatsAll(ctx, "cachedump")
+	_, err = doStatsAll(client, ctx, "cachedump")
 	isErrorIs(t, err, ErrInvalidArgument)
-	_, err = client.StatsAll(ctx, "detail", "on")
+	_, err = doStatsAll(client, ctx, "detail", "on")
 	isErrorIs(t, err, ErrInvalidArgument)
-	_, err = client.StatsAll(ctx, "reset")
+	_, err = doStatsAll(client, ctx, "reset")
 	isErrorIs(t, err, ErrAdminNotEnabled)
-	_, err = client.StatsAll(ctx, "sizes")
+	_, err = doStatsAll(client, ctx, "sizes")
 	isErrorIs(t, err, ErrAdminNotEnabled)
 
-	reset, err := mustAdminOn(t, client).Stats(ctx, "reset")
+	reset, err := doAdminStats(mustAdminOn(t, client), ctx, "reset")
 	noError(t, err)
 	equal(t, 0, len(reset))
 
@@ -223,9 +225,9 @@ func TestFlushAllOnAddrRecvError(t *testing.T) {
 	})
 	err := mustAdminOn(t, client).Flush(context.Background(), FlushOpts{})
 	isErrorIs(t, err, ErrTransport)
-	ver, verErr := client.Version(context.Background())
+	ver, verErr := doVersion(client, context.Background())
 	noError(t, verErr)
-	equal(t, "after-close", ver)
+	equal(t, []byte("after-close"), ver)
 	greater(t, int(dials.Load()), 1)
 }
 
@@ -246,8 +248,8 @@ func TestFlushAllOnAddrBadStatus(t *testing.T) {
 	})
 	err := mustAdminOn(t, client).Flush(context.Background(), FlushOpts{})
 	isErrorIs(t, err, ErrClientError)
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-flush", ver)
+	equal(t, []byte("after-flush"), ver)
 	equal(t, int32(1), dials.Load())
 }

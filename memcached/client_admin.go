@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 )
@@ -149,6 +148,14 @@ func (b *AdminBroadcast) doAllQuiet(ctx context.Context, build func() (*request,
 		return ErrAdminNotEnabled
 	}
 	addrs, _ := b.c.snapshotCluster()
+	if len(addrs) == 1 {
+		req, resp := build()
+		defer releaseReqAndResp(req, resp)
+		if err := b.c.sendQuietToAddr(ctx, addrs[0], req, resp, false); err != nil {
+			return fmt.Errorf("admin: %w", err)
+		}
+		return nil
+	}
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(addrs))
 	for _, addr := range addrs {
@@ -204,12 +211,7 @@ func (a *AdminNode) Shutdown(ctx context.Context, graceful bool) error {
 	}
 	req, resp := buildShutdownCommand(graceful)
 	defer releaseReqAndResp(req, resp)
-	resp.afterRecv = func(r *response) error {
-		if len(r.rawLines) == 0 {
-			return io.EOF
-		}
-		return parseAdminReply(r)
-	}
+	resp.afterRecv = parseShutdownReply
 	err = a.c.dispatchToAddr(ctx, addr, req, resp)
 	if err == nil || isShutdownClosed(err) {
 		return nil
@@ -235,49 +237,51 @@ func (b *AdminBroadcast) CacheMemLimit(ctx context.Context, megabytes uint32, o 
 	return b.doAll(ctx, func() (*request, *response) { return buildCacheMemLimitCommand(megabytes, false) })
 }
 
-// StatsDetail runs stats detail on, off, or dump; dump returns PREFIX counters, on/off an empty map.
-func (a *AdminNode) StatsDetail(ctx context.Context, mode StatsDetailMode) (map[string]string, error) {
+// StatsDetail runs stats detail on, off, or dump into dst.
+// dump fills PREFIX/STAT pairs; on/off leaves dst empty. dst must be non-nil.
+func (a *AdminNode) StatsDetail(ctx context.Context, dst *[]Stat, mode StatsDetailMode) error {
+	if dst == nil {
+		return fmt.Errorf("stats dst: %w", ErrInvalidArgument)
+	}
 	wire, err := mode.wire()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	addr, err := a.resolveTarget()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	req, resp := buildStatsDetailCommand(wire)
 	defer releaseReqAndResp(req, resp)
-	var out map[string]string
 	if mode == StatsDetailDump {
-		resp.afterRecv = func(r *response) error {
-			var perr error
-			out, perr = parseStatsDetailDump(r.rawLines)
-			return perr
-		}
+		resp.statsDst = dst
+		resp.statsDetail = true
+		resp.afterRecv = mapStatsDetailDump
 	} else {
 		resp.afterRecv = parseAdminReply
-		out = map[string]string{}
+		*dst = (*dst)[:0]
 	}
 	if err := a.c.dispatchToAddr(ctx, addr, req, resp); err != nil {
-		return nil, err
+		*dst = (*dst)[:0]
+		return err
 	}
-	if out == nil {
-		out = map[string]string{}
-	}
-	return out, nil
+	return nil
 }
 
-// Stats runs stats reset or stats sizes on the bound node.
+// Stats runs stats reset or stats sizes on the bound node into dst.
 // All other subcommands belong on Client.Stats or Client.StatsAll.
-func (a *AdminNode) Stats(ctx context.Context, args ...string) (map[string]string, error) {
+func (a *AdminNode) Stats(ctx context.Context, dst *[]Stat, args ...string) error {
+	if dst == nil {
+		return fmt.Errorf("stats dst: %w", ErrInvalidArgument)
+	}
 	addr, err := a.resolveTarget()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := validAdminStatsArgs(args); err != nil {
-		return nil, err
+		return err
 	}
-	return a.c.statsMapOnAddr(ctx, addr, args)
+	return a.c.statsIntoOnAddr(ctx, addr, dst, args)
 }
 
 // validAdminStatsArgs allows only stats reset and stats sizes on AdminNode.

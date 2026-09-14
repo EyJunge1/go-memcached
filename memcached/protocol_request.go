@@ -24,6 +24,8 @@ type request struct {
 	raw []byte
 	// rawBox is the pool slot for raw when the builder detached it.
 	rawBox *[]byte
+	// keyBox is the pool slot for a namespaced routing key.
+	keyBox *[]byte
 	// body and tail follow raw so storage values skip the builder buffer.
 	body []byte
 	tail []byte
@@ -65,6 +67,8 @@ func (req *request) release() {
 	} else {
 		putBuilderBuf(req.raw)
 	}
+	putBuilderBox(req.keyBox)
+	req.keyBox = nil
 	req.cmd = nil
 	req.key = nil
 	req.raw = nil
@@ -74,6 +78,18 @@ func (req *request) release() {
 	req.udpReqID = 0
 
 	requestPool.Put(req)
+}
+
+// adoptKeyBox attaches a pooled namespaced key. A second box is returned to the pool.
+func (req *request) adoptKeyBox(box *[]byte) {
+	if box == nil {
+		return
+	}
+	if req == nil || req.keyBox != nil {
+		putBuilderBox(box)
+		return
+	}
+	req.keyBox = box
 }
 
 // send writes the request over TCP or UDP and flushes.

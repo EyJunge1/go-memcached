@@ -24,13 +24,12 @@ var (
 
 // buildMetaDebugCommand encodes me <key> [b]\r\n.
 func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
+	b := newProtocolBuilder().AddBytes(_MeBytes)
+	if flags != nil && flags.b {
+		b.AddBase64(key)
+	} else {
+		b.AddBytes(key)
 	}
-
-	b := newProtocolBuilder().
-		AddBytes(_MeBytes).
-		AddBytes(key)
 	defer b.release()
 
 	b.AddFlagBool("b", flags.b)
@@ -42,6 +41,18 @@ func buildMetaDebugCommand(key []byte, flags *metaDebugFlags) (*request, *respon
 	resp := buildLimitedLineResponse(1)
 
 	return req, resp
+}
+
+// mapDebugReply parses me into debugDst while the connection is still held.
+func mapDebugReply(resp *response) error {
+	if resp.debugDst == nil {
+		return fmt.Errorf("meta debug dst: %w", ErrInvalidArgument)
+	}
+	err := parseMetaItemDebug(resp.rawLines, resp.debugDst, resp.debugBinary)
+	if err != nil && resp.debugDst.Status.Err() != nil {
+		return nil
+	}
+	return err
 }
 
 // parseMetaItemDebug reads ME <key> key=value… or EN.
@@ -84,14 +95,19 @@ func parseMetaItemDebug(lines [][]byte, item *MetaItemDebug, binaryKey bool) err
 		fields = rest[i+1:]
 	}
 	item.WireKey = append(item.WireKey[:0], keyTok...)
-	item.Key = item.WireKey
 	item.KeyBase64 = binaryKey
 	if binaryKey {
-		dec, derr := base64Decode(item.WireKey)
+		dst := item.Key
+		if sameByteArray(dst, item.WireKey) {
+			dst = nil
+		}
+		dec, derr := base64DecodeInto(dst, item.WireKey)
 		if derr != nil {
 			return fmt.Errorf("invalid me b key: %w", ErrMalformedResponse)
 		}
 		item.Key = dec
+	} else {
+		item.Key = item.WireKey
 	}
 	if len(fields) == 0 {
 		return nil
@@ -138,9 +154,18 @@ func applyMetaDebugField(tok []byte, item *MetaItemDebug) {
 	case bytes.Equal(key, _sizeBytes):
 		item.Size, _ = parseUintFromBytes(val)
 	default:
-		if item.Fields == nil {
-			item.Fields = make(map[string]string)
-		}
-		item.Fields[string(key)] = string(val)
+		item.Fields = appendStatField(item.Fields, key, val)
 	}
+}
+
+func appendStatField(dst []DebugField, key, val []byte) []DebugField {
+	n := len(dst)
+	if n < cap(dst) {
+		dst = dst[:n+1]
+	} else {
+		dst = append(dst, DebugField{})
+	}
+	dst[n].Key = append(dst[n].Key[:0], key...)
+	dst[n].Value = append(dst[n].Value[:0], val...)
+	return dst
 }

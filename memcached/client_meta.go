@@ -20,12 +20,14 @@ func (c *Client) Meta() *MetaClient {
 }
 
 type metaKeep struct {
-	value []byte
-	key   []byte
+	value   []byte
+	key     []byte
+	userKey []byte
+	opaque  []byte
 }
 
 func takeMetaKeep(dst *MetaResult) metaKeep {
-	keep := metaKeep{value: dst.Item.Value, key: dst.Item.WireKey}
+	keep := metaKeep{value: dst.Item.Value, key: dst.Item.WireKey, userKey: dst.Item.Key, opaque: dst.Item.Opaque}
 	*dst = MetaResult{}
 	restoreMetaKeep(dst, keep)
 	return keep
@@ -38,6 +40,40 @@ func restoreMetaKeep(dst *MetaResult, keep metaKeep) {
 	if keep.key != nil {
 		dst.Item.WireKey = keep.key[:0]
 	}
+	if keep.userKey != nil {
+		dst.Item.Key = keep.userKey[:0]
+	}
+	if keep.opaque != nil {
+		dst.Item.Opaque = keep.opaque[:0]
+	}
+}
+
+// copyMetaUserKey writes the user-facing key into keepUser. It never aliases WireKey.
+func copyMetaUserKey(item *MetaItem, keepUser []byte, c *Client, fallback []byte, returnKey bool) {
+	if item == nil {
+		return
+	}
+	if !returnKey {
+		item.Key = nil
+		return
+	}
+	if item.KeyBase64 && len(item.WireKey) > 0 {
+		dec, err := base64DecodeInto(keepUser, item.WireKey)
+		if err != nil {
+			item.Key = append(keepUser[:0], fallback...)
+			return
+		}
+		item.Key = append(keepUser[:0], c.stripNS(dec)...)
+		return
+	}
+	src := fallback
+	switch {
+	case len(item.WireKey) > 0:
+		src = c.stripNS(item.WireKey)
+	case len(item.Key) > 0:
+		src = c.stripNS(item.Key)
+	}
+	item.Key = append(keepUser[:0], src...)
 }
 
 func prepareMetaDest(dst *MetaResult) (metaKeep, error) {
@@ -47,7 +83,7 @@ func prepareMetaDest(dst *MetaResult) (metaKeep, error) {
 	return takeMetaKeep(dst), nil
 }
 
-func (m *MetaClient) finishMetaDest(ctx context.Context, req *request, resp *response, dst *MetaResult, keep metaKeep, quiet, quietMiss bool) error {
+func (m *MetaClient) finishMetaDest(ctx context.Context, req *request, resp *response, dst *MetaResult, keep metaKeep, quiet, quietMiss, returnKey bool, userKey []byte) error {
 	resp.metaItem = &dst.Item
 	defer releaseReqAndResp(req, resp)
 	if err := m.c.dispatchRequest(ctx, req, resp); err != nil {
@@ -56,14 +92,31 @@ func (m *MetaClient) finishMetaDest(ctx context.Context, req *request, resp *res
 	}
 	if err := resp.metaStatusErr(quiet, quietMiss); err != nil {
 		if cd := dst.Item.status.Err(); cd != nil && errors.Is(err, cd) {
-			applyMetaDestStatus(dst, keep)
+			applyMetaMutateDest(dst, keep, m.c, userKey, returnKey)
 			return nil
 		}
 		resetMetaGetDest(dst, keep)
 		return fmt.Errorf("request failed: %w", err)
 	}
-	applyMetaDestStatus(dst, keep)
+	applyMetaMutateDest(dst, keep, m.c, userKey, returnKey)
 	return nil
+}
+
+// applyMetaMutateDest publishes status and copies Key only when ReturnKey is set.
+// Key never shares keep.key unless we synthesize both Key and WireKey together.
+func applyMetaMutateDest(dst *MetaResult, keep metaKeep, c *Client, userKey []byte, returnKey bool) {
+	applyMetaDestStatus(dst, keep)
+	item := &dst.Item
+	if !returnKey {
+		item.Key = nil
+		if keep.key != nil {
+			item.WireKey = keep.key[:0]
+		} else {
+			item.WireKey = nil
+		}
+		return
+	}
+	copyMetaUserKey(item, keep.userKey, c, userKey, true)
 }
 
 func applyMetaDestStatus(dst *MetaResult, keep metaKeep) {

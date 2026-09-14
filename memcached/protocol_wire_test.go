@@ -87,7 +87,8 @@ func TestParseMetaItemRejectsUnknownCD(t *testing.T) {
 }
 
 func TestParseStatsMapCommandError(t *testing.T) {
-	_, err := parseStatsMap([][]byte{[]byte("ERROR bad args\r\n"), []byte("END\r\n")})
+	var got []Stat
+	err := parseStatsInto([][]byte{[]byte("ERROR bad args\r\n"), []byte("END\r\n")}, &got)
 	isErrorIs(t, err, ErrCommandError)
 }
 

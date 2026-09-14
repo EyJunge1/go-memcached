@@ -17,12 +17,14 @@ func (c *Client) Decr(ctx context.Context, key []byte, delta uint64) (uint64, er
 
 // arithmetic sends incr or decr and returns the updated counter.
 func (c *Client) arithmetic(ctx context.Context, cmd string, key []byte, delta uint64) (uint64, error) {
-	key = c.nsBytes(key)
+	key, keyBox := c.nsKey(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
+		putBuilderBox(keyBox)
 		return 0, err
 	}
 
 	req, resp := buildArithmeticCommand(cmd, key, delta, false)
+	req.adoptKeyBox(keyBox)
 	defer releaseReqAndResp(req, resp)
 
 	resp.afterRecv = mapArithmeticReply

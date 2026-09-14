@@ -190,7 +190,7 @@ func TestGetValueContainsEmbeddedCRLF(t *testing.T) {
 	noError(t, err)
 	equal(t, want, meta.Item.Value)
 
-	_, err = client.Version(ctx)
+	err = client.Version(ctx, new([]byte))
 	noError(t, err)
 	equal(t, int32(1), dials.Load())
 }
@@ -226,10 +226,29 @@ func TestGetDestinationContract(t *testing.T) {
 	equal(t, 32, cap(dst[0].Value))
 
 	mustStore(t, client, ctx, []byte("empty"), nil)
-	empty, err := client.GetOne(ctx, []byte("empty"), GetOpts{})
+	empty, err := doGetOne(client, ctx, []byte("empty"), GetOpts{})
 	noError(t, err)
 	isTrue(t, empty.Found)
 	equal(t, 0, len(empty.Value))
+
+	isErrorIs(t, client.GetOne(ctx, []byte("k"), nil, GetOpts{}), ErrInvalidArgument)
+	var one GetResult
+	one.Value = make([]byte, 0, 32)
+	noError(t, client.GetOne(ctx, []byte("k"), &one, GetOpts{}))
+	isTrue(t, one.Found)
+	equal(t, []byte("v"), one.Value)
+	equal(t, 32, cap(one.Value))
+
+	nsClient := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Cluster.Namespace = "ns:"
+	})
+	mustStore(t, nsClient, ctx, []byte("nk"), []byte("nv"))
+	var nsOne GetResult
+	nsOne.Value = make([]byte, 0, 8)
+	noError(t, nsClient.GetOne(ctx, []byte("nk"), &nsOne, GetOpts{}))
+	isTrue(t, nsOne.Found)
+	equal(t, []byte("nv"), nsOne.Value)
+	equal(t, 8, cap(nsOne.Value))
 
 	isErrorIs(t, client.Meta().Get(ctx, []byte("k"), MetaGet{}, nil), ErrInvalidArgument)
 	isErrorIs(t, client.Meta().Pipeline(ctx, []MetaOp{{Key: []byte("k"), Get: &MetaGet{}}}, nil), ErrInvalidArgument)

@@ -81,7 +81,7 @@ func newOursTCP(tb testing.TB) *ours.Client {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := c.Version(ctx); err != nil {
+	if err := c.Version(ctx, new([]byte)); err != nil {
 		_ = c.Close()
 		tb.Skipf("no memcached on %s: %v", tcpAddr(), err)
 	}
@@ -104,7 +104,7 @@ func newOursUDP(tb testing.TB) *ours.Client {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := c.Version(ctx); err != nil {
+	if err := c.Version(ctx, new([]byte)); err != nil {
 		_ = c.Close()
 		tb.Skipf("no UDP memcached on %s: %v", udpAddr(), err)
 	}

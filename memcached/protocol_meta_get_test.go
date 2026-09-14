@@ -30,7 +30,7 @@ func Test_parseFlags(t *testing.T) {
 				TTL:          0,
 				LastAccess:   0,
 				Size:         3,
-				Opaque:       "456",
+				Opaque:       []byte("456"),
 				HitBefore:    false,
 				WireKey:      []byte("Zm9v"),
 				KeyBase64:    true,
@@ -53,7 +53,7 @@ func Test_parseFlags(t *testing.T) {
 				TTL:          200,
 				LastAccess:   0,
 				Size:         3,
-				Opaque:       "789",
+				Opaque:       []byte("789"),
 				HitBefore:    true,
 				WireKey:      []byte("Zm9v"),
 				KeyBase64:    true,
@@ -72,7 +72,7 @@ func Test_parseFlags(t *testing.T) {
 				Won:         true,
 				Stale:       true,
 				RecacheBusy: true,
-				Opaque:      "opaque",
+				Opaque:      []byte("opaque"),
 			},
 		},
 	}
@@ -150,7 +150,7 @@ func Test_parseMetaItem(t *testing.T) {
 				TTL:          0,
 				LastAccess:   0,
 				Size:         3,
-				Opaque:       "456",
+				Opaque:       []byte("456"),
 				HitBefore:    false,
 				WireKey:      []byte("Zm9v"),
 				KeyBase64:    true,
@@ -179,7 +179,7 @@ func Test_parseMetaItem(t *testing.T) {
 				TTL:          200,
 				LastAccess:   0,
 				Size:         3,
-				Opaque:       "789",
+				Opaque:       []byte("789"),
 				HitBefore:    true,
 				WireKey:      []byte("Zm9v"),
 				KeyBase64:    true,
@@ -213,6 +213,17 @@ func Test_parseMetaItem(t *testing.T) {
 			equal(t, tt.wantItem, tt.args.item)
 		})
 	}
+}
+
+func Test_parseMetaItemOpaqueReusesDest(t *testing.T) {
+	item := &MetaItem{Opaque: make([]byte, 0, 16)}
+	noError(t, parseFlags(constructParts([]byte("HD Oopaque\r\n")), 1, item))
+	equal(t, []byte("opaque"), item.Opaque)
+	equal(t, 16, cap(item.Opaque))
+	line := []byte("HD Oopaque\r\n")
+	noError(t, parseFlags(constructParts(line), 1, item))
+	line[4] = 'X'
+	equal(t, []byte("opaque"), item.Opaque)
 }
 
 func Test_parseMetaItemPreservesOpaqueValue(t *testing.T) {
@@ -352,7 +363,7 @@ func Test_parseMetaPipeline_chargeKeepsSibling(t *testing.T) {
 	isErrorIs(t, err, ErrClientError)
 	hasLen(t, items, 1)
 	equal(t, MetaStatusHD, items[0].status)
-	equal(t, "0", items[0].Opaque)
+	equal(t, []byte("0"), items[0].Opaque)
 }
 
 func Test_parseMetaItem_quietOnlyMN_LF(t *testing.T) {

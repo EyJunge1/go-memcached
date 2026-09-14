@@ -145,7 +145,7 @@ func TestMetaQuietClientErrorThenMN(t *testing.T) {
 	})
 	_, err := doMetaGet(client, context.Background(), []byte("cerr"), MetaGet{Quiet: true, Return: MetaGetReturn{Value: true}})
 	isErrorIs(t, err, ErrClientError)
-	_, err = client.Version(context.Background())
+	err = client.Version(context.Background(), new([]byte))
 	noError(t, err)
 	equal(t, int32(1), dials.Load())
 }
@@ -173,6 +173,36 @@ func TestMetaGetReturnsWireKey(t *testing.T) {
 	equal(t, []byte("foo"), dst.Item.WireKey)
 }
 
+func TestMetaGetDestKeyDoesNotAliasWireKey(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Cluster.Namespace = "ns:"
+	})
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("foo"), []byte("v"))
+	var dst MetaResult
+	dst.Item.Key = make([]byte, 0, 16)
+	dst.Item.WireKey = make([]byte, 0, 16)
+	mg := MetaGet{Return: MetaGetReturn{Key: true, Value: true}}
+	noError(t, client.Meta().Get(ctx, []byte("foo"), mg, &dst))
+	equal(t, []byte("foo"), dst.Item.Key)
+	equal(t, []byte("ns:foo"), dst.Item.WireKey)
+	if sameByteArray(dst.Item.Key, dst.Item.WireKey) {
+		t.Fatal("Key aliases WireKey")
+	}
+	dst.Item.Key = append(dst.Item.Key, 'x')
+	equal(t, []byte("ns:foo"), dst.Item.WireKey)
+}
+
+func TestMetaPipelineOpaqueKeep(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	dst := []MetaResult{{Item: MetaItem{Opaque: make([]byte, 0, 16)}}}
+	noError(t, client.Meta().Pipeline(context.Background(), []MetaOp{{Key: []byte("missing"), Get: &MetaGet{}}}, dst))
+	equal(t, MetaStatusEN, dst[0].Status)
+	equal(t, 16, cap(dst[0].Item.Opaque))
+}
+
 func TestMetaPipelineRejectsInvalidOp(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
@@ -195,7 +225,7 @@ func TestMetaPipelineArithmetic(t *testing.T) {
 	noError(t, err)
 	hasLen(t, got, 1)
 	equal(t, []byte("13"), got[0].Item.Value)
-	equal(t, "0", got[0].Item.Opaque)
+	equal(t, []byte("0"), got[0].Item.Opaque)
 	equal(t, []byte("13"), mustGet(t, client, ctx, []byte("n")).Value)
 }
 

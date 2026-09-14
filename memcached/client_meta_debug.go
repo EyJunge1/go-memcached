@@ -16,25 +16,31 @@ func (m *MetaClient) Debug(ctx context.Context, key []byte, f MetaDebug, dst *Me
 		return err
 	}
 	mdFlags := f.toFlags()
-	key = c.nsBytes(key)
+	key, keyBox := c.nsKey(key)
 	if err := c.checkKeyValueFlags(key, nil, mdFlags.b); err != nil {
+		putBuilderBox(keyBox)
 		return err
 	}
 
-	*dst = MetaItemDebug{Key: key}
+	keepKey := dst.WireKey
+	keepUser := dst.Key
+	keepFields := dst.Fields
+	*dst = MetaItemDebug{WireKey: keepKey[:0], Key: keepUser[:0], Fields: keepFields[:0]}
 	req, resp := buildMetaDebugCommand(key, &mdFlags)
+	req.adoptKeyBox(keyBox)
 	defer releaseReqAndResp(req, resp)
 
+	resp.debugDst = dst
+	resp.debugBinary = mdFlags.b
+	resp.afterRecv = mapDebugReply
 	if err := c.dispatchRequest(ctx, req, resp); err != nil {
-		*dst = MetaItemDebug{}
+		*dst = MetaItemDebug{WireKey: keepKey[:0], Key: keepUser[:0], Fields: keepFields[:0]}
 		return fmt.Errorf("request failed: %w", err)
 	}
-	if err := parseMetaItemDebug(resp.rawLines, dst, mdFlags.b); err != nil {
-		if dst.Status.Err() != nil {
-			return nil
-		}
-		*dst = MetaItemDebug{}
-		return fmt.Errorf("request failed: %w", err)
+	if dst.KeyBase64 {
+		dst.Key = append(keepUser[:0], c.stripNS(dst.Key)...)
+	} else {
+		dst.Key = append(keepUser[:0], c.stripNS(dst.WireKey)...)
 	}
 	return nil
 }

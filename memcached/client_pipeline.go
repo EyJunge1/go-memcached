@@ -40,8 +40,9 @@ func (p *Pipeline) Store(item Item) *Pipeline {
 		p.errs = append(p.errs, err)
 		return p
 	}
-	key := p.c.nsBytes(item.Key)
+	key, keyBox := p.c.nsKey(item.Key)
 	if err := p.c.checkKeyValue(key, item.Value); err != nil {
+		putBuilderBox(keyBox)
 		p.errs = append(p.errs, err)
 		return p
 	}
@@ -56,6 +57,7 @@ func (p *Pipeline) Store(item Item) *Pipeline {
 	} else {
 		request, resp = buildStorageCommand(command, key, item.Value, flags, exp, false)
 	}
+	request.adoptKeyBox(keyBox)
 	resp.afterRecv = mapStorageReply
 	p.ops = append(p.ops, pipeOp{req: request, resp: resp, key: key})
 	return p
@@ -66,12 +68,14 @@ func (p *Pipeline) Delete(key []byte) *Pipeline {
 	if p == nil || p.c == nil {
 		return p
 	}
-	key = p.c.nsBytes(key)
+	key, keyBox := p.c.nsKey(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
+		putBuilderBox(keyBox)
 		p.errs = append(p.errs, err)
 		return p
 	}
 	req, resp := buildDeleteCommand(key, false)
+	req.adoptKeyBox(keyBox)
 	resp.afterRecv = mapDeletedReply
 	p.ops = append(p.ops, pipeOp{req: req, resp: resp, key: key})
 	return p
@@ -82,12 +86,14 @@ func (p *Pipeline) Touch(key []byte, expiry Exptime) *Pipeline {
 	if p == nil || p.c == nil {
 		return p
 	}
-	key = p.c.nsBytes(key)
+	key, keyBox := p.c.nsKey(key)
 	if err := validateKeyAndValue(key, nil); err != nil {
+		putBuilderBox(keyBox)
 		p.errs = append(p.errs, err)
 		return p
 	}
 	req, resp := buildTouchCommand(key, expiry, false)
+	req.adoptKeyBox(keyBox)
 	resp.afterRecv = mapTouchedReply
 	p.ops = append(p.ops, pipeOp{req: req, resp: resp, key: key})
 	return p

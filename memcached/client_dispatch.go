@@ -229,6 +229,9 @@ func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 	}
 
 	addrs, _ := c.snapshotCluster()
+	if len(addrs) == 1 {
+		return c.broadcastOne(ctx, addrs[0], call)
+	}
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(addrs))
@@ -264,6 +267,23 @@ func (c *Client) broadcastRequest(ctx context.Context, call callFunc) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func (c *Client) broadcastOne(ctx context.Context, node *addr, call callFunc) error {
+	cn, err := c.getConn(ctx, node)
+	if err != nil {
+		c.noteFailure(node)
+		return err
+	}
+	var opErr error
+	defer finishDispatch(cn, &opErr)
+	opErr = call(ctx, node, cn)
+	if opErr != nil {
+		c.noteFailure(node)
+		return opErr
+	}
+	c.noteSuccess(node)
+	return nil
 }
 
 // dispatchRequest picks a live cluster member for req.key and runs the request there.

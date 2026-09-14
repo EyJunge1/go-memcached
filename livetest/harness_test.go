@@ -57,7 +57,7 @@ func setupLiveClient(t *testing.T, tweak ...func(*memcached.Config)) *memcached.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := c.VersionAll(ctx); err != nil {
+	if err := c.VersionAll(ctx, new([]memcached.NodeVersion)); err != nil {
 		_ = c.Close()
 		t.Skipf("no memcached on %s: %v", tcpAddr(), err)
 	}
@@ -93,7 +93,7 @@ func setupUDPClient(t *testing.T) *memcached.Client {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := c.Version(ctx); err != nil {
+	if err := c.Version(ctx, new([]byte)); err != nil {
 		_ = c.Close()
 		t.Skipf("no UDP memcached on %s: %v", udpAddr(), err)
 	}
@@ -116,7 +116,7 @@ func setupUnixClient(t *testing.T) *memcached.Client {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := c.VersionAll(ctx); err != nil {
+	if err := c.VersionAll(ctx, new([]memcached.NodeVersion)); err != nil {
 		_ = c.Close()
 		t.Skipf("no unix memcached at %s: %v", unixAddr(), err)
 	}
@@ -146,7 +146,7 @@ func isErrorIs(t *testing.T, err, target error) {
 
 func mustGet(t *testing.T, c *memcached.Client, ctx context.Context, key []byte) memcached.GetResult {
 	t.Helper()
-	got, err := c.GetOne(ctx, key, memcached.GetOpts{})
+	got, err := doGetOne(c, ctx, key, memcached.GetOpts{})
 	noError(t, err)
 	if !got.Found {
 		t.Fatalf("get miss for %q", key)
@@ -156,11 +156,56 @@ func mustGet(t *testing.T, c *memcached.Client, ctx context.Context, key []byte)
 
 func mustMiss(t *testing.T, c *memcached.Client, ctx context.Context, key []byte) {
 	t.Helper()
-	got, err := c.GetOne(ctx, key, memcached.GetOpts{})
+	got, err := doGetOne(c, ctx, key, memcached.GetOpts{})
 	noError(t, err)
 	if got.Found {
 		t.Fatalf("want miss for %q, got %#v", key, got)
 	}
+}
+
+func doGetOne(c *memcached.Client, ctx context.Context, key []byte, opts memcached.GetOpts) (memcached.GetResult, error) {
+	var dst memcached.GetResult
+	err := c.GetOne(ctx, key, &dst, opts)
+	return dst, err
+}
+
+func doVersion(c *memcached.Client, ctx context.Context) ([]byte, error) {
+	var dst []byte
+	err := c.Version(ctx, &dst)
+	return dst, err
+}
+
+func doVersionAll(c *memcached.Client, ctx context.Context) ([]memcached.NodeVersion, error) {
+	var dst []memcached.NodeVersion
+	err := c.VersionAll(ctx, &dst)
+	return dst, err
+}
+
+func doStats(c *memcached.Client, ctx context.Context, args ...string) ([]memcached.Stat, error) {
+	var dst []memcached.Stat
+	err := c.Stats(ctx, &dst, args...)
+	return dst, err
+}
+
+func doStatsAll(c *memcached.Client, ctx context.Context, args ...string) ([]memcached.NodeStats, error) {
+	var dst []memcached.NodeStats
+	err := c.StatsAll(ctx, &dst, args...)
+	return dst, err
+}
+
+func doAdminStatsDetail(a *memcached.AdminNode, ctx context.Context, mode memcached.StatsDetailMode) ([]memcached.Stat, error) {
+	var dst []memcached.Stat
+	err := a.StatsDetail(ctx, &dst, mode)
+	return dst, err
+}
+
+func lookupStat(stats []memcached.Stat, name string) (string, bool) {
+	for i := range stats {
+		if string(stats[i].Name) == name {
+			return string(stats[i].Value), true
+		}
+	}
+	return "", false
 }
 
 func doGet(c *memcached.Client, ctx context.Context, keys [][]byte, opts memcached.GetOpts) ([]memcached.GetResult, error) {
@@ -230,10 +275,10 @@ func hasLen(t *testing.T, got any, n int) {
 	}
 }
 
-func notEmpty(t *testing.T, got string) {
+func notEmpty(t *testing.T, got []byte) {
 	t.Helper()
-	if got == "" {
-		t.Fatal("want non-empty string")
+	if len(got) == 0 {
+		t.Fatal("want non-empty")
 	}
 }
 

@@ -82,10 +82,11 @@ func udpRequestAllowed(req *request) error {
 	if req == nil {
 		return fmt.Errorf("udp: %w", ErrNotSupported)
 	}
-	switch string(req.cmd) {
-	case "get", "gets", "version", "me":
+	switch {
+	case bytes.Equal(req.cmd, _GetBytes), bytes.Equal(req.cmd, _GetsBytes),
+		bytes.Equal(req.cmd, _VersionCmdBytes), bytes.Equal(req.cmd, _MeBytes):
 		return nil
-	case "mg", "mn":
+	case bytes.Equal(req.cmd, _MgBytes), bytes.Equal(req.cmd, _MnBytes):
 		return udpMetaRawAllowed(req.raw)
 	default:
 		return fmt.Errorf("udp %s: %w", req.cmd, ErrNotSupported)
@@ -109,10 +110,10 @@ func udpMetaRawAllowed(raw []byte) error {
 		if len(cmd) == 0 {
 			continue
 		}
-		switch string(cmd) {
-		case "mn", "me":
+		switch {
+		case bytes.Equal(cmd, _MnBytes), bytes.Equal(cmd, _MeBytes):
 			continue
-		case "mg":
+		case bytes.Equal(cmd, _MgBytes):
 			if mgRestHasSideEffect(rest) {
 				return fmt.Errorf("udp meta side-effect: %w", ErrNotSupported)
 			}
@@ -153,12 +154,12 @@ func mgRestHasSideEffect(rest []byte) bool {
 
 // idempotentReadCommand reports whether cmd is a UDP-safe read.
 func idempotentReadCommand(cmd []byte) bool {
-	switch string(cmd) {
-	case "get", "gets", "version", "mg", "mn", "me":
-		return true
-	default:
-		return false
-	}
+	return bytes.Equal(cmd, _GetBytes) ||
+		bytes.Equal(cmd, _GetsBytes) ||
+		bytes.Equal(cmd, _VersionCmdBytes) ||
+		bytes.Equal(cmd, _MgBytes) ||
+		bytes.Equal(cmd, _MnBytes) ||
+		bytes.Equal(cmd, _MeBytes)
 }
 
 // sendUDP writes one 8-byte framed datagram (protocol.txt UDP section).
@@ -245,8 +246,8 @@ func assembleUDPPayload(rr wireConn, wantID uint16, maxFragments int, own bool) 
 		got     int
 		offs    []int
 		lens    []int
-		offStor [8]int
-		lenStor [8]int
+		offStor [32]int
+		lenStor [32]int
 	)
 	for {
 		dgram, err := rr.readDatagram()

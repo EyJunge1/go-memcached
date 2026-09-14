@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -233,6 +234,24 @@ func TestNewExplicitEmptyFailoverDisables(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 	equal(t, 0, c.rt.failover.FailureLimit)
 	isFalse(t, c.rt.failover.Eject)
+}
+
+func Test_nsKeyReusesPool(t *testing.T) {
+	c := &Client{rt: &runtime{nsPrefix: []byte("ns:")}}
+	raw := []byte("k")
+	want := []byte("ns:k")
+	_, box := c.nsKey(raw)
+	putBuilderBox(box)
+	allocs := testing.AllocsPerRun(200, func() {
+		wired, b := c.nsKey(raw)
+		if !bytes.Equal(wired, want) {
+			t.Fatalf("got %q", wired)
+		}
+		putBuilderBox(b)
+	})
+	if allocs != 0 {
+		t.Fatalf("nsKey allocs = %v, want 0", allocs)
+	}
 }
 
 func TestNamespacePrefixesWireKey(t *testing.T) {

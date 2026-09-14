@@ -1,6 +1,7 @@
 package memcached
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -52,9 +53,9 @@ func releaseDedicated(cn wireConn) {
 // readAdminStreamLine reads one watcher or dump line, capped at adminStreamLineLimit.
 func readAdminStreamLine(cn wireConn) ([]byte, error) {
 	var buf []byte
-	tmp := make([]byte, 1)
+	var tmp [1]byte
 	for {
-		n, err := cn.Read(tmp)
+		n, err := cn.Read(tmp[:])
 		if n == 1 {
 			buf = append(buf, tmp[0])
 			if tmp[0] == '\n' {
@@ -159,15 +160,15 @@ func (a *AdminNode) readWatch(ctx context.Context, cn wireConn, out chan WatchEv
 			}
 			return
 		}
-		s := string(trimCRLF(line))
-		if err = adminStreamLineError(s); err != nil {
+		trimmed := trimCRLF(line)
+		if err = adminStreamLineError(trimmed); err != nil {
 			select {
 			case out <- WatchEvent{Err: err}:
 			case <-ctx.Done():
 			}
 			return
 		}
-		ev := parseWatchEvent(s)
+		ev := parseWatchEvent(string(trimmed))
 		select {
 		case out <- ev:
 		case <-ctx.Done():
@@ -297,8 +298,9 @@ func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, 
 		}
 		return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 	}
-	s := string(trimCRLF(line))
-	if s == "OK" {
+	trimmed := trimCRLF(line)
+	s := string(trimmed)
+	if bytes.Equal(trimmed, _OKBytes) {
 		stopAgain := context.AfterFunc(ctx, func() { _ = cn.Close() })
 		if dl, ok := ctx.Deadline(); ok {
 			_ = cn.setReadDeadline(dl)
@@ -312,14 +314,15 @@ func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, 
 			}
 			return wrapRecvError(fmt.Errorf("recv failed: %w", err))
 		}
-		s = string(trimCRLF(line))
+		trimmed = trimCRLF(line)
+		s = string(trimmed)
 	}
 	if isDumpEnd(s) {
 		releaseDedicated(cn)
 		go done()
 		return nil
 	}
-	if err = adminStreamLineError(s); err != nil {
+	if err = adminStreamLineError(trimmed); err != nil {
 		releaseDedicated(cn)
 		return err
 	}
@@ -346,11 +349,12 @@ func (a *AdminNode) startDumpStream(ctx context.Context, kind, selector string, 
 				emit(DumpEntry{Err: wrapRecvError(err)})
 				return
 			}
-			next := string(trimCRLF(line))
+			trimmed := trimCRLF(line)
+			next := string(trimmed)
 			if isDumpEnd(next) {
 				return
 			}
-			if err := adminStreamLineError(next); err != nil {
+			if err := adminStreamLineError(trimmed); err != nil {
 				emit(DumpEntry{Err: err})
 				return
 			}

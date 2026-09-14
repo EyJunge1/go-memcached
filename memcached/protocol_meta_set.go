@@ -54,7 +54,13 @@ func validMetaSetMode(m MetaSetMode) bool {
 }
 
 func writeMetaSet(b *protocolBuilder, key []byte, valueLen int, flags *metaSetFlags) {
-	b.AddBytes(_MsBytes).AddBytes(key).AddInt(valueLen)
+	b.AddBytes(_MsBytes)
+	if flags != nil && flags.b {
+		b.AddBase64(key)
+	} else {
+		b.AddBytes(key)
+	}
+	b.AddInt(valueLen)
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagBool("c", flags.c)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
@@ -76,9 +82,6 @@ func writeMetaSet(b *protocolBuilder, key []byte, valueLen int, flags *metaSetFl
 }
 
 func encodeMetaSetOwned(key, value []byte, flags *metaSetFlags) (header []byte, box *[]byte, body, tail []byte) {
-	if flags.b {
-		key = base64Encode(key)
-	}
 	b := newProtocolBuilder()
 	defer b.release()
 	writeMetaSet(b, key, len(value), flags)
@@ -88,10 +91,6 @@ func encodeMetaSetOwned(key, value []byte, flags *metaSetFlags) (header []byte, 
 
 // buildMetaSetCommand encodes ms <key> <datalen> <flags>*\r\n plus the body.
 func buildMetaSetCommand(key, value []byte, flags *metaSetFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
-	}
-
 	b := newProtocolBuilder()
 	defer b.release()
 	writeMetaSet(b, key, len(value), flags)

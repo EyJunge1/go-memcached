@@ -64,10 +64,12 @@ type response struct {
 
 	// getDst is filled by endIndicatorRetrieval. getKeys are the wired keys
 	// for this node; getIdx maps local key i onto getDst (nil = identity).
-	getDst  []GetResult
-	getKeys [][]byte
-	getIdx  []int
-	withCAS bool
+	getDst    []GetResult
+	getKeys   [][]byte
+	getIdx    []int
+	getOneKey []byte
+	getOneDst *GetResult
+	withCAS   bool
 
 	// metaSlot is filled in-place for a single Meta Get/Set. metaItem points
 	// at it (or a caller dest) so the item does not escape to a new heap alloc.
@@ -83,6 +85,12 @@ type response struct {
 	metaSawReply     bool
 
 	arithValue    uint64
+	versionDst    *[]byte
+	statsDst      *[]Stat
+	statsFilled   bool
+	statsDetail   bool
+	debugDst      *MetaItemDebug
+	debugBinary   bool
 	maxValueBytes int
 	readTimeout   time.Duration
 	readCtx       context.Context
@@ -118,7 +126,7 @@ func buildSpecEndLineResponse(endLine []byte, predictLines int) *response {
 	return resp
 }
 
-const rawLinesKeepCap = 32
+const rawLinesKeepCap = 64
 
 // resetRawLines reuses or reallocates rawLines with at least hint capacity.
 func resetRawLines(resp *response, hint int) {
@@ -156,6 +164,8 @@ func (resp *response) release() {
 	resp.getDst = nil
 	resp.getKeys = nil
 	resp.getIdx = nil
+	resp.getOneKey = nil
+	resp.getOneDst = nil
 	resp.withCAS = false
 	resp.metaSlot = MetaItem{}
 	resp.metaItem = nil
@@ -166,6 +176,12 @@ func (resp *response) release() {
 	resp.metaPipeByOpaque = nil
 	resp.metaSawReply = false
 	resp.arithValue = 0
+	resp.versionDst = nil
+	resp.statsDst = nil
+	resp.statsFilled = false
+	resp.statsDetail = false
+	resp.debugDst = nil
+	resp.debugBinary = false
 	resp.maxValueBytes = 0
 	resp.readTimeout = 0
 	resp.readCtx = nil
@@ -181,6 +197,16 @@ func buildRetrievalResponse(keys [][]byte, origIdx []int, dst []GetResult, withC
 	resp.getKeys = keys
 	resp.getIdx = origIdx
 	resp.getDst = dst
+	return resp
+}
+
+// buildRetrievalResponseOne returns a pooled retrieval response that writes one slot.
+func buildRetrievalResponseOne(key []byte, dst *GetResult, withCAS bool) *response {
+	resp := responsePool.Get().(*response)
+	resp.endIndicator = endIndicatorRetrieval
+	resp.withCAS = withCAS
+	resp.getOneKey = key
+	resp.getOneDst = dst
 	return resp
 }
 
@@ -427,7 +453,7 @@ func (resp *response) udpMustOwnPayload() bool {
 	if resp.endIndicator == endIndicatorRetrieval {
 		return false
 	}
-	if resp.metaItem != nil {
+	if resp.metaItem != nil || resp.metaPipeDst != nil {
 		switch resp.endIndicator {
 		case endIndicatorLimitedLines, endIndicatorSpecificEndLine, endIndicatorQuietBarrier:
 			return false
@@ -622,7 +648,7 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 		}
 
 		if bytes.Equal(trimCRLF(line), trimCRLF(resp.specEndLine)) {
-			if resp.metaItem == nil && resp.metaPipeDst == nil {
+			if resp.metaItem == nil && resp.metaPipeDst == nil && resp.statsDst == nil {
 				if sliceOK {
 					line = bytes.Clone(line)
 				}
@@ -641,6 +667,15 @@ func (resp *response) read2(rr protocolReader, collectFaults bool) error {
 			if resp.metaItem != nil || resp.metaPipeDst != nil {
 				continue
 			}
+		} else if resp.statsDst != nil {
+			if !resp.statsFilled {
+				*resp.statsDst = (*resp.statsDst)[:0]
+				resp.statsFilled = true
+			}
+			if err = consumeStatsLine(resp.statsDst, line, resp.statsDetail); err != nil {
+				return err
+			}
+			continue
 		} else if resp.metaPipeDst != nil {
 			if !isMetaNoopLine(line) {
 				if err = resp.fillMetaPipe(rr, line); err != nil {
@@ -867,23 +902,12 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		if dataLen > uint64(limit) {
 			return fmt.Errorf("data block too large: %w", ErrMalformedResponse)
 		}
-		local, ok := matchRetrievalKey(resp.getKeys, parsed.Key, &cursor)
-		if !ok {
-			return fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
-		}
-		dstIdx := local
-		if resp.getIdx != nil {
-			if local < 0 || local >= len(resp.getIdx) {
-				return fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
-			}
-			dstIdx = resp.getIdx[local]
-		}
-		if dstIdx < 0 || dstIdx >= len(resp.getDst) {
-			return fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+		slot, err := resp.retrievalSlot(parsed.Key, &cursor)
+		if err != nil {
+			return err
 		}
 
 		valueLen := int(dataLen) //nolint:gosec // G115: dataLen is bounded above
-		slot := &resp.getDst[dstIdx]
 		slot.Found = true
 		slot.Flags = parsed.Flags
 		slot.CAS = parsed.CAS
@@ -897,6 +921,30 @@ func (resp *response) readRetrieval(rr protocolReader) error {
 		}
 		refreshReadDeadlineIfIdle(resp, rr)
 	}
+}
+
+func (resp *response) retrievalSlot(want []byte, cursor *int) (*GetResult, error) {
+	if resp.getOneDst != nil {
+		if !bytes.Equal(resp.getOneKey, want) {
+			return nil, fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+		}
+		return resp.getOneDst, nil
+	}
+	local, ok := matchRetrievalKey(resp.getKeys, want, cursor)
+	if !ok {
+		return nil, fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+	}
+	dstIdx := local
+	if resp.getIdx != nil {
+		if local < 0 || local >= len(resp.getIdx) {
+			return nil, fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+		}
+		dstIdx = resp.getIdx[local]
+	}
+	if dstIdx < 0 || dstIdx >= len(resp.getDst) {
+		return nil, fmt.Errorf("unexpected VALUE key: %w", ErrMalformedResponse)
+	}
+	return &resp.getDst[dstIdx], nil
 }
 
 // mapStatusLine accepts want, else a known protocol error, else ErrMalformedResponse.

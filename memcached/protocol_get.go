@@ -34,6 +34,18 @@ func buildGetsCommand(command string, keys ...[]byte) (*request, *response) {
 	return req, resp
 }
 
+// encodeGetOneCommand encodes get/gets/gat/gats for a single key without a keys slice.
+func encodeGetOneCommand(command string, expiry Exptime, key []byte) *request {
+	cmd := verbBytes(command)
+	b := newProtocolBuilder().AddBytes(cmd)
+	defer b.release()
+	if bytes.Equal(cmd, _GatBytes) || bytes.Equal(cmd, _GatsBytes) {
+		b.AddInt64(expiryToken(expiry))
+	}
+	b.AddBytes(key).AddCRLF()
+	return b.request(cmd, key)
+}
+
 // encodeGetAndTouchesCommand encodes gat/gats <exptime> <key>*\r\n.
 func encodeGetAndTouchesCommand(command string, expiry Exptime, keys ...[]byte) *request {
 	cmd := verbBytes(command)

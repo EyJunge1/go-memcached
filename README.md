@@ -109,8 +109,8 @@ func main() {
 	if err := client.Store(ctx, memcached.Item{Key: []byte("key"), Value: []byte("value")}); err != nil {
 		log.Fatal(err)
 	}
-	got, err := client.GetOne(ctx, []byte("key"), memcached.GetOpts{})
-	if err != nil {
+	var got memcached.GetResult
+	if err := client.GetOne(ctx, []byte("key"), &got, memcached.GetOpts{}); err != nil {
 		log.Fatal(err)
 	}
 	_ = got
@@ -149,13 +149,13 @@ are **not** implemented.
 | ------------------------------------------- | ------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `set` / `add` / `replace` / `cas`           | ✅      | `Store` + `Item.Mode`                                                                    | flags, `Exptime`, bytes; `noreply` via `Item.Quiet`                                                                                                                             |
 | `append` / `prepend`                        | ✅      | `Store` + `StoreAppend` / `StorePrepend`                                                 | wire still has Storage-grammar `0 0` (server ignores them)                                                                                                                      |
-| `get` / `gets` / `gat` / `gats`             | ✅      | `Get` / `GetOne` + `GetOpts`                                                             | `Get` fills `dst` index-aligned; miss is `!Found`; `CAS` → `gets`/`gats`; `Touch` → `gat`/`gats` (TCP-only)                                                                     |
+| `get` / `gets` / `gat` / `gats`             | ✅      | `Get` / `GetOne` + dest + `GetOpts`                                                      | `Get` fills `dst` index-aligned; miss is `!Found`; `CAS` → `gets`/`gats`; `Touch` → `gat`/`gats` (TCP-only)                                                                     |
 | `delete` / `incr` / `decr` / `touch`        | ✅      | typed; `MutateOpts.Quiet` on delete/touch                                                | `Quiet` → `noreply`; Incr/Decr always return the number; quiet arith via `Meta().Arithmetic` + `q`                                                                              |
 | `mg` / `ms` / `md` / `ma` / `me` / `mn`     | ✅      | `Meta().Get` / `Set` / `Delete` / `Arithmetic` / `Debug` / `Noop` + dest                  | every documented request flag (`b c C f F h k l O q s t u v E N R T I M J D x P L`) and response extras (`W X Z`); statuses HD/VA/EN/NF/NS/EX/MN/ME; `q` always pairs with `mn` |
 | Recache                                     | ✅      | `MetaGet.Vivify` / `MetaGet.Recache` / `MetaDelete.Invalidate`                           | `mg N` / `mg R` (Duration, no 30-day cap) / `md I T`                                                                                                                            |
 | `Pipeline` / `MetaPipeline`                 | ✅      | `Pipeline().Store/…Run` / `Meta().Pipeline`                                              | text is write-then-read (no `noreply`); quiet meta stays on `Meta().Pipeline`                                                                                                   |
-| `stats` + subcommands                       | ✅      | `Stats` / `StatsAll`; Admin `On().Stats` for `sizes`/`reset`; `detail` via `StatsDetail` | no args, `items`, `slabs`, `settings`, `conns`; TCP-only                                                                                                                        |
-| `version`                                   | ✅      | `Version` / `VersionAll`                                                                 | `Version` first live node; `VersionAll` every node                                                                                                                              |
+| `stats` + subcommands                       | ✅      | `Stats` / `StatsAll` + dest; Admin `On().Stats` for `sizes`/`reset`; `detail` via `StatsDetail` | no args, `items`, `slabs`, `settings`, `conns`; TCP-only                                                                                                                 |
+| `version`                                   | ✅      | `Version` / `VersionAll` + dest                                                          | `Version` first live node; `VersionAll` every node                                                                                                                              |
 | `flush_all`                                 | ✅      | `Admin().On().Flush` / `All().Flush`                                                     | `AllowAdmin` + `AllowFlushAll`; `Delay`/`Stagger`; `Quiet` → `noreply`                                                                                                          |
 | `cache_memlimit` / `verbosity` / `shutdown` | ✅      | `Admin().On()` / `All()`                                                                 | MB + `noreply`; level + `noreply`; default or `graceful`                                                                                                                        |
 | `slabs` / `lru` / `lru_crawler`             | ✅      | `Admin().On()`                                                                           | `reassign` (src `-1`), `automove` 0|1|2; `tune`/`mode`/`temp_ttl`; enable/disable/sleep/tocrawl/crawl; `metadump`/`mgdump` (`all`/`hash`)                                       |
@@ -174,7 +174,7 @@ Deprecated or removed — **not implemented** (current memcached does not offer 
 | SASL                                        | deprecated | hangs on binary; text auth is `-Y` (`Config.Auth`)                                                                            |
 | TAP / VBucket / Range-Ops (`RGet`/`RSet`/…) | deprecated | binary / Couchbase; not in current text+meta `protocol.txt`                                                                   |
 | `stats cachedump`                           | superseded | use `Admin().On().LRUCrawlerMetaDump` (no cache lock)                                                                         |
-| `stats sizes_enable` / `sizes_disable`      | removed    | server dropped the runtime toggle (not thread-safe); start with `-o track_sizes`; read via `Admin().On().Stats(ctx, "sizes")` |
+| `stats sizes_enable` / `sizes_disable`      | removed    | server dropped the runtime toggle (not thread-safe); start with `-o track_sizes`; read via `Admin().On().Stats(ctx, &dst, "sizes")` |
 | `misbehave`                                 | debug-only | seccomp self-test in debug builds, not an app command                                                                         |
 
 #### Code Style

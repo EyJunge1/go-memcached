@@ -102,9 +102,9 @@ func TestTLSWrapsCustomDial(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ver, err := client.Version(ctx)
+	ver, err := doVersion(client, ctx)
 	noError(t, err)
-	equal(t, "tls-ok", ver)
+	equal(t, []byte("tls-ok"), ver)
 	greater(t, rawDials, 0)
 }
 
@@ -145,7 +145,7 @@ func TestTLSHandshakeFailure(t *testing.T) {
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 
-	_, err = client.Version(context.Background())
+	err = client.Version(context.Background(), new([]byte))
 	isError(t, err)
 	isTrue(t, closed.Load())
 }
@@ -169,9 +169,9 @@ func TestTLSDefaultRawDial(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ver, err := client.Version(ctx)
+	ver, err := doVersion(client, ctx)
 	noError(t, err)
-	equal(t, "tls-default", ver)
+	equal(t, []byte("tls-default"), ver)
 }
 
 func startTLSVersionServer(t *testing.T, version string) (addr string, roots *x509.CertPool) {

@@ -81,7 +81,7 @@ func TestUnixRejectsWorldWritable(t *testing.T) {
 	client, err := New(Config{Servers: []Server{{Network: "unix", Address: path}}})
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	_, err = client.Version(context.Background())
+	err = client.Version(context.Background(), new([]byte))
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -93,7 +93,7 @@ func TestUnixSocketMaxModeRejectsExtraBits(t *testing.T) {
 	})
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	_, err = client.Version(context.Background())
+	err = client.Version(context.Background(), new([]byte))
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -103,9 +103,9 @@ func TestUnixSocketAnyModeAllowsWorldWritable(t *testing.T) {
 	client := testClient(t, "unix://"+path, func(cfg *Config) {
 		cfg.Transport.UnixSocketAnyMode = true
 	})
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "fake-1.0", ver)
+	equal(t, []byte("fake-1.0"), ver)
 }
 
 func TestVersionAllClearsDeadServer(t *testing.T) {
@@ -129,7 +129,7 @@ func TestVersionAllClearsDeadServer(t *testing.T) {
 	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	greater(t, len(client.DeadServers()), 0)
 	dead.Store(false)
-	_, errVer := client.VersionAll(context.Background())
+	errVer := client.VersionAll(context.Background(), new([]NodeVersion))
 	noError(t, errVer)
 	equal(t, 0, len(client.DeadServers()))
 }
@@ -150,7 +150,7 @@ func TestStatsAllPartialNodeFailure(t *testing.T) {
 	client := testClient(t, good.Addr()+","+ln.Addr().String(), func(cfg *Config) {
 		cfg.Failover = Failover{}
 	})
-	stats, err := client.StatsAll(context.Background())
+	stats, err := doStatsAll(client, context.Background())
 	isError(t, err)
 	equal(t, 1, len(stats))
 }

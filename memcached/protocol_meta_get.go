@@ -8,16 +8,6 @@ import (
 	"strconv"
 )
 
-var smallDecOpaque = [...]string{
-	"0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-	"10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
-	"20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-	"30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
-	"40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
-	"50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
-	"60", "61", "62", "63",
-}
-
 // metaGetFlags is the encoded mg flag set.
 type metaGetFlags struct {
 	b      bool   // key is Base64
@@ -51,15 +41,13 @@ type metaGetFlags struct {
 	L         string
 }
 
-func metaGetWireKey(key []byte, flags *metaGetFlags) []byte {
+func writeMetaGet(b *protocolBuilder, key []byte, flags *metaGetFlags) {
+	b.AddBytes(_MgBytes)
 	if flags != nil && flags.b {
-		return base64Encode(key)
+		b.AddBase64(key)
+	} else {
+		b.AddBytes(key)
 	}
-	return key
-}
-
-func writeMetaGet(b *protocolBuilder, wireKey []byte, flags *metaGetFlags) {
-	b.AddBytes(_MgBytes).AddBytes(wireKey)
 	if flags == nil {
 		b.AddCRLF()
 		return
@@ -94,24 +82,22 @@ func writeMetaNoop(b *protocolBuilder, f MetaNoop) {
 }
 
 func encodeMetaGetOwned(key []byte, flags *metaGetFlags) (wireKey, line []byte, box *[]byte) {
-	wireKey = metaGetWireKey(key, flags)
 	b := newProtocolBuilder()
 	defer b.release()
-	writeMetaGet(b, wireKey, flags)
+	writeMetaGet(b, key, flags)
 	line, box = b.takeBytes()
-	return wireKey, line, box
+	return key, line, box
 }
 
 // buildMetaGetCommand encodes mg <key> <flags>*\r\n. Quiet appends mn.
 func buildMetaGetCommand(key []byte, flags *metaGetFlags) (*request, *response) {
-	wireKey := metaGetWireKey(key, flags)
 	b := newProtocolBuilder()
 	defer b.release()
-	writeMetaGet(b, wireKey, flags)
+	writeMetaGet(b, key, flags)
 	if flags != nil && flags.q {
 		writeMetaNoop(b, MetaNoop{})
 	}
-	req := b.request(_MgBytes, wireKey)
+	req := b.request(_MgBytes, key)
 
 	var resp *response
 	if flags != nil && flags.q {
@@ -268,14 +254,7 @@ func parseMetaFlagFields(fields []byte, item *MetaItem) error {
 		}
 		start = i + 1
 	}
-	if item.KeyBase64 && len(item.WireKey) > 0 {
-		dec, derr := base64Decode(item.WireKey)
-		if derr != nil {
-			return fmt.Errorf("invalid k/b key: %w", ErrMalformedResponse)
-		}
-		item.Key = dec
-	}
-	return nil
+	return bindMetaKeyFromWire(item)
 }
 
 func applyMetaFlag(tok []byte, item *MetaItem) error {
@@ -325,10 +304,8 @@ func applyMetaFlag(tok []byte, item *MetaItem) error {
 		if n, err := parseUintFromBytes(value); err == nil && opaqueIsCanonical(value, n) {
 			item.opaqueNum = n
 			item.hasOpaqueNum = true
-			item.Opaque = internDecOpaque(n)
-		} else {
-			item.Opaque = string(value)
 		}
+		item.Opaque = append(item.Opaque[:0], value...)
 	case 'h':
 		n, err := parseUintFromBytes(value)
 		if err != nil {
@@ -337,7 +314,6 @@ func applyMetaFlag(tok []byte, item *MetaItem) error {
 		item.HitBefore = n == 1
 	case 'k':
 		item.WireKey = append(item.WireKey[:0], value...)
-		item.Key = item.WireKey
 	case 'b':
 		item.KeyBase64 = true
 	case 'W':
@@ -348,13 +324,6 @@ func applyMetaFlag(tok []byte, item *MetaItem) error {
 		item.RecacheBusy = true
 	}
 	return nil
-}
-
-func internDecOpaque(n uint64) string {
-	if n < uint64(len(smallDecOpaque)) {
-		return smallDecOpaque[n]
-	}
-	return strconv.FormatUint(n, 10)
 }
 
 func opaqueIsCanonical(b []byte, n uint64) bool {
@@ -386,12 +355,27 @@ func parseFlags(parts [][]byte, startPos int, item *MetaItem) error {
 			return err
 		}
 	}
-	if item.KeyBase64 && len(item.WireKey) > 0 {
-		dec, derr := base64Decode(item.WireKey)
+	return bindMetaKeyFromWire(item)
+}
+
+func bindMetaKeyFromWire(item *MetaItem) error {
+	if item == nil || len(item.WireKey) == 0 {
+		return nil
+	}
+	if item.KeyBase64 {
+		dst := item.Key
+		if sameByteArray(dst, item.WireKey) {
+			dst = nil
+		}
+		dec, derr := base64DecodeInto(dst, item.WireKey)
 		if derr != nil {
 			return fmt.Errorf("invalid k/b key: %w", ErrMalformedResponse)
 		}
 		item.Key = dec
+		return nil
+	}
+	if len(item.Key) == 0 {
+		item.Key = item.WireKey
 	}
 	return nil
 }

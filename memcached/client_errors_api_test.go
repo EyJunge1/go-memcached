@@ -131,9 +131,9 @@ func TestCommandErrorHeldOnGet(t *testing.T) {
 	isErrorIs(t, err, ErrCommandError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "bad args")
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "held", ver)
+	equal(t, []byte("held"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -152,9 +152,9 @@ func TestPipelineClientErrorHeld(t *testing.T) {
 	err := client.Pipeline().Store(Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}).Run(context.Background())
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad flags")
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-pipe", ver)
+	equal(t, []byte("after-pipe"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -170,13 +170,13 @@ func TestStatsClientErrorPublic(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	_, err := client.StatsAll(context.Background())
+	_, err := doStatsAll(client, context.Background())
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad flags")
 	isFalse(t, errors.Is(err, ErrTransport))
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-stats", ver)
+	equal(t, []byte("after-stats"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -259,9 +259,9 @@ func TestGetAcceptsLFOnlyEND(t *testing.T) {
 	client := testClient(t, addr)
 	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	noError(t, err)
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "lf-end", ver)
+	equal(t, []byte("lf-end"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -283,9 +283,9 @@ func TestMetaQuietBarrierAcceptsLFOnlyMN(t *testing.T) {
 	noError(t, err)
 	isErrorIs(t, res.Err(), ErrNotFound)
 	equal(t, MetaStatusEN, res.Status)
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "lf-mn", ver)
+	equal(t, []byte("lf-mn"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -304,9 +304,9 @@ func TestIncrWithQuietClientError(t *testing.T) {
 	_, err := client.Incr(context.Background(), []byte("n"), 1)
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad delta")
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-incr", ver)
+	equal(t, []byte("after-incr"), ver)
 }
 
 func TestMetaPipelineChargeKeepsSiblingHD(t *testing.T) {
@@ -438,9 +438,9 @@ func TestGetNonexistentCommandHeld(t *testing.T) {
 	_, err := doGet(client, context.Background(), [][]byte{[]byte("k")}, GetOpts{})
 	isErrorIs(t, err, ErrNonexistentCommand)
 	isFalse(t, shouldDiscardConn(err))
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-error", ver)
+	equal(t, []byte("after-error"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -460,9 +460,9 @@ func TestGetClientErrorHeld(t *testing.T) {
 	isErrorIs(t, err, ErrClientError)
 	contains(t, err.Error(), "bad flags")
 	isFalse(t, shouldDiscardConn(err))
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-get", ver)
+	equal(t, []byte("after-get"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -486,9 +486,9 @@ func TestGetAndStoreServerErrorDiscards(t *testing.T) {
 	err = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isErrorIs(t, err, ErrServerError)
 	isTrue(t, shouldDiscardConn(err))
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-oom", ver)
+	equal(t, []byte("after-oom"), ver)
 	if dials.Load() < 3 {
 		t.Fatalf("SERVER_ERROR must discard; dials=%d", dials.Load())
 	}
@@ -508,9 +508,9 @@ func TestGetValueBodyLooksLikeCLIENT_ERROR(t *testing.T) {
 	client := testClient(t, addr)
 	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("CLIENT_ERROR"), item.Value)
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-body", ver)
+	equal(t, []byte("after-body"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -592,9 +592,9 @@ func TestAdminPublicWireSentinels(t *testing.T) {
 			isFalse(t, errors.Is(err, ErrMalformedResponse))
 			isFalse(t, shouldDiscardConn(err))
 			contains(t, err.Error(), strings.Fields(tt.reply)[0])
-			ver, err := client.Version(ctx)
+			ver, err := doVersion(client, ctx)
 			noError(t, err)
-			equal(t, "after-admin", ver)
+			equal(t, []byte("after-admin"), ver)
 			if tt.pooled && dials.Load() != 1 {
 				t.Fatalf("keepalive admin sentinel discarded conn; dials=%d", dials.Load())
 			}
@@ -614,15 +614,15 @@ func TestAppStatsPrefixIsNotMalformed(t *testing.T) {
 		}
 	})
 	client := testClient(t, addr)
-	all, err := client.StatsAll(context.Background())
+	all, err := doStatsAll(client, context.Background())
 	noError(t, err)
 	hasLen(t, all, 1)
 	for _, got := range all {
 		equal(t, 0, len(got.Stats))
 	}
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "after-prefix", ver)
+	equal(t, []byte("after-prefix"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -649,11 +649,11 @@ func TestVersionAllJoinsServerError(t *testing.T) {
 	client, err := New(cfg)
 	noError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	got, err := client.VersionAll(context.Background())
+	got, err := doVersionAll(client, context.Background())
 	isErrorIs(t, err, ErrServerError)
 	equal(t, 1, len(got))
 	for _, v := range got {
-		equal(t, "good-1", v.Version)
+		equal(t, []byte("good-1"), v.Version)
 	}
 }
 

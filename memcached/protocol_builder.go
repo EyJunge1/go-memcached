@@ -32,7 +32,13 @@ var (
 	_StoredCRLFBytes  = []byte("STORED\r\n")
 	_DeletedCRLFBytes = []byte("DELETED\r\n")
 	_TouchedCRLFBytes = []byte("TOUCHED\r\n")
+	_NotFoundBytes    = []byte("NOT_FOUND")
+	_ExistsBytes      = []byte("EXISTS")
+	_NotStoredBytes   = []byte("NOT_STORED")
 	_VersionBytes     = []byte("VERSION")
+	_VersionCmdBytes  = []byte("version")
+	_VersionCRLFBytes = []byte("version\r\n")
+	_StatsCmdBytes    = []byte("stats")
 
 	_MetaMNCRLFBytes = []byte("MN\r\n")
 	_MnCRLFBytes     = []byte("mn\r\n")
@@ -125,8 +131,17 @@ func verbBytes(command string) []byte {
 
 // forecastCommonFaultLine maps a well-known status line to a sentinel, or nil.
 func forecastCommonFaultLine(line []byte) error {
-	if isKnownNominalLine(trimCRLF(line)) {
+	t := trimCRLF(line)
+	if isKnownNominalLine(t) {
 		return nil
+	}
+	switch {
+	case bytes.Equal(t, _NotFoundBytes):
+		return ErrNotFound
+	case bytes.Equal(t, _ExistsBytes):
+		return ErrExists
+	case bytes.Equal(t, _NotStoredBytes):
+		return ErrNotStored
 	}
 	hit := mapWireLine(line, wireApp)
 	if hit.Class != wireFault || errors.Is(hit.Err, ErrMalformedResponse) {
@@ -311,6 +326,35 @@ func (b *protocolBuilder) AddBytes(bs []byte) *protocolBuilder {
 	return b
 }
 
+// AddBase64 appends standard Base64(src) and a trailing space.
+func (b *protocolBuilder) AddBase64(src []byte) *protocolBuilder {
+	p := b.scratch()
+	n := base64.StdEncoding.EncodedLen(len(src))
+	start := len(*p)
+	if cap(*p)-start < n {
+		nb := make([]byte, start, start+n+defaultBufferSize)
+		copy(nb, *p)
+		*p = nb
+	}
+	*p = (*p)[:start+n]
+	base64.StdEncoding.Encode((*p)[start:start+n], src)
+	*p = append(*p, _SpaceByte)
+	return b
+}
+
+// eqStringBytes compares s and b without allocating.
+func eqStringBytes(s string, b []byte) bool {
+	if len(s) != len(b) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // AddInt appends the decimal form of i and a trailing space.
 func (b *protocolBuilder) AddInt(i int) *protocolBuilder {
 	p := b.scratch()
@@ -481,10 +525,25 @@ func base64Encode(src []byte) []byte {
 
 // base64Decode decodes src with standard Base64.
 func base64Decode(src []byte) ([]byte, error) {
-	dst := make([]byte, base64.StdEncoding.DecodedLen(len(src)))
-	n, err := base64.StdEncoding.Decode(dst, src)
+	return base64DecodeInto(nil, src)
+}
+
+// base64DecodeInto decodes src into dst when cap is enough and dst does not
+// share backing with src (WireKey). Otherwise it allocates.
+func base64DecodeInto(dst, src []byte) ([]byte, error) {
+	need := base64.StdEncoding.DecodedLen(len(src))
+	if need < 0 {
+		need = 0
+	}
+	buf := dst
+	if sameByteArray(buf, src) || cap(buf) < need {
+		buf = make([]byte, need)
+	} else {
+		buf = buf[:need]
+	}
+	n, err := base64.StdEncoding.Decode(buf, src)
 	if err != nil {
 		return nil, err
 	}
-	return dst[:n], nil
+	return buf[:n], nil
 }

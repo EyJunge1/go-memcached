@@ -26,18 +26,23 @@ func Test_parseArithmetic_empty(t *testing.T) {
 }
 
 func Test_parseVersionLine(t *testing.T) {
-	got, err := parseVersionLine([][]byte{[]byte("VERSION 1.6.29\r\n")})
-	noError(t, err)
-	equal(t, "1.6.29", got)
+	var got []byte
+	noError(t, parseVersionInto([][]byte{[]byte("VERSION 1.6.29\r\n")}, &got))
+	equal(t, []byte("1.6.29"), got)
 
-	got, err = parseVersionLine([][]byte{[]byte("VERSION  1.6.29 \r\n")})
-	noError(t, err)
-	equal(t, "1.6.29", got)
+	noError(t, parseVersionInto([][]byte{[]byte("VERSION  1.6.29 \r\n")}, &got))
+	equal(t, []byte("1.6.29"), got)
 
-	_, err = parseVersionLine(nil)
-	isErrorIs(t, err, ErrMalformedResponse)
-	_, err = parseVersionLine([][]byte{[]byte("NOTVERSION\r\n")})
-	isErrorIs(t, err, ErrMalformedResponse)
+	isErrorIs(t, parseVersionInto(nil, &got), ErrMalformedResponse)
+	isErrorIs(t, parseVersionInto([][]byte{[]byte("NOTVERSION\r\n")}, &got), ErrMalformedResponse)
+	isErrorIs(t, parseVersionInto([][]byte{[]byte("VERSION x\r\n")}, nil), ErrInvalidArgument)
+
+	line := []byte("VERSION 1.6.29\r\n")
+	buf := make([]byte, 0, 16)
+	noError(t, parseVersionInto([][]byte{line}, &buf))
+	line[8] = 'X'
+	equal(t, []byte("1.6.29"), buf)
+	equal(t, 16, cap(buf))
 }
 
 func TestReplaceAppendPrependNotStored(t *testing.T) {
@@ -163,7 +168,7 @@ func TestCancelDuringValueBodyDiscardsConn(t *testing.T) {
 	_, err = doGet(client, ctx, [][]byte{[]byte("k")}, GetOpts{})
 	cancel()
 	isError(t, err)
-	_, err = client.Version(context.Background())
+	err = client.Version(context.Background(), new([]byte))
 	noError(t, err)
 	if dials.Load() < 2 {
 		t.Fatalf("cancel during VALUE body must discard conn; dials=%d", dials.Load())
@@ -191,24 +196,26 @@ func TestStoreQuietDiscardsConn(t *testing.T) {
 func TestStatsDetailOnAllowedOnAppClient(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr(), func(cfg *Config) { cfg.AllowAdmin = true })
-	_, err := client.StatsAll(context.Background(), "sizes_enable")
+	_, err := doStatsAll(client, context.Background(), "sizes_enable")
 	noError(t, err)
-	_, err = client.StatsAll(context.Background(), "detail", "on")
+	_, err = doStatsAll(client, context.Background(), "detail", "on")
 	isErrorIs(t, err, ErrInvalidArgument)
 
 	admin := mustAdminOn(t, client)
-	_, err = admin.Stats(context.Background(), "detail", "dump")
+	_, err = doAdminStats(admin, context.Background(), "detail", "dump")
 	isErrorIs(t, err, ErrInvalidArgument)
-	got, err := admin.StatsDetail(context.Background(), StatsDetailOn)
+	got, err := doAdminStatsDetail(admin, context.Background(), StatsDetailOn)
 	noError(t, err)
 	equal(t, 0, len(got))
-	got, err = admin.StatsDetail(context.Background(), StatsDetailOff)
+	got, err = doAdminStatsDetail(admin, context.Background(), StatsDetailOff)
 	noError(t, err)
 	equal(t, 0, len(got))
-	got, err = admin.StatsDetail(context.Background(), StatsDetailDump)
+	got, err = doAdminStatsDetail(admin, context.Background(), StatsDetailDump)
 	noError(t, err)
-	equal(t, "1 2 3", got["foo"])
-	_, err = admin.StatsDetail(context.Background(), StatsDetailMode(99))
+	v, ok := lookupStat(got, "foo")
+	isTrue(t, ok)
+	equal(t, "1 2 3", v)
+	_, err = doAdminStatsDetail(admin, context.Background(), StatsDetailMode(99))
 	isErrorIs(t, err, ErrInvalidArgument)
 }
 
@@ -236,7 +243,7 @@ func TestMetaPipelineNoopDoesNotBreakBarrier(t *testing.T) {
 	contains(t, cmd, "mn")
 	contains(t, cmd, "Phint")
 	contains(t, cmd, "L/path")
-	_, err = client.Version(ctx)
+	err = client.Version(ctx, new([]byte))
 	noError(t, err)
 }
 
@@ -294,9 +301,9 @@ func TestIncrAcceptsSpacePaddedReplyKeepsConn(t *testing.T) {
 	got, err := client.Incr(context.Background(), []byte("n"), 1)
 	noError(t, err)
 	equal(t, uint64(12), got)
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "padded", ver)
+	equal(t, []byte("padded"), ver)
 	equal(t, int32(1), dials.Load())
 }
 
@@ -363,9 +370,9 @@ func TestNoReplyClientErrorDoesNotPoisonNextGet(t *testing.T) {
 	noError(t, err)
 	hasLen(t, items, 1)
 	isFalse(t, items[0].Found)
-	ver, err := client.Version(ctx)
+	ver, err := doVersion(client, ctx)
 	noError(t, err)
-	equal(t, "after-quiet", ver)
+	equal(t, []byte("after-quiet"), ver)
 	if dials.Load() < 2 {
 		t.Fatalf("quiet CLIENT_ERROR must discard conn; dials=%d", dials.Load())
 	}

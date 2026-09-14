@@ -83,14 +83,14 @@ func Test_isShutdownClosed(t *testing.T) {
 }
 
 func Test_adminStreamLineError(t *testing.T) {
-	equal(t, error(nil), adminStreamLineError("key=foo exp=-1"))
-	isErrorIs(t, adminStreamLineError("BUSY"), ErrBusy)
-	isErrorIs(t, adminStreamLineError("BUSY crawler"), ErrBusy)
-	isErrorIs(t, adminStreamLineError("ERROR"), ErrNonexistentCommand)
-	isErrorIs(t, adminStreamLineError("ERROR bad args"), ErrCommandError)
-	isErrorIs(t, adminStreamLineError("NOSPARE no class"), ErrNoSpare)
-	isErrorIs(t, adminStreamLineError("NOTFULL class"), ErrNotFull)
-	isErrorIs(t, adminStreamLineError("UNSAFE class"), ErrUnsafe)
-	isErrorIs(t, adminStreamLineError("SAME class"), ErrSame)
-	isErrorIs(t, adminStreamLineError("CLIENT_ERROR bad"), ErrClientError)
+	equal(t, error(nil), adminStreamLineError([]byte("key=foo exp=-1")))
+	isErrorIs(t, adminStreamLineError([]byte("BUSY")), ErrBusy)
+	isErrorIs(t, adminStreamLineError([]byte("BUSY crawler")), ErrBusy)
+	isErrorIs(t, adminStreamLineError([]byte("ERROR")), ErrNonexistentCommand)
+	isErrorIs(t, adminStreamLineError([]byte("ERROR bad args")), ErrCommandError)
+	isErrorIs(t, adminStreamLineError([]byte("NOSPARE no class")), ErrNoSpare)
+	isErrorIs(t, adminStreamLineError([]byte("NOTFULL class")), ErrNotFull)
+	isErrorIs(t, adminStreamLineError([]byte("UNSAFE class")), ErrUnsafe)
+	isErrorIs(t, adminStreamLineError([]byte("SAME class")), ErrSame)
+	isErrorIs(t, adminStreamLineError([]byte("CLIENT_ERROR bad")), ErrClientError)
 }

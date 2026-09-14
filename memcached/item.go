@@ -40,8 +40,8 @@ type MetaItem struct {
 	LastAccess int64
 	// Size is the s token on success.
 	Size uint64
-	// Opaque is the O token (at most 32 bytes).
-	Opaque string
+	// Opaque is the O token (at most 32 bytes). Reusing dest keeps cap.
+	Opaque []byte
 	// HitBefore is the h token.
 	HitBefore bool
 	// Won is set when this client won the Recache race (flag W).
@@ -75,7 +75,20 @@ type MetaItemDebug struct {
 	SlabClassID uint64 // cls
 	Size        uint64
 	// Fields holds me pairs that are not one of the six typed keys.
-	Fields map[string]string
+	// Reusing dest keeps Key/Value caps.
+	Fields []DebugField
+}
+
+// DebugField is one unknown me key=value pair.
+type DebugField struct {
+	Key   []byte
+	Value []byte
+}
+
+// Stat is one STAT name/value pair. Reusing dest keeps Name/Value caps.
+type Stat struct {
+	Name  []byte
+	Value []byte
 }
 
 // Err is the error for Status, if any.

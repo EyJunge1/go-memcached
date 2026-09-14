@@ -144,15 +144,22 @@ func buildLRUCrawlerCommand(args ...string) (*request, *response) {
 }
 
 // adminStreamLineError maps a dump-stream fault line, or returns nil.
-func adminStreamLineError(s string) error {
-	if s == "" {
+func adminStreamLineError(line []byte) error {
+	if len(line) == 0 {
 		return nil
 	}
-	hit := mapWireLine([]byte(s), wireDump)
+	hit := mapWireLine(line, wireDump)
 	if hit.Class == wireFault {
 		return hit.Err
 	}
 	return nil
+}
+
+func parseShutdownReply(resp *response) error {
+	if resp == nil || len(resp.rawLines) == 0 {
+		return io.EOF
+	}
+	return parseAdminReply(resp)
 }
 
 // parseAdminReply maps the first admin status line.

@@ -110,8 +110,8 @@ func TestPipelineRecvErrorDiscardsConn(t *testing.T) {
 		Store(Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")}).
 		Run(context.Background())
 	isErrorIs(t, err, ErrTransport)
-	ver, verErr := client.Version(context.Background())
+	ver, verErr := doVersion(client, context.Background())
 	noError(t, verErr)
-	equal(t, "after-close", ver)
+	equal(t, []byte("after-close"), ver)
 	greater(t, int(dials.Load()), 1)
 }

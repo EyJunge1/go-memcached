@@ -14,9 +14,9 @@ func TestUDPGetRoundTrip(t *testing.T) {
 	client := testClient(t, srv.Addr())
 	item := mustGet(t, client, context.Background(), []byte("k"))
 	equal(t, []byte("v"), item.Value)
-	ver, err := client.Version(context.Background())
+	ver, err := doVersion(client, context.Background())
 	noError(t, err)
-	equal(t, "fake-udp", ver)
+	equal(t, []byte("fake-udp"), ver)
 }
 
 func TestUDPRejectsMutation(t *testing.T) {
@@ -26,9 +26,9 @@ func TestUDPRejectsMutation(t *testing.T) {
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = doMetaGet(client, context.Background(), []byte("k"), MetaGet{Touch: expPtr(Rel(time.Second))})
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = client.StatsAll(context.Background())
+	_, err = doStatsAll(client, context.Background())
 	isErrorIs(t, err, ErrNotSupported)
-	_, err = client.Stats(context.Background())
+	_, err = doStats(client, context.Background())
 	isErrorIs(t, err, ErrNotSupported)
 	_, err = doMetaPipeline(client, context.Background(), []MetaOp{
 		{Key: []byte("a"), Get: &MetaGet{Return: MetaGetReturn{Value: true}}},
@@ -46,7 +46,7 @@ func TestUDPMetaGetAndVersionAllAllowed(t *testing.T) {
 	got, err := doMetaGet(client, context.Background(), []byte("k"), MetaGet{Return: MetaGetReturn{Value: true}})
 	noError(t, err)
 	equal(t, []byte("v"), got.Item.Value)
-	_, errVer := client.VersionAll(context.Background())
+	errVer := client.VersionAll(context.Background(), new([]NodeVersion))
 	noError(t, errVer)
 }
 

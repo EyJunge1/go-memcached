@@ -7,19 +7,30 @@ import (
 
 // buildVersionCommand encodes version\r\n.
 func buildVersionCommand() (*request, *response) {
-	req := buildRequest([]byte("version"), nil, []byte("version\r\n"))
+	req := buildRequest(_VersionCmdBytes, nil, _VersionCRLFBytes)
 	resp := buildLimitedLineResponse(1)
 	return req, resp
 }
 
-// parseVersionLine reads the string after VERSION.
-func parseVersionLine(lines [][]byte) (string, error) {
+// parseVersionInto copies the token after VERSION into dst.
+func parseVersionInto(lines [][]byte, dst *[]byte) error {
+	if dst == nil {
+		return fmt.Errorf("version dst: %w", ErrInvalidArgument)
+	}
 	if len(lines) == 0 {
-		return "", fmt.Errorf("unexpected version: %w", ErrMalformedResponse)
+		*dst = (*dst)[:0]
+		return fmt.Errorf("unexpected version: %w", ErrMalformedResponse)
 	}
 	line := trimCRLF(lines[0])
 	if !bytes.HasPrefix(line, _VersionBytes) {
-		return "", fmt.Errorf("%s: %w", string(line), ErrMalformedResponse)
+		*dst = (*dst)[:0]
+		return fmt.Errorf("%s: %w", line, ErrMalformedResponse)
 	}
-	return string(bytes.TrimSpace(line[len(_VersionBytes):])), nil
+	ver := bytes.TrimSpace(line[len(_VersionBytes):])
+	*dst = append((*dst)[:0], ver...)
+	return nil
+}
+
+func mapVersionReply(resp *response) error {
+	return parseVersionInto(resp.rawLines, resp.versionDst)
 }

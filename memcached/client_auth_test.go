@@ -55,7 +55,7 @@ func TestAuthDoesNotLeaveCredentialItem(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
-	_, err := client.VersionAll(context.Background())
+	err := client.VersionAll(context.Background(), new([]NodeVersion))
 	isErrorIs(t, err, ErrInvalidArgument)
 	srv.mu.Lock()
 	line := srv.lastSet
@@ -88,7 +88,7 @@ func TestAuthLeavesUnrelatedProbeKey(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
-	_, errVer := client.VersionAll(context.Background())
+	errVer := client.VersionAll(context.Background(), new([]NodeVersion))
 	noError(t, errVer)
 	item := mustGet(t, client, context.Background(), appKey)
 	equal(t, []byte("app-data"), item.Value)
@@ -105,7 +105,7 @@ func TestAuthHitsEveryNode(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		}
 	})
-	_, errVer := client.VersionAll(context.Background())
+	errVer := client.VersionAll(context.Background(), new([]NodeVersion))
 	noError(t, errVer)
 	equal(t, int32(2), dials.Load())
 	a.mu.Lock()
@@ -158,7 +158,7 @@ func TestAuthAllowsUnix(t *testing.T) {
 	client := testClient(t, "unix://"+path, func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "p"}
 	})
-	_, errVer := client.VersionAll(context.Background())
+	errVer := client.VersionAll(context.Background(), new([]NodeVersion))
 	noError(t, errVer)
 }
 

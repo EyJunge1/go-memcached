@@ -48,7 +48,12 @@ func validMetaArithmeticMode(m MetaArithmeticMode) bool {
 }
 
 func writeMetaArithmetic(b *protocolBuilder, key []byte, flags *metaArithmeticFlags) {
-	b.AddBytes(_MaBytes).AddBytes(key)
+	b.AddBytes(_MaBytes)
+	if flags != nil && flags.b {
+		b.AddBase64(key)
+	} else {
+		b.AddBytes(key)
+	}
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)
@@ -71,9 +76,6 @@ func writeMetaArithmetic(b *protocolBuilder, key []byte, flags *metaArithmeticFl
 }
 
 func encodeMetaArithmeticOwned(key []byte, delta uint64, flags *metaArithmeticFlags) (line []byte, box *[]byte) {
-	if flags.b {
-		key = base64Encode(key)
-	}
 	flags.D = delta
 	b := newProtocolBuilder()
 	defer b.release()
@@ -83,9 +85,6 @@ func encodeMetaArithmeticOwned(key []byte, delta uint64, flags *metaArithmeticFl
 
 // buildMetaArithmeticCommand encodes ma <key> <flags>*\r\n. Quiet appends mn.
 func buildMetaArithmeticCommand(key []byte, delta uint64, flags *metaArithmeticFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
-	}
 	flags.D = delta
 
 	b := newProtocolBuilder()

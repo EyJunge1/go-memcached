@@ -65,12 +65,72 @@ func mustStore(t testing.TB, c *Client, ctx context.Context, key, value []byte) 
 
 func mustGet(t *testing.T, c *Client, ctx context.Context, key []byte) GetResult {
 	t.Helper()
-	got, err := c.GetOne(ctx, key, GetOpts{})
+	got, err := doGetOne(c, ctx, key, GetOpts{})
 	noError(t, err)
 	if !got.Found {
 		t.Fatalf("get miss for %q", key)
 	}
 	return got
+}
+
+func doGetOne(c *Client, ctx context.Context, key []byte, opts GetOpts) (GetResult, error) {
+	var dst GetResult
+	err := c.GetOne(ctx, key, &dst, opts)
+	return dst, err
+}
+
+func doVersion(c *Client, ctx context.Context) ([]byte, error) {
+	var dst []byte
+	err := c.Version(ctx, &dst)
+	return dst, err
+}
+
+func doVersionAll(c *Client, ctx context.Context) ([]NodeVersion, error) {
+	var dst []NodeVersion
+	err := c.VersionAll(ctx, &dst)
+	return dst, err
+}
+
+func doStats(c *Client, ctx context.Context, args ...string) ([]Stat, error) {
+	var dst []Stat
+	err := c.Stats(ctx, &dst, args...)
+	return dst, err
+}
+
+func doStatsAll(c *Client, ctx context.Context, args ...string) ([]NodeStats, error) {
+	var dst []NodeStats
+	err := c.StatsAll(ctx, &dst, args...)
+	return dst, err
+}
+
+func doAdminStats(a *AdminNode, ctx context.Context, args ...string) ([]Stat, error) {
+	var dst []Stat
+	err := a.Stats(ctx, &dst, args...)
+	return dst, err
+}
+
+func doAdminStatsDetail(a *AdminNode, ctx context.Context, mode StatsDetailMode) ([]Stat, error) {
+	var dst []Stat
+	err := a.StatsDetail(ctx, &dst, mode)
+	return dst, err
+}
+
+func lookupStat(stats []Stat, name string) (string, bool) {
+	for i := range stats {
+		if string(stats[i].Name) == name {
+			return string(stats[i].Value), true
+		}
+	}
+	return "", false
+}
+
+func debugField(item MetaItemDebug, key string) string {
+	for i := range item.Fields {
+		if string(item.Fields[i].Key) == key {
+			return string(item.Fields[i].Value)
+		}
+	}
+	return ""
 }
 
 func doGet(c *Client, ctx context.Context, keys [][]byte, opts GetOpts) ([]GetResult, error) {

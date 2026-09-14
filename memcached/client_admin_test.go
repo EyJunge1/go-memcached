@@ -185,7 +185,7 @@ func TestAdminWatchCancelDiscardsConn(t *testing.T) {
 	afterWatch := dials.Load()
 	cancel()
 	time.Sleep(30 * time.Millisecond)
-	_, err = client.Version(context.Background())
+	err = client.Version(context.Background(), new([]byte))
 	noError(t, err)
 	if dials.Load() <= afterWatch {
 		t.Fatalf("watch cancel should discard the conn; dials watch=%d after=%d", afterWatch, dials.Load())

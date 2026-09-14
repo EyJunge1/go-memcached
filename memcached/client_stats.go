@@ -12,8 +12,7 @@ import (
 // statsArgsRestricted reports whether args require Admin (reset or sizes).
 func statsArgsRestricted(args []string) bool {
 	for _, a := range args {
-		switch strings.ToLower(a) {
-		case "reset", "sizes":
+		if strings.EqualFold(a, "reset") || strings.EqualFold(a, "sizes") {
 			return true
 		}
 	}
@@ -41,86 +40,95 @@ func validFreeStatsArgs(args []string) error {
 	return nil
 }
 
-// NodeStats is the STAT map from one member.
+// NodeStats is the STAT list from one member.
 type NodeStats struct {
 	Server Server
-	Stats  map[string]string
+	Stats  []Stat
 }
 
-// statsMapOnAddr reads STAT pairs from one node.
-func (c *Client) statsMapOnAddr(ctx context.Context, node *addr, args []string) (map[string]string, error) {
+func (c *Client) statsIntoOnAddr(ctx context.Context, node *addr, dst *[]Stat, args []string) error {
 	sub := strings.Join(args, " ")
 	req, resp := buildStatsCommand(sub)
 	defer releaseReqAndResp(req, resp)
-	var out map[string]string
-	resp.afterRecv = func(r *response) error {
-		var err error
-		out, err = parseStatsMap(r.rawLines)
-		return err
-	}
-	if err := c.dispatchToAddr(ctx, node, req, resp); err != nil {
-		return nil, err
-	}
-	return out, nil
+	resp.statsDst = dst
+	resp.afterRecv = mapStatsReply
+	return c.dispatchToAddr(ctx, node, req, resp)
 }
 
-// Stats reads STAT pairs from the first live node. reset, sizes, detail, and cachedump are refused; TCP only.
-func (c *Client) Stats(ctx context.Context, args ...string) (map[string]string, error) {
+// Stats reads STAT pairs from the first live node into dst.
+// dst must be non-nil. Reusing dst is the zero-allocation path when caps fit.
+// reset, sizes, detail, and cachedump are refused; TCP only.
+func (c *Client) Stats(ctx context.Context, dst *[]Stat, args ...string) error {
+	if dst == nil {
+		return fmt.Errorf("stats dst: %w", ErrInvalidArgument)
+	}
 	if err := validFreeStatsArgs(args); err != nil {
-		return nil, err
+		return err
 	}
+	sub := strings.Join(args, " ")
 	if statsArgsRestricted(args) {
-		return nil, fmt.Errorf("stats %q requires Admin: %w", strings.Join(args, " "), ErrAdminNotEnabled)
+		return fmt.Errorf("stats %q requires Admin: %w", sub, ErrAdminNotEnabled)
 	}
-	req, resp := buildStatsCommand(strings.Join(args, " "))
+	req, resp := buildStatsCommand(sub)
 	defer releaseReqAndResp(req, resp)
-	var out map[string]string
-	resp.afterRecv = func(r *response) error {
-		var err error
-		out, err = parseStatsMap(r.rawLines)
+	resp.statsDst = dst
+	resp.afterRecv = mapStatsReply
+	if err := c.dispatchFirstLive(ctx, req, resp); err != nil {
+		*dst = (*dst)[:0]
 		return err
 	}
-	if err := c.dispatchFirstLive(ctx, req, resp); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return nil
 }
 
-// StatsAll collects stats from every configured node. Filter and TCP-only match Stats.
-func (c *Client) StatsAll(ctx context.Context, args ...string) ([]NodeStats, error) {
+// StatsAll collects stats from every configured node into dst.
+// dst must be non-nil. Filter and TCP-only match Stats.
+func (c *Client) StatsAll(ctx context.Context, dst *[]NodeStats, args ...string) error {
+	if dst == nil {
+		return fmt.Errorf("stats dst: %w", ErrInvalidArgument)
+	}
 	if err := validFreeStatsArgs(args); err != nil {
-		return nil, err
+		return err
 	}
 	if statsArgsRestricted(args) {
-		return nil, fmt.Errorf("stats %q requires Admin: %w", strings.Join(args, " "), ErrAdminNotEnabled)
+		return fmt.Errorf("stats %q requires Admin: %w", strings.Join(args, " "), ErrAdminNotEnabled)
 	}
-	var out []NodeStats
+	sub := strings.Join(args, " ")
+	acc := (*dst)[:0]
 	var mu sync.Mutex
 	err := c.broadcastRequest(ctx, func(ctx context.Context, node *addr, cn wireConn) error {
-		req, resp := buildStatsCommand(strings.Join(args, " "))
+		req, resp := buildStatsCommand(sub)
 		defer releaseReqAndResp(req, resp)
+		var slot []Stat
+		resp.statsDst = &slot
+		resp.afterRecv = mapStatsReply
 		if err := c.sendOnConn(ctx, node, cn, req, resp); err != nil {
 			return err
 		}
-		m, err := parseStatsMap(resp.rawLines)
-		if err != nil {
-			return wrapRecvError(err)
-		}
 		mu.Lock()
-		out = append(out, NodeStats{Server: addrToServer(node), Stats: m})
-		mu.Unlock()
+		defer mu.Unlock()
+		i := len(acc)
+		if i < cap(acc) {
+			acc = acc[:i+1]
+		} else {
+			acc = append(acc, NodeStats{})
+		}
+		acc[i].Server = addrToServer(node)
+		acc[i].Stats = slot
 		return nil
 	})
+	*dst = acc
+	c.orderNodeStats(*dst)
 	if err != nil {
-		c.orderNodeStats(out)
-		return out, fmt.Errorf("StatsAll: %w", err)
+		return fmt.Errorf("StatsAll: %w", err)
 	}
-	c.orderNodeStats(out)
-	return out, nil
+	return nil
 }
 
 // orderNodeStats sorts StatsAll results into configured server order.
 func (c *Client) orderNodeStats(out []NodeStats) {
+	if len(out) <= 1 {
+		return
+	}
 	order := c.serverIndex()
 	sort.SliceStable(out, func(i, j int) bool {
 		return order[serverKey(out[i].Server)] < order[serverKey(out[j].Server)]

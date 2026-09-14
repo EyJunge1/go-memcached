@@ -170,6 +170,13 @@ func Test_parseValueItemsPreservesOpaqueValue(t *testing.T) {
 	equal(t, uint32(18), items[0].Flags)
 }
 
+func Test_encodeGetOneCommand(t *testing.T) {
+	req := encodeGetOneCommand("get", 0, []byte("k"))
+	equal(t, []byte("get k\r\n"), req.raw)
+	req = encodeGetOneCommand("gats", Rel(time.Second), []byte("k"))
+	equal(t, []byte("gats 1 k\r\n"), req.raw)
+}
+
 func Test_buildGetAndTouchesCommand(t *testing.T) {
 	req, resp := buildGetAndTouchesCommand("gats", Rel(time.Second), []byte("key1"), []byte("key2"))
 	defer releaseReqAndResp(req, resp)

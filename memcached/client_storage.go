@@ -44,8 +44,9 @@ func (c *Client) Store(ctx context.Context, item Item) error {
 	if err != nil {
 		return err
 	}
-	key := c.nsBytes(item.Key)
+	key, keyBox := c.nsKey(item.Key)
 	if err := c.checkKeyValue(key, item.Value); err != nil {
+		putBuilderBox(keyBox)
 		return err
 	}
 	flags, exp := item.Flags, item.Exp
@@ -60,6 +61,7 @@ func (c *Client) Store(ctx context.Context, item Item) error {
 	} else {
 		request, resp = buildStorageCommand(command, key, item.Value, flags, exp, item.Quiet)
 	}
+	request.adoptKeyBox(keyBox)
 	defer releaseReqAndResp(request, resp)
 
 	if item.Quiet {

@@ -195,6 +195,29 @@ func TestMetaDebugStatus(t *testing.T) {
 	equal(t, base64Encode(bin), item.WireKey)
 }
 
+func TestMetaDebugDestContract(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Cluster.Namespace = "ns:"
+	})
+	ctx := context.Background()
+	mustStore(t, client, ctx, []byte("k"), []byte("v"))
+
+	wire := make([]byte, 0, 32)
+	dst := MetaItemDebug{WireKey: wire}
+	noError(t, client.Meta().Debug(ctx, []byte("k"), MetaDebug{}, &dst))
+	equal(t, MetaStatusME, dst.Status)
+	equal(t, []byte("k"), dst.Key)
+	equal(t, []byte("ns:k"), dst.WireKey)
+	equal(t, 32, cap(dst.WireKey))
+	same(t, wire[:1], dst.WireKey[:1])
+	if sameByteArray(dst.Key, dst.WireKey) {
+		t.Fatal("Key aliases WireKey")
+	}
+
+	isErrorIs(t, client.Meta().Debug(ctx, []byte("k"), MetaDebug{}, nil), ErrInvalidArgument)
+}
+
 func TestMetaGetRecacheWindow(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
@@ -274,7 +297,7 @@ func TestAuthRejectsWrongPassword(t *testing.T) {
 	client := testClient(t, srv.Addr(), func(cfg *Config) {
 		cfg.Auth = &Auth{User: "u", Pass: "wrong"}
 	})
-	_, err := client.VersionAll(context.Background())
+	err := client.VersionAll(context.Background(), new([]NodeVersion))
 	isErrorIs(t, err, ErrClientError)
 	isFalse(t, errors.Is(err, ErrTransport))
 	contains(t, err.Error(), "authentication failure")

@@ -157,6 +157,19 @@ func Test_udpFragmentCap(t *testing.T) {
 	isErrorIs(t, err, ErrMalformedResponse)
 }
 
+func Test_udpRequestAllowedAllocs(t *testing.T) {
+	req := buildRequest(_GetBytes, []byte("k"), []byte("get k\r\n"))
+	defer req.release()
+	allocs := testing.AllocsPerRun(200, func() {
+		if err := udpRequestAllowed(req); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("udpRequestAllowed allocs = %v, want 0", allocs)
+	}
+}
+
 func Test_udpMetaRawAllowedAllocs(t *testing.T) {
 	raw := []byte("mg k v\r\n")
 	allocs := testing.AllocsPerRun(200, func() {

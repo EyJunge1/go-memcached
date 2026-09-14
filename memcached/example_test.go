@@ -24,7 +24,8 @@ func Example() {
 	if err := client.Store(ctx, memcached.Item{Key: []byte("key"), Value: []byte("value")}); err != nil {
 		log.Fatal(err)
 	}
-	got, err := client.GetOne(ctx, []byte("key"), memcached.GetOpts{})
+	var got memcached.GetResult
+	err = client.GetOne(ctx, []byte("key"), &got, memcached.GetOpts{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -104,7 +105,8 @@ func ExampleClient_Stats() {
 	}
 	defer func() { _ = client.Close() }()
 
-	got, err := client.Stats(context.Background(), "items")
+	var got []memcached.Stat
+	err = client.Stats(context.Background(), &got, "items")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -120,7 +122,8 @@ func ExampleClient_StatsAll() {
 	}
 	defer func() { _ = client.Close() }()
 
-	all, err := client.StatsAll(context.Background())
+	var all []memcached.NodeStats
+	err = client.StatsAll(context.Background(), &all)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -291,11 +294,12 @@ func ExampleClient_Version() {
 	}
 	defer func() { _ = client.Close() }()
 
-	ver, err := client.Version(context.Background())
+	var ver []byte
+	err = client.Version(context.Background(), &ver)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(ver)
+	fmt.Println(string(ver))
 }
 
 func ExampleClient_VersionAll() {
@@ -307,7 +311,8 @@ func ExampleClient_VersionAll() {
 	}
 	defer func() { _ = client.Close() }()
 
-	all, err := client.VersionAll(context.Background())
+	var all []memcached.NodeVersion
+	err = client.VersionAll(context.Background(), &all)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -399,7 +404,8 @@ func ExampleAdminNode_StatsDetail() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	got, err := admin.On(client.Servers()[0]).StatsDetail(context.Background(), memcached.StatsDetailDump)
+	var got []memcached.Stat
+	err = admin.On(client.Servers()[0]).StatsDetail(context.Background(), &got, memcached.StatsDetailDump)
 	if err != nil {
 		log.Fatal(err)
 	}

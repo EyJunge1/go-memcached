@@ -72,6 +72,9 @@ func (c *Client) flushAllBroadcast(ctx context.Context, delayFor func(int) Expti
 	}
 
 	addrs, _ := c.snapshotCluster()
+	if len(addrs) == 1 {
+		return c.flushAllOnAddr(ctx, addrs[0], delayFor(0), quiet)
+	}
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(addrs))
 	for i, addr := range addrs {

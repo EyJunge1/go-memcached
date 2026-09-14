@@ -4,7 +4,7 @@
 //   - Store sends set, add, replace, append, prepend, or cas (zero Mode is set).
 //     Check NOT_STORED, EXISTS, and NOT_FOUND with errors.Is.
 //   - Get fills a caller-provided []GetResult aligned with the keys. A miss
-//     leaves Found false and is not ErrNotFound. GetOne is the single-key form.
+//     leaves Found false and is not ErrNotFound. GetOne writes one slot.
 //   - Quiet on Item, MutateOpts, and FlushOpts adds noreply. The connection is
 //     discarded after send; CLIENT_ERROR is still returned. AdminOpts.Quiet
 //     means only that the write was sent.
@@ -14,8 +14,8 @@
 //   - Meta() exposes mg, ms, md, mn, ma, me (Get, Set, Delete, Noop,
 //     Arithmetic, Debug, Pipeline). Each command writes into a caller
 //     dest; reuse dest for the zero-allocation path.
-//   - Version / VersionAll and Stats / StatsAll are the health and stats
-//     entry points. reset and sizes are on Admin; detail is AdminNode.StatsDetail.
+//   - Version / VersionAll and Stats / StatsAll write into caller dests.
+//     reset and sizes are on Admin; detail is AdminNode.StatsDetail.
 //   - flush_all is Admin().On or All Flush and requires Config.AllowFlushAll.
 //
 // Client.Pipeline is a text write-then-read batch. Meta().Pipeline is the

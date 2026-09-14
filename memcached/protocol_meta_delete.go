@@ -23,7 +23,12 @@ type metaDeleteFlags struct {
 }
 
 func writeMetaDelete(b *protocolBuilder, key []byte, flags *metaDeleteFlags) {
-	b.AddBytes(_MdBytes).AddBytes(key)
+	b.AddBytes(_MdBytes)
+	if flags.b {
+		b.AddBase64(key)
+	} else {
+		b.AddBytes(key)
+	}
 	b.AddFlagBool("b", flags.b)
 	b.AddFlagUintPresent("C", flags.C, flags.Cset)
 	b.AddFlagUintPresent("E", flags.E, flags.Eset)
@@ -39,9 +44,6 @@ func writeMetaDelete(b *protocolBuilder, key []byte, flags *metaDeleteFlags) {
 }
 
 func encodeMetaDeleteOwned(key []byte, flags *metaDeleteFlags) (line []byte, box *[]byte) {
-	if flags.b {
-		key = base64Encode(key)
-	}
 	b := newProtocolBuilder()
 	defer b.release()
 	writeMetaDelete(b, key, flags)
@@ -50,10 +52,6 @@ func encodeMetaDeleteOwned(key []byte, flags *metaDeleteFlags) (line []byte, box
 
 // buildMetaDeleteCommand encodes md <key> <flags>*\r\n.
 func buildMetaDeleteCommand(key []byte, flags *metaDeleteFlags) (*request, *response) {
-	if flags.b {
-		key = base64Encode(key)
-	}
-
 	b := newProtocolBuilder()
 	defer b.release()
 	writeMetaDelete(b, key, flags)

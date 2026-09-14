@@ -16,8 +16,8 @@ func TestOurs(t *testing.T) {
 	if err := c.Store(ctx, ours.Item{Key: key, Value: val}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.GetOne(ctx, key, ours.GetOpts{})
-	if err != nil {
+	var got ours.GetResult
+	if err := c.GetOne(ctx, key, &got, ours.GetOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if !got.Found || string(got.Value) != string(val) {

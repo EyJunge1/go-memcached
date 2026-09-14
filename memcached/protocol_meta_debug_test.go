@@ -30,9 +30,9 @@ func Test_parseMetaItemDebug_unknownFields(t *testing.T) {
 	err := parseMetaItemDebug([][]byte{[]byte("ME foo exp=-1 la=2 cas=18 fetch=no cls=1 size=65 extra=yes path=/x\r\n")}, item, false)
 	noError(t, err)
 	equal(t, []byte("foo"), item.Key)
-	equal(t, "yes", item.Fields["extra"])
-	equal(t, "/x", item.Fields["path"])
-	isTrue(t, item.Fields["exp"] == "")
+	equal(t, "yes", debugField(*item, "extra"))
+	equal(t, "/x", debugField(*item, "path"))
+	isTrue(t, debugField(*item, "exp") == "")
 }
 
 func Test_parseMetaItemDebug_binaryKey(t *testing.T) {

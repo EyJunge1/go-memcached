@@ -41,7 +41,7 @@ func TestAdminStatsAndCrawler(t *testing.T) {
 		t.Logf("crawler enable: %v", err)
 	}
 
-	_, err = node.StatsDetail(ctx, memcached.StatsDetailDump)
+	_, err = doAdminStatsDetail(node, ctx, memcached.StatsDetailDump)
 	noError(t, err)
 
 	key := liveKey(t, "dump")

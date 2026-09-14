@@ -38,25 +38,65 @@ func (c *Client) Get(ctx context.Context, keys [][]byte, dst []GetResult, opts G
 	return c.getFromNodes(ctx, command, exp, keys, dst, withCAS)
 }
 
-// GetOne is Get for a single key. It allocates the value when the key hits.
-func (c *Client) GetOne(ctx context.Context, key []byte, opts GetOpts) (GetResult, error) {
-	var (
-		keys [1][]byte
-		dst  [1]GetResult
-	)
-	keys[0] = key
-	err := c.Get(ctx, keys[:], dst[:], opts)
-	return dst[0], err
+// GetOne is Get for a single key. dst must be non-nil. Reusing dst is the
+// zero-allocation path when dst.Value has enough cap.
+func (c *Client) GetOne(ctx context.Context, key []byte, dst *GetResult, opts GetOpts) error {
+	if dst == nil {
+		return fmt.Errorf("get dest: %w", ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	resetGetResult(dst)
+	command, withCAS := getCommand(opts)
+	var exp Exptime
+	if opts.Touch != nil {
+		exp = *opts.Touch
+	}
+
+	addrs, picker := c.snapshotCluster()
+	if picker == nil || len(addrs) == 0 {
+		return fmt.Errorf("no servers configured: %w", ErrInvalidAddress)
+	}
+	addrs = c.liveAddrs(addrs)
+
+	wired, keyBox := c.nsKey(key)
+	if err := validateKeyAndValue(wired, nil); err != nil {
+		putBuilderBox(keyBox)
+		return err
+	}
+
+	var node *addr
+	if len(addrs) == 1 {
+		node = addrs[0]
+	} else {
+		picked, err := picker.Pick(addrs, wired)
+		if err != nil {
+			putBuilderBox(keyBox)
+			return fmt.Errorf("pick node failed: %w", err)
+		}
+		node = picked
+	}
+
+	req := encodeGetOneCommand(command, exp, wired)
+	req.adoptKeyBox(keyBox)
+	resp := buildRetrievalResponseOne(wired, dst, withCAS)
+	defer releaseReqAndResp(req, resp)
+	return c.dispatchToAddr(ctx, node, req, resp)
 }
 
 func resetGetResults(dst []GetResult) {
 	for i := range dst {
-		dst[i].Found = false
-		dst[i].Flags = 0
-		dst[i].CAS = 0
-		if dst[i].Value != nil {
-			dst[i].Value = dst[i].Value[:0]
-		}
+		resetGetResult(&dst[i])
+	}
+}
+
+func resetGetResult(dst *GetResult) {
+	dst.Found = false
+	dst.Flags = 0
+	dst.CAS = 0
+	if dst.Value != nil {
+		dst.Value = dst.Value[:0]
 	}
 }
 
@@ -103,10 +143,11 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 	}
 	addrs = c.liveAddrs(addrs)
 
-	wired, err := c.wireGetKeys(keys)
+	wired, box, hdrp, err := c.wireGetKeys(keys)
 	if err != nil {
 		return err
 	}
+	defer releaseWiredGetKeys(box, hdrp)
 
 	if len(addrs) == 1 {
 		return c.getFromAddr(ctx, addrs[0], command, expiry, wired, nil, dst, withCAS)
@@ -180,26 +221,6 @@ func (c *Client) getFromNodes(ctx context.Context, command string, expiry Exptim
 	}
 	wg.Wait()
 	return errors.Join(errs...)
-}
-
-// wireGetKeys prefixes keys with the namespace when one is configured.
-func (c *Client) wireGetKeys(keys [][]byte) ([][]byte, error) {
-	if !c.hasNS() {
-		for _, key := range keys {
-			if err := validateKeyAndValue(key, nil); err != nil {
-				return nil, err
-			}
-		}
-		return keys, nil
-	}
-	wired := make([][]byte, len(keys))
-	for i, key := range keys {
-		wired[i] = c.nsBytes(key)
-		if err := validateKeyAndValue(wired[i], nil); err != nil {
-			return nil, err
-		}
-	}
-	return wired, nil
 }
 
 func matchRetrievalKey(keys [][]byte, want []byte, cursor *int) (int, bool) {

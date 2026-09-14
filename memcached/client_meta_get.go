@@ -22,18 +22,21 @@ func (m *MetaClient) Get(ctx context.Context, key []byte, f MetaGet, dst *MetaRe
 		return err
 	}
 	mgFlags := f.toFlags()
-	key = c.nsBytes(key)
+	key, keyBox := c.nsKey(key)
 	if err := c.checkKeyValueFlags(key, nil, mgFlags.b); err != nil {
+		putBuilderBox(keyBox)
 		return err
 	}
 	if mgFlags.OtokenSet {
 		if err := validOpaqueToken(mgFlags.Otoken); err != nil {
+			putBuilderBox(keyBox)
 			return err
 		}
 	}
 
 	keep := takeMetaKeep(dst)
 	req, resp := buildMetaGetCommand(key, &mgFlags)
+	req.adoptKeyBox(keyBox)
 	resp.metaItem = &dst.Item
 	defer releaseReqAndResp(req, resp)
 
@@ -75,12 +78,9 @@ func applyMetaGetDest(dst *MetaResult, keep metaKeep, c *Client, key []byte, f M
 		} else {
 			item.WireKey = nil
 		}
-	} else if len(item.Key) == 0 {
-		item.Key = append(keep.key[:0], c.stripNS(key)...)
-		item.WireKey = item.Key
-	} else if c.hasNS() {
-		item.Key = c.stripNS(item.Key)
+		return
 	}
+	copyMetaUserKey(item, keep.userKey, c, c.stripNS(key), true)
 }
 
 func metaItemStatusErr(item *MetaItem, noReply, quietMissAsNotFound bool) error {
@@ -133,14 +133,17 @@ type preparedMetaOp struct {
 	body      []byte
 	tail      []byte
 	lineBox   *[]byte
+	keyBox    *[]byte
 	tok       string
 	tokNum    uint64
 	hasTok    bool
 	getFlags  metaGetFlags
 	hasGet    bool
-	returnKey bool
-	noop      bool
-	barrier   MetaNoop
+	returnKey  bool
+	keepUser   []byte
+	keepOpaque []byte
+	noop       bool
+	barrier    MetaNoop
 }
 
 const maxPooledPreparedMeta = 256
@@ -170,6 +173,7 @@ func putPreparedMeta(p *[]preparedMetaOp) {
 	s := *p
 	for i := range s {
 		putBuilderBox(s[i].lineBox)
+		putBuilderBox(s[i].keyBox)
 		s[i] = preparedMetaOp{}
 	}
 	if cap(s) > maxPooledPreparedMeta {
@@ -205,13 +209,14 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 	if metaOpKinds(op) != 1 {
 		return preparedMetaOp{}, fmt.Errorf("meta op: %w", ErrInvalidArgument)
 	}
-	key := c.nsBytes(op.Key)
-	prep := preparedMetaOp{idx: idx, key: key}
+	key, keyBox := c.nsKey(op.Key)
+	prep := preparedMetaOp{idx: idx, key: key, keyBox: keyBox}
 
 	switch {
 	case op.Get != nil:
 		f := *op.Get
 		if err := f.validate(); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		mg := f.toFlags()
@@ -219,9 +224,11 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			mg.q = true
 		}
 		if err := c.checkKeyValueFlags(key, nil, mg.b); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		if err := ensurePipelineOpaque(&mg, idx); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		_, line, box := encodeMetaGetOwned(key, &mg)
@@ -239,15 +246,19 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		ms := f.toFlags()
 		ms.q = true
 		if err := c.checkKeyValueFlags(key, op.Body, ms.b); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		if err := f.validate(); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		if !validMetaSetMode(ms.M) {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, fmt.Errorf("invalid meta set mode: %w", ErrInvalidArgument)
 		}
 		if err := ensureSetOpaque(&ms, idx); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		header, box, body, tail := encodeMetaSetOwned(key, op.Body, &ms)
@@ -264,14 +275,17 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 	case op.Del != nil:
 		f := *op.Del
 		if err := f.validate(); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		md := f.toFlags()
 		md.q = true
 		if err := c.checkKeyValueFlags(key, nil, md.b); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		if err := ensureDeleteOpaque(&md, idx); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		line, box := encodeMetaDeleteOwned(key, &md)
@@ -285,6 +299,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 	case op.Arith != nil:
 		f := *op.Arith
 		if err := f.validate(); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		ma := f.toFlags()
@@ -292,12 +307,15 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 			ma.q = true
 		}
 		if err := c.checkKeyValueFlags(key, nil, ma.b); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		if !validMetaArithmeticMode(ma.M) {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, fmt.Errorf("invalid meta arithmetic mode: %w", ErrInvalidArgument)
 		}
 		if err := ensureArithOpaque(&ma, idx); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		line, box := encodeMetaArithmeticOwned(key, op.Delta, &ma)
@@ -312,6 +330,7 @@ func encodeMetaPipelineOp(c *Client, op MetaOp, idx int) (preparedMetaOp, error)
 		// The batch already ends with mn; another mn would make the barrier reader stop early.
 		f := *op.Noop
 		if err := f.validate(); err != nil {
+			putBuilderBox(keyBox)
 			return preparedMetaOp{}, err
 		}
 		prep.cmd = _MnBytes
@@ -404,26 +423,18 @@ func (m *MetaClient) Pipeline(ctx context.Context, ops []MetaOp, dst []MetaResul
 	}
 
 	prepBox := getPreparedMeta(len(ops))
-	prepared := *prepBox
-	defer func() {
-		*prepBox = prepared
-		putPreparedMeta(prepBox)
-	}()
+	defer putPreparedMeta(prepBox)
 	out := dst
 	for i, op := range ops {
 		p, err := encodeMetaPipelineOp(c, op, i)
 		if err != nil {
-			for j := range prepared {
-				putBuilderBox(prepared[j].lineBox)
-				prepared[j].lineBox = nil
-			}
 			return err
 		}
-		prepared = append(prepared, p)
-		if p.returnKey {
-			out[i].Item.Key = p.key
-		}
+		p.keepUser = out[i].Item.Key
+		p.keepOpaque = out[i].Item.Opaque
+		*prepBox = append(*prepBox, p)
 	}
+	prepared := *prepBox
 
 	addrs, picker := c.snapshotCluster()
 	if picker == nil || len(addrs) == 0 {
@@ -476,9 +487,16 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 		return nil
 	}
 	box := takeBuilderBox()
+	if err := duplicatePipelineOpaque(group); err != nil {
+		putBuilderBox(box)
+		for i := range group {
+			putBuilderBox(group[i].lineBox)
+			group[i].lineBox = nil
+		}
+		return err
+	}
 	raw := (*box)[:0]
 	var barrier MetaNoop
-	var byOpaque map[string]int
 	for i := range group {
 		p := &group[i]
 		raw = append(raw, p.line...)
@@ -489,22 +507,6 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 		if p.noop {
 			barrier = p.barrier
 		}
-		if p.tok == "" {
-			continue
-		}
-		if byOpaque == nil {
-			byOpaque = make(map[string]int, len(group))
-		}
-		if _, exists := byOpaque[p.tok]; exists {
-			*box = raw
-			putBuilderBox(box)
-			for j := i + 1; j < len(group); j++ {
-				putBuilderBox(group[j].lineBox)
-				group[j].lineBox = nil
-			}
-			return fmt.Errorf("duplicate opaque %q: %w", p.tok, ErrInvalidArgument)
-		}
-		byOpaque[p.tok] = p.idx
 	}
 	raw = appendMetaQuietBarrier(raw, barrier)
 	*box = raw
@@ -515,7 +517,7 @@ func (c *Client) metaPipelineDispatch(ctx context.Context, node *addr, group []p
 	resp.metaPipeC = c
 	resp.metaPipeDst = out
 	resp.metaPipeGroup = group
-	resp.metaPipeByOpaque = byOpaque
+	resp.metaPipeByOpaque = nil
 	defer releaseReqAndResp(req, resp)
 
 	dispatchErr := c.dispatchToAddr(ctx, node, req, resp)
@@ -620,30 +622,58 @@ func finishMetaPipelineDest(c *Client, out []MetaResult, idx int, p *preparedMet
 		}
 		return
 	}
-	if len(dst.Item.Key) == 0 {
-		dst.Item.Key = append(dst.Item.WireKey[:0], c.stripNS(p.key)...)
-		dst.Item.WireKey = dst.Item.Key
-	} else if c.hasNS() {
-		dst.Item.Key = c.stripNS(dst.Item.Key)
+	fallback := []byte(nil)
+	if c != nil {
+		fallback = c.stripNS(p.key)
 	}
+	copyMetaUserKey(&dst.Item, p.keepUser, c, fallback, true)
 }
 
 func storeMetaPipelineResult(c *Client, out []MetaResult, idx int, p *preparedMetaOp, res MetaResult) {
-	keep := metaKeep{value: out[idx].Item.Value, key: out[idx].Item.WireKey}
+	keepVal := out[idx].Item.Value
+	keepWire := out[idx].Item.WireKey
+	keepUser := []byte(nil)
+	keepOpaque := []byte(nil)
+	if p != nil {
+		keepUser = p.keepUser
+		keepOpaque = p.keepOpaque
+	}
 	if p == nil || !p.returnKey {
 		res.Item.Key = nil
 		res.Item.WireKey = nil
-	} else if len(res.Item.Key) == 0 {
-		res.Item.Key = append(keep.key[:0], c.stripNS(p.key)...)
-		res.Item.WireKey = res.Item.Key
-	} else if c.hasNS() {
-		res.Item.Key = c.stripNS(res.Item.Key)
+	} else {
+		fallback := []byte(nil)
+		if c != nil {
+			fallback = c.stripNS(p.key)
+		}
+		copyMetaUserKey(&res.Item, keepUser, c, fallback, true)
 	}
-	res.Item.Value = ownValue(keep.value, res.Item.Value)
+	res.Item.Value = ownValue(keepVal, res.Item.Value)
+	if len(res.Item.Opaque) == 0 {
+		if keepOpaque != nil {
+			res.Item.Opaque = keepOpaque[:0]
+		}
+	} else if keepOpaque != nil {
+		res.Item.Opaque = append(keepOpaque[:0], res.Item.Opaque...)
+	}
 	out[idx] = res
-	if (p == nil || !p.returnKey) && keep.key != nil {
-		out[idx].Item.WireKey = keep.key[:0]
+	if (p == nil || !p.returnKey) && keepWire != nil {
+		out[idx].Item.WireKey = keepWire[:0]
 	}
+}
+
+func duplicatePipelineOpaque(group []preparedMetaOp) error {
+	for i := range group {
+		if group[i].tok == "" {
+			continue
+		}
+		for j := i + 1; j < len(group); j++ {
+			if group[j].tok != "" && group[i].tok == group[j].tok {
+				return fmt.Errorf("duplicate opaque %q: %w", group[i].tok, ErrInvalidArgument)
+			}
+		}
+	}
+	return nil
 }
 
 func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp, byOpaque map[string]int) (int, bool) {
@@ -656,8 +686,10 @@ func matchMetaPipelineOpaque(header []byte, group []preparedMetaOp, byOpaque map
 		}
 	}
 	if len(tok) > 0 {
-		if idx, ok := byOpaque[string(tok)]; ok {
-			return idx, true
+		for _, p := range group {
+			if p.tok != "" && eqStringBytes(p.tok, tok) {
+				return p.idx, true
+			}
 		}
 	}
 	return 0, false
@@ -694,4 +726,3 @@ func scanMetaOpaque(header []byte) (num uint64, hasNum bool, tok []byte) {
 	}
 	return 0, false, nil
 }
-

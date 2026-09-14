@@ -17,14 +17,15 @@ func (m *MetaClient) Noop(ctx context.Context, f MetaNoop, dst *MetaResult) erro
 	req, resp := buildMetaNoopCommand(f)
 	defer releaseReqAndResp(req, resp)
 
+	resp.afterRecv = mapMetaNoopReply
 	if err := m.c.dispatchRequest(ctx, req, resp); err != nil {
-		resetMetaGetDest(dst, keep)
-		return fmt.Errorf("request failed: %w", err)
-	}
-	if err := mapStatusLine(resp, _MetaMNCRLFBytes); err != nil {
 		resetMetaGetDest(dst, keep)
 		return fmt.Errorf("request failed: %w", err)
 	}
 	dst.Status = MetaStatusMN
 	return nil
+}
+
+func mapMetaNoopReply(resp *response) error {
+	return mapStatusLine(resp, _MetaMNCRLFBytes)
 }
