@@ -2,5 +2,6 @@
 .DS_Store
 coverage.txt
 coverage.html
+**/coverage.txt
 *.test
 /results/

@@ -5,8 +5,7 @@ Concurrent Go client for memcached text and meta protocols.
 ### Install
 
 ```bash
-# module root (package import stays …/memcached)
-go get github.com/EyJunge1/go-memcached@v0.1.0
+go get github.com/EyJunge1/go-memcached/memcached@v0.1.0
 
 # optional OpenTelemetry adapter (separate nested module / tag)
 go get github.com/EyJunge1/go-memcached/memcachedotel@v0.1.0
@@ -14,14 +13,16 @@ go get github.com/EyJunge1/go-memcached/memcachedotel@v0.1.0
 
 | Module path | Import | Git tag |
 | --- | --- | --- |
-| `github.com/EyJunge1/go-memcached` | `…/memcached` | `vX.Y.Z` |
+| `github.com/EyJunge1/go-memcached/memcached` | `…/memcached` | `memcached/vX.Y.Z` |
 | `github.com/EyJunge1/go-memcached/memcachedotel` | `…/memcachedotel` | `memcachedotel/vX.Y.Z` |
 
-Release the core tag first, then tag `memcachedotel/v…`. See `.github/workflows/release.yml`.
+Release the core tag (`memcached/v…`) first, then tag `memcachedotel/v…`. See `.github/workflows/release.yml`.
 
 ### Usage
 
 ```go
+import "github.com/EyJunge1/go-memcached/memcached"
+
 client, err := memcached.NewFromAddrs("localhost:11211")
 if err != nil {
 	log.Fatal(err)

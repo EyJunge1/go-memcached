@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "memcached/v*"
       - "memcachedotel/v*"
 
 concurrency:
@@ -34,31 +34,31 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-          if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            module=root
+          if [[ "$tag" =~ ^memcached/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            module=memcached
             ver="${BASH_REMATCH[1]}"
           elif [[ "$tag" =~ ^memcachedotel/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             module=memcachedotel
             ver="${BASH_REMATCH[1]}"
           else
             echo "Unsupported release tag: $tag"
-            echo "Expected vX.Y.Z (core) or memcachedotel/vX.Y.Z (memcachedotel module)"
+            echo "Expected memcached/vX.Y.Z or memcachedotel/vX.Y.Z"
             exit 1
           fi
 
           if [[ "$module" == "memcachedotel" ]]; then
             # Nested modules must depend on a real published core tag (replace is local-only).
-            req="$(awk '/^require \(/{p=1;next} /^)/{p=0} p && /github\.com\/EyJunge1\/go-memcached /{print $2; exit}' memcachedotel/go.mod)"
+            req="$(awk '/^require \(/{p=1;next} /^)/{p=0} p && /github\.com\/EyJunge1\/go-memcached\/memcached /{print $2; exit}' memcachedotel/go.mod)"
             if [[ -z "$req" ]]; then
-              req="$(awk '/^require github\.com\/EyJunge1\/go-memcached /{print $2; exit}' memcachedotel/go.mod)"
+              req="$(awk '/^require github\.com\/EyJunge1\/go-memcached\/memcached /{print $2; exit}' memcachedotel/go.mod)"
             fi
             if [[ ! "$req" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "memcachedotel/go.mod must require a SemVer core tag before memcachedotel release (got: ${req:-empty})"
-              echo "Bump require to e.g. v${ver} (or the current core release), keep replace => ../ for local CI."
+              echo "Bump require to e.g. v${ver} (or the current core release), keep replace => ../memcached for local CI."
               exit 1
             fi
-            if ! git rev-parse -q --verify "refs/tags/${req}" >/dev/null; then
-              echo "Core tag ${req} (required by memcachedotel/go.mod) does not exist yet"
+            if ! git rev-parse -q --verify "refs/tags/memcached/${req}" >/dev/null; then
+              echo "Core tag memcached/${req} (required by memcachedotel/go.mod) does not exist yet"
               echo "Tag and release the core module first, then tag memcachedotel/v…"
               exit 1
             fi
@@ -88,19 +88,21 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           latest_args=(--latest=false)
-          # Only root SemVer tags compete for GitHub "latest".
-          if [[ "$MODULE" == "root" ]]; then
+          # Only core SemVer tags compete for GitHub "latest".
+          if [[ "$MODULE" == "memcached" ]]; then
             latest_args=(--latest)
-            mapfile -t tags < <(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V)
+            mapfile -t tags < <(git tag -l 'memcached/v*.*.*' | grep -E '^memcached/v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's|^memcached/v||' | sort -V)
             if [[ ${#tags[@]} -gt 0 ]]; then
-              highest="v${tags[-1]}"
+              highest="memcached/v${tags[-1]}"
               if [[ "$tag" != "$highest" ]]; then
                 latest_args=(--latest=false)
               fi
             fi
           fi
           title="$tag"
-          if [[ "$MODULE" == "memcachedotel" ]]; then
+          if [[ "$MODULE" == "memcached" ]]; then
+            title="memcached ${tag#memcached/}"
+          elif [[ "$MODULE" == "memcachedotel" ]]; then
             title="memcachedotel ${tag#memcachedotel/}"
           fi
           gh release create "$tag" \

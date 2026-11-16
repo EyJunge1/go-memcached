@@ -28,7 +28,7 @@ BENCH_COUNT ?= 10
 
 lint:
 	@echo "Running golangci-lint (core)"
-	@go run $(GOLANGCI_LINT) run ./...
+	@cd memcached && go run $(GOLANGCI_LINT) run ./...
 	@echo "Running golangci-lint (memcachedotel)"
 	@cd memcachedotel && go run $(GOLANGCI_LINT) run ./...
 	@echo "Running golangci-lint (benchmark)"
@@ -52,7 +52,7 @@ imports-check:
 
 vet:
 	@echo "Running go vet (core)"
-	@go vet ./...
+	@cd memcached && go vet ./...
 	@echo "Running go vet (memcachedotel)"
 	@cd memcachedotel && go vet ./...
 	@echo "Running go vet (benchmark)"
@@ -61,13 +61,13 @@ vet:
 gosec:
 	@echo "Running gosec (core)"
 	@# G401/G501: Ketama/libmemcached continuum digests require MD5 (not crypto).
-	@go run $(GOSEC) -exclude=G401,G501 ./...
+	@cd memcached && go run $(GOSEC) -exclude=G401,G501 ./...
 	@echo "Running gosec (memcachedotel)"
 	@cd memcachedotel && go run $(GOSEC) -exclude=G401,G501 ./...
 
 staticcheck:
 	@echo "Running staticcheck (core)"
-	@go run $(STATICCHECK) ./...
+	@cd memcached && go run $(STATICCHECK) ./...
 	@echo "Running staticcheck (memcachedotel)"
 	@cd memcachedotel && go run $(STATICCHECK) ./...
 
@@ -78,7 +78,7 @@ gocyclo:
 
 test:
 	@echo "Running tests (core)"
-	@go test -v -race ./...
+	@cd memcached && go test -v -race ./...
 	@echo "Running tests (memcachedotel)"
 	@cd memcachedotel && go test -v -race ./...
 
@@ -93,14 +93,14 @@ memcachedotel-vuln:
 
 coverage:
 	@echo "Running tests with coverage (core)"
-	@go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-	@go tool cover -html=coverage.txt -o coverage.html
+	@cd memcached && go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+	@go tool cover -html=memcached/coverage.txt -o coverage.html
 	@echo "Running tests with coverage (memcachedotel)"
 	@cd memcachedotel && go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
 vuln:
 	@echo "Running govulncheck (core)"
-	@go run $(GOVULNCHECK) ./...
+	@cd memcached && go run $(GOVULNCHECK) ./...
 	@echo "Running govulncheck (memcachedotel)"
 	@cd memcachedotel && go run $(GOVULNCHECK) ./...
 
@@ -115,8 +115,8 @@ gorelease:
 	trap 'rm -rf "$$tmp"' EXIT; \
 	tar -C "$$src" --exclude .git --exclude coverage.txt --exclude coverage.html -cf - . | tar -C "$$tmp" -xf -; \
 	echo "Running gorelease (core)"; \
-	( cd "$$tmp" && go run $(GORELEASE) ); \
-	req=$$(cd "$$tmp/memcachedotel" && go list -m -f '{{.Version}}' github.com/EyJunge1/go-memcached); \
+	( cd "$$tmp/memcached" && go run $(GORELEASE) ); \
+	req=$$(cd "$$tmp/memcachedotel" && go list -m -f '{{.Version}}' github.com/EyJunge1/go-memcached/memcached); \
 	if printf '%s\n' "$$req" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
 		echo "Running gorelease (memcachedotel)"; \
 		( cd "$$tmp/memcachedotel" && go run $(GORELEASE) ); \
@@ -134,7 +134,7 @@ BENCH_COMPOSE := podman compose -f benchmark/compose.yaml
 
 bench-micro:
 	@echo "Running offline ProtocolBuilder microbenchmarks"
-	@go test -run=^$$ -bench=^BenchmarkProtocolBuilder -benchmem ./memcached/
+	@cd memcached && go test -run=^$$ -bench=^BenchmarkProtocolBuilder -benchmem ./
 
 bench-compare: podman-ready
 	@echo "Starting bench memcached (memcached:$(MEMCACHED_IMAGE))"
@@ -159,5 +159,6 @@ pprof:
 
 clean:
 	@echo "Cleaning build artifacts"
-	@rm -f coverage.txt coverage.html
-	@go clean -testcache
+	@rm -f coverage.txt coverage.html memcached/coverage.txt memcachedotel/coverage.txt
+	@cd memcached && go clean -testcache
+	@cd memcachedotel && go clean -testcache

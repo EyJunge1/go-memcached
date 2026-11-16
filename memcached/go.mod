@@ -1,4 +1,4 @@
-module github.com/EyJunge1/go-memcached
+module github.com/EyJunge1/go-memcached/memcached
 
 go 1.27
 
