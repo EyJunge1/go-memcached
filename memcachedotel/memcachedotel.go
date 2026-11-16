@@ -26,7 +26,7 @@ var (
 
 const (
 	_instrumentationName    = "github.com/EyJunge1/go-memcached/memcachedotel"
-	_instrumentationVersion = "1.0.0"
+	_instrumentationVersion = "0.1.0"
 
 	_metricOpDuration   = "memcached.client.operation.duration"
 	_metricOpCalls      = "memcached.client.operation.calls"

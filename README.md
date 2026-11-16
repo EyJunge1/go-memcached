@@ -6,10 +6,10 @@ Concurrent Go client for memcached text and meta protocols.
 
 ```bash
 # module root (package import stays …/memcached)
-go get github.com/EyJunge1/go-memcached@v1.0.0
+go get github.com/EyJunge1/go-memcached@v0.1.0
 
 # optional OpenTelemetry adapter (separate nested module / tag)
-go get github.com/EyJunge1/go-memcached/memcachedotel@v1.0.0
+go get github.com/EyJunge1/go-memcached/memcachedotel@v0.1.0
 ```
 
 | Module path | Import | Git tag |

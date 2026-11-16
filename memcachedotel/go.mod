@@ -4,7 +4,7 @@ go 1.27
 
 replace github.com/EyJunge1/go-memcached => ../
 
-// After tagging the root module (e.g. v1.0.0), bump the core require to that
+// After tagging the root module (e.g. v0.1.0), bump the core require to that
 // SemVer. replace => ../ keeps local development working until then.
 require (
 	github.com/EyJunge1/go-memcached v0.0.0-00010101000000-000000000000

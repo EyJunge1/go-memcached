@@ -28,8 +28,8 @@
 // path: values are raw []byte, keys hash onto the cluster with Rendezvous+XXH3,
 // and a Get miss leaves Found false rather than returning
 // ErrNotFound. Sentinel aliases (ErrCASConflict, ErrCacheMiss, ErrMalformedKey)
-// ease migration without duplicating the core verbs; see the README migration
-// table. Methods take context first, then required arguments, then a caller
+// ease migration without duplicating the core verbs. Methods take context
+// first, then required arguments, then a caller
 // dst, then options (including text Incr/Decr → dst *uint64). Reuse dst to
 // avoid allocations. Check store outcomes with errors.Is. Example shows a
 // complete program. Meta().GetOne aliases Get; Meta().Store maps Item onto
