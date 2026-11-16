@@ -2,6 +2,8 @@
 
 [![memcached](https://img.shields.io/github/v/tag/EyJunge1/go-memcached?filter=memcached%2Fv*&sort=semver&style=flat-square&logo=github&logoColor=white&label=memcached&color=blue)](https://github.com/EyJunge1/go-memcached/releases/tag/memcached/v0.1.0) [![memcachedotel](https://img.shields.io/github/v/tag/EyJunge1/go-memcached?filter=memcachedotel%2Fv*&sort=semver&style=flat-square&logo=github&logoColor=white&label=memcachedotel&color=blue)](https://github.com/EyJunge1/go-memcached/releases/tag/memcachedotel/v0.1.0) [![License](https://img.shields.io/github/license/EyJunge1/go-memcached?style=flat-square&color=blueviolet)](LICENSE)
 
+Languages: **🇬🇧** | [🇨🇳](./.github/i18n/README.zh.md)
+
 Concurrent Go client for memcached text and meta protocols.
 
 ### Install
