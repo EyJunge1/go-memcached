@@ -64,8 +64,7 @@ defer client.Close()
 _ = obs.RegisterPoolStats(client) // occupancy gauges
 ```
 
-<details>
-<summary><strong>Support commands (full text + meta coverage)</strong></summary>
+### Support commands (full text + meta coverage)
 
 Current memcached **text + meta** is fully covered (typed API, no raw command
 passthrough). Optional `Extra []string` / meta `WithExtra` appends raw wire
@@ -93,5 +92,3 @@ tokens for forward-compatible server flags.
 | `quit`                                      | ✅      | `Close`                                                                                  | TCP writes `quit` then closes; UDP skips `quit` (spec allows close-only)                                                                                                        |
 | `SetServers`                                | ✅      | requires `AllowSetServers`                                                               | replaces the node list                                                                                                                                                          |
 | `Admin()`                                   | opt-in | `On(server)` / `All()`                                                                   | all admin/ops above; `Shutdown` and node-local ops need `On`                                                                                                                    |
-
-</details>
