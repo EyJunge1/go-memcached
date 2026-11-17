@@ -450,3 +450,98 @@ func TestSharedStreamCloseFailsInFlight(t *testing.T) {
 	err := c.Meta().Get(ctx, []byte("k"), &dst, MetaGetValue())
 	isTrue(t, err != nil)
 }
+
+func TestSharedStreamCompleteMuxFaultWithOpaque(t *testing.T) {
+	addr, _ := startCmdServer(t, func(fields []string) string {
+		if fields[0] == "mg" {
+			opaque := "1"
+			for _, tok := range fields[2:] {
+				if len(tok) > 1 && tok[0] == 'O' {
+					opaque = tok[1:]
+				}
+			}
+			return "CLIENT_ERROR bad meta O" + opaque + "\r\n"
+		}
+		return "ERROR\r\n"
+	})
+	c := testClient(t, addr, func(cfg *Config) {
+		cfg.Pool.SharedStreams = 1
+	})
+	var dst MetaResult
+	err := c.Meta().Get(context.Background(), []byte("k"), &dst, MetaGetValue().WithOpaque([]byte("7")))
+	isErrorIs(t, err, ErrClientError)
+}
+
+func TestSharedStreamQuietDefaultOnMN(t *testing.T) {
+	ln := mustListen(t, "tcp", "127.0.0.1:0")
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			cn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(cn net.Conn) {
+				defer func() { _ = cn.Close() }()
+				r := bufio.NewReader(cn)
+				w := bufio.NewWriter(cn)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					fields := strings.Fields(strings.TrimSpace(line))
+					if len(fields) == 0 {
+						continue
+					}
+					switch fields[0] {
+					case "ms":
+						nbytes := 0
+						if len(fields) >= 3 {
+							nbytes, _ = strconv.Atoi(fields[2])
+						}
+						if nbytes >= 0 {
+							_, _ = io.ReadFull(r, make([]byte, nbytes+2))
+						}
+						// Quiet: no HD reply.
+					case "mn":
+						_, _ = w.WriteString("MN\r\n")
+						_ = w.Flush()
+					default:
+						_, _ = w.WriteString("ERROR\r\n")
+						_ = w.Flush()
+					}
+				}
+			}(cn)
+		}
+	}()
+
+	c := testClient(t, ln.Addr().String(), func(cfg *Config) {
+		cfg.Pool.SharedStreams = 1
+	})
+	dsts := make([]MetaResult, 2)
+	noError(t, c.Meta().Pipeline(context.Background(), []MetaOp{
+		{Key: []byte("k2"), Body: []byte("v"), Set: &MetaSet{Quiet: true}},
+		{Noop: &MetaNoop{}},
+	}, dsts))
+	equal(t, MetaStatusHD, dsts[0].Status)
+	equal(t, MetaStatusMN, dsts[1].Status)
+}
+
+func TestSharedStreamFailWriteBatch(t *testing.T) {
+	srv := startFakeMemcached(t)
+	c := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Pool.SharedStreams = 1
+		cfg.Pool.MaxInFlightWrites = 32
+		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			cn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return &failPipelineWriteConn{Conn: cn}, nil
+		}
+	})
+	var dst MetaResult
+	err := c.Meta().Set(context.Background(), []byte("k"), []byte("v"), &dst, MetaSet{})
+	isErrorIs(t, err, ErrTransport)
+}

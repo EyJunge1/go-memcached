@@ -13,6 +13,22 @@ func (c *failPipelineWriteConn) Write([]byte) (int, error) {
 	return 0, errors.New("forced pipeline write failure")
 }
 
+type partialPipelineWriteConn struct {
+	net.Conn
+	n int
+}
+
+func (c *partialPipelineWriteConn) Write(p []byte) (int, error) {
+	n := c.n
+	if n > len(p) {
+		n = len(p)
+	}
+	if n < 0 {
+		n = 0
+	}
+	return n, errors.New("forced partial pipeline write failure")
+}
+
 func TestPipelineRunCancelled(t *testing.T) {
 	srv := startFakeMemcached(t)
 	client := testClient(t, srv.Addr())
@@ -103,4 +119,26 @@ func TestPipelineWriteFailureLeavesLaterOpsNotExecuted(t *testing.T) {
 	isErrorIs(t, first.Err, ErrTransport)
 	equal(t, PipelineNotExecuted, second.State)
 	isErrorIs(t, second.Err, ErrTransport)
+}
+
+func TestPipelinePartialWritevBatchFailure(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			cn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			// Fail after some bytes so pipelineFailBatchWrite marks the first frame Unknown.
+			return &partialPipelineWriteConn{Conn: cn, n: 32}, nil
+		}
+	})
+	var first, second PipelineResult
+	err := client.Pipeline().
+		Store(Item{Key: []byte("a"), Value: make([]byte, _connWriteBufferSize)}, &first).
+		Store(Item{Key: []byte("b"), Value: make([]byte, _connWriteBufferSize)}, &second).
+		Run(context.Background())
+	isErrorIs(t, err, ErrTransport)
+	equal(t, PipelineUnknown, first.State)
+	equal(t, PipelineNotExecuted, second.State)
 }

@@ -109,6 +109,63 @@ func TestPatchStorageValueLengthCAS(t *testing.T) {
 	equal(t, []byte("cas k 0 0 12345 123\r\n"), req.raw)
 }
 
+func TestPreparedBatchMultiNodeFanout(t *testing.T) {
+	a := startFakeMemcached(t)
+	b := startFakeMemcached(t)
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.Cluster.pickBuilder = prefixPickBuilder{}
+	})
+	ctx := context.Background()
+	batch, err := client.Pipeline().
+		Store(Item{Key: []byte("a-1"), Value: []byte("1")}).
+		Store(Item{Key: []byte("b-1"), Value: []byte("2")}).
+		Store(Item{Key: []byte("a-2"), Value: []byte("3")}).
+		Store(Item{Key: []byte("b-2"), Value: []byte("4")}).
+		Prepare()
+	noError(t, err)
+	t.Cleanup(func() { noError(t, batch.Close()) })
+	noError(t, batch.Run(ctx))
+
+	equal(t, []byte("1"), mustGet(ctx, t, client, []byte("a-1")).Value)
+	equal(t, []byte("2"), mustGet(ctx, t, client, []byte("b-1")).Value)
+	equal(t, []byte("3"), mustGet(ctx, t, client, []byte("a-2")).Value)
+	equal(t, []byte("4"), mustGet(ctx, t, client, []byte("b-2")).Value)
+}
+
+func TestPreparedBatchSharedStreamRun(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr(), func(cfg *Config) {
+		cfg.Pool.SharedStreams = 1
+	})
+	ctx := context.Background()
+	batch, err := client.Pipeline().
+		Store(Item{Key: []byte("ss-a"), Value: []byte("1")}).
+		Store(Item{Key: []byte("ss-b"), Value: []byte("2")}).
+		Prepare()
+	noError(t, err)
+	t.Cleanup(func() { noError(t, batch.Close()) })
+	noError(t, batch.Run(ctx))
+	equal(t, []byte("1"), mustGet(ctx, t, client, []byte("ss-a")).Value)
+	equal(t, []byte("2"), mustGet(ctx, t, client, []byte("ss-b")).Value)
+}
+
+func TestPreparedBatchRunValuesRealloc(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	ctx := context.Background()
+	batch, err := client.Pipeline().
+		Store(Item{Key: []byte("k"), Value: []byte("x")}).
+		Prepare()
+	noError(t, err)
+	t.Cleanup(func() { noError(t, batch.Close()) })
+	long := make([]byte, 256)
+	for i := range long {
+		long[i] = 'a'
+	}
+	noError(t, batch.RunValues(ctx, [][]byte{long}))
+	equal(t, long, mustGet(ctx, t, client, []byte("k")).Value)
+}
+
 func BenchmarkPreparedBatchRefreshRoutes(b *testing.B) {
 	a := startFakeMemcached(b)
 	z := startFakeMemcached(b)

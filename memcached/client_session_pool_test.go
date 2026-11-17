@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestSessionPoolRunsConcurrentWorkersAndCloses(t *testing.T) {
@@ -57,4 +58,61 @@ func TestNewSessionPoolRejectsSizeAboveMaxOpen(t *testing.T) {
 	})
 	_, err := client.NewSessionPool(context.Background(), []byte("k"), 2)
 	isErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestSessionPoolDropWaiter(t *testing.T) {
+	p := &SessionPool{
+		waiters: []chan struct{}{
+			make(chan struct{}, 1),
+			make(chan struct{}, 1),
+			make(chan struct{}, 1),
+		},
+	}
+	target := p.waiters[1]
+	p.dropWaiter(target)
+	hasLen(t, p.waiters, 2)
+	p.dropWaiter(make(chan struct{}, 1)) // unknown waiter: no-op
+	hasLen(t, p.waiters, 2)
+	p.dropWaiter(p.waiters[0])
+	p.dropWaiter(p.waiters[0])
+	hasLen(t, p.waiters, 0)
+}
+
+func TestSessionPoolDoContextCanceledWhileWaiting(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	pool, err := client.NewSessionPool(context.Background(), []byte("k"), 1)
+	noError(t, err)
+	t.Cleanup(func() { noError(t, pool.Close()) })
+
+	block := make(chan struct{})
+	doneHold := make(chan error, 1)
+	go func() {
+		doneHold <- pool.Do(context.Background(), func(*Session) error {
+			<-block
+			return nil
+		})
+	}()
+	// Ensure the sole session is leased before waiting.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pool.mu.Lock()
+		nIdle, nWait := len(pool.idle), len(pool.waiters)
+		pool.mu.Unlock()
+		if nIdle == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session never leased")
+		}
+		time.Sleep(time.Millisecond)
+		_ = nWait
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	isErrorIs(t, pool.Do(ctx, func(*Session) error { return nil }), context.DeadlineExceeded)
+
+	close(block)
+	noError(t, <-doneHold)
 }

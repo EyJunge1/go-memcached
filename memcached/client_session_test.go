@@ -132,3 +132,28 @@ func TestNilSessionReturnsClosed(t *testing.T) {
 	isErrorIs(t, session.Run(context.Background(), client.Pipeline()), ErrClosed)
 	isErrorIs(t, session.RunPrepared(context.Background(), nil), ErrClosed)
 }
+
+func TestSessionServer(t *testing.T) {
+	srv := startFakeMemcached(t)
+	client := testClient(t, srv.Addr())
+	session, err := client.Session(context.Background(), []byte("k"))
+	noError(t, err)
+	t.Cleanup(func() { noError(t, session.Close()) })
+	equal(t, srv.Addr(), session.Server().Address)
+	equal(t, "", (*Session)(nil).Server().Address)
+	equal(t, "", (&Session{}).Server().Address)
+}
+
+func TestSessionRunValidateOpsRejectsOtherNode(t *testing.T) {
+	a := startFakeMemcached(t)
+	b := startFakeMemcached(t)
+	client := testClient(t, a.Addr()+","+b.Addr(), func(cfg *Config) {
+		cfg.Cluster.pickBuilder = prefixPickBuilder{}
+	})
+	session, err := client.Session(context.Background(), []byte("a-key"))
+	noError(t, err)
+	t.Cleanup(func() { noError(t, session.Close()) })
+
+	err = session.Run(context.Background(), client.Pipeline().Store(Item{Key: []byte("b-key"), Value: []byte("v")}))
+	isErrorIs(t, err, ErrInvalidArgument)
+}

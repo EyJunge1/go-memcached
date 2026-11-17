@@ -56,6 +56,21 @@ func TestSharedStreamPipelineWave(t *testing.T) {
 	isTrue(t, got.Found)
 }
 
+func TestSharedStreamFailRestOnRecvClose(t *testing.T) {
+	addr, _ := startCloseAfterCommand(t, "set")
+	c := testClient(t, addr, func(cfg *Config) {
+		cfg.Pool.SharedStreams = 1
+		cfg.Pool.MaxInFlightWrites = 32
+	})
+	ctx := context.Background()
+	var first, second PipelineResult
+	err := c.Pipeline().
+		Store(Item{Key: []byte("a"), Value: []byte("1")}, &first).
+		Store(Item{Key: []byte("b"), Value: []byte("2")}, &second).
+		Run(ctx)
+	isErrorIs(t, err, ErrTransport)
+}
+
 func TestReadFullFast(t *testing.T) {
 	r := &shortReader{data: []byte("abcdef"), chunk: 2}
 	buf := make([]byte, 6)

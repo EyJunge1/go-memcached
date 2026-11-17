@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestNodeClientGetStoreMulti(t *testing.T) {
@@ -30,6 +31,53 @@ func TestNodeClientGetStoreMulti(t *testing.T) {
 	equal(t, MetaStatusVA, mdst[1].Status)
 
 	noError(t, n.Meta().DeleteMulti(ctx, [][]byte{[]byte("a"), []byte("b")}, DeleteMissIgnore, make([]MetaResult, 2)))
+}
+
+func TestNodeMetaClientOps(t *testing.T) {
+	srv := startFakeMemcached(t)
+	c := testClient(t, srv.Addr())
+	ctx := context.Background()
+	meta := c.On(Server{Address: srv.Addr()}).Meta()
+
+	var setDst MetaResult
+	noError(t, meta.Set(ctx, []byte("nm-k"), []byte("v1"), &setDst, MetaSet{}))
+	equal(t, MetaStatusHD, setDst.Status)
+
+	var storeDst MetaResult
+	noError(t, meta.Store(ctx, Item{Key: []byte("nm-s"), Value: []byte("sv")}, &storeDst))
+	equal(t, MetaStatusHD, storeDst.Status)
+
+	var getDst MetaResult
+	noError(t, meta.Get(ctx, []byte("nm-k"), &getDst, MetaGetValue()))
+	equal(t, MetaStatusVA, getDst.Status)
+	equal(t, []byte("v1"), getDst.Item.Value)
+
+	var one MetaResult
+	noError(t, meta.GetOne(ctx, []byte("nm-s"), &one, MetaGetValue()))
+	equal(t, MetaStatusVA, one.Status)
+	equal(t, []byte("sv"), one.Item.Value)
+
+	var dbg MetaItemDebug
+	noError(t, meta.Debug(ctx, []byte("nm-k"), &dbg, MetaDebug{}))
+
+	fills := 0
+	var fillDst MetaResult
+	noError(t, meta.GetOrFill(ctx, []byte("nm-fill"), &fillDst, GetOrFillOpts{Vivify: Rel(time.Minute)},
+		func(context.Context, []byte) ([]byte, uint32, Exptime, error) {
+			fills++
+			return []byte("filled"), 1, Rel(time.Minute), nil
+		}))
+	equal(t, 1, fills)
+
+	var delDst MetaResult
+	noError(t, meta.Delete(ctx, []byte("nm-k"), &delDst, MetaDelete{}))
+	equal(t, MetaStatusHD, delDst.Status)
+
+	// Closed / unbound node meta returns ErrClosed.
+	isErrorIs(t, (*NodeMetaClient)(nil).Get(ctx, []byte("x"), &MetaResult{}, MetaGet{}), ErrClosed)
+	isErrorIs(t, (&NodeMetaClient{}).Set(ctx, []byte("x"), []byte("y"), &MetaResult{}, MetaSet{}), ErrClosed)
+	isErrorIs(t, (&NodeMetaClient{}).Delete(ctx, []byte("x"), &MetaResult{}, MetaDelete{}), ErrClosed)
+	isErrorIs(t, (&NodeMetaClient{}).Debug(ctx, []byte("x"), &MetaItemDebug{}, MetaDebug{}), ErrClosed)
 }
 
 func TestNodeMetaPreparePipelinePinsNode(t *testing.T) {
