@@ -267,6 +267,36 @@ func TestFailoverEjectsDeadNode(t *testing.T) {
 	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	_ = client.Store(context.Background(), Item{Mode: StoreSet, Key: []byte("k"), Value: []byte("v")})
 	isTrue(t, len(client.DeadServers()) > 0 || n.Load() > 0)
+	if len(client.DeadServers()) > 0 {
+		live := client.LiveServers()
+		equal(t, 1, len(live))
+		equal(t, good.Addr(), live[0].Address)
+	}
+}
+
+func TestIdleHealthProbeQuarantinesDeadNode(t *testing.T) {
+	good := startFakeMemcached(t)
+	client := testClient(t, "127.0.0.1:1,"+good.Addr(), func(cfg *Config) {
+		cfg.Failover = Failover{FailureLimit: 1, DeadAfter: time.Hour, Eject: true}
+		cfg.Pool.IdleHealthPing = 20 * time.Millisecond
+		cfg.Transport.DialTimeout = 50 * time.Millisecond
+		cfg.Transport.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			if address == "127.0.0.1:1" {
+				return nil, fmt.Errorf("dead")
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(client.DeadServers()) > 0 && len(client.LiveServers()) == 1 {
+			equal(t, good.Addr(), client.LiveServers()[0].Address)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("dead=%v live=%v", client.DeadServers(), client.LiveServers())
 }
 
 func TestFailoverHealthyRoutingDoesNotAllocate(t *testing.T) {

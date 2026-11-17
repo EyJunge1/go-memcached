@@ -136,7 +136,7 @@ func metaGetOrFill(
 		Vivify:  &vivify,
 		Recache: opts.Recache,
 		Touch:   opts.Touch,
-		Return:  MetaGetReturn{Value: true, CAS: true, Flags: true, TTL: true},
+		Return:  MetaGetItem().Return,
 	}
 	if err := m.Get(ctx, key, dst, g); err != nil {
 		return err

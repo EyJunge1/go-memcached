@@ -10,7 +10,8 @@ import (
 // dst must be non-nil. If dst.Item.Value has enough cap, a VA body is written
 // there. Key is copied only when f.Return.Key is set.
 // Transport and parse failures are the method error. EN, NF, NS, and EX live
-// on dst.Status / dst.Err(); the method error stays nil.
+// on dst.Status / dst.Err(); the method error stays nil (no ErrNotFound shim).
+// Prefer MetaGetItem when a following CAS write must re-apply TTL via MetaSet.TTL.
 func (m *MetaClient) Get(ctx context.Context, key []byte, dst *MetaResult, f MetaGet) error {
 	c, err := m.boundClient()
 	if err != nil {

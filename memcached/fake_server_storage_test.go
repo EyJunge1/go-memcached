@@ -5,12 +5,14 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type storeParsed struct {
 	cmd       string
 	key       string
 	flags64   uint64
+	exptime   int64
 	nbytes    int
 	casUnique uint64
 	noReply   bool
@@ -29,6 +31,12 @@ func parseStoreFields(fields []string, w *bufio.Writer) (storeParsed, bool) {
 		_ = w.Flush()
 		return storeParsed{}, false
 	}
+	exptime, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		_, _ = w.WriteString("CLIENT_ERROR bad exptime\r\n")
+		_ = w.Flush()
+		return storeParsed{}, false
+	}
 	nbytes, err := strconv.Atoi(fields[4])
 	if err != nil || nbytes < 0 {
 		_, _ = w.WriteString("CLIENT_ERROR bad bytes\r\n")
@@ -36,7 +44,7 @@ func parseStoreFields(fields []string, w *bufio.Writer) (storeParsed, bool) {
 		return storeParsed{}, false
 	}
 	p := storeParsed{
-		cmd: fields[0], key: fields[1], flags64: flags64, nbytes: nbytes,
+		cmd: fields[0], key: fields[1], flags64: flags64, exptime: exptime, nbytes: nbytes,
 	}
 	idx := 5
 	if p.cmd == "cas" {
@@ -139,7 +147,8 @@ func (f *fakeMemcached) store(fields []string, r *bufio.Reader, w *bufio.Writer)
 		return true
 	}
 	defer f.mu.Unlock()
-	existing := f.items[p.key]
+	now := time.Now()
+	existing, _ := f.getLiveLocked(p.key, now)
 	newValue, newFlags, done, alive := f.storeMutateValue(
 		p.cmd, existing, value, p.flags64, p.casUnique, w, p.noReply,
 	)
@@ -149,8 +158,19 @@ func (f *fakeMemcached) store(fields []string, r *bufio.Reader, w *bufio.Writer)
 	if done {
 		return true
 	}
+	expiresAt := fakeExpiryFromToken(p.exptime, now)
+	if !expiresAt.IsZero() && !expiresAt.After(now) {
+		delete(f.items, p.key)
+		f.storeWriteReply(w, "STORED\r\n", p.noReply)
+		return true
+	}
 	f.cas++
-	f.items[p.key] = &fakeItem{value: newValue, flags: uint32(newFlags), cas: f.cas} // #nosec G115 -- flags parsed with bitSize 32
+	f.items[p.key] = &fakeItem{
+		value:     newValue,
+		flags:     uint32(newFlags), // #nosec G115 -- flags parsed with bitSize 32
+		cas:       f.cas,
+		expiresAt: expiresAt,
+	}
 	f.storeWriteReply(w, "STORED\r\n", p.noReply)
 	return true
 }
@@ -163,7 +183,7 @@ func (f *fakeMemcached) handleDelete(fields []string, w *bufio.Writer) {
 	}
 	noReply := len(fields) > 2 && fields[2] == "noreply"
 	f.mu.Lock()
-	_, ok := f.items[fields[1]]
+	_, ok := f.getLiveLocked(fields[1], time.Now())
 	if ok {
 		delete(f.items, fields[1])
 	}
@@ -185,10 +205,22 @@ func (f *fakeMemcached) touch(fields []string, w *bufio.Writer) {
 		_ = w.Flush()
 		return
 	}
+	exptime, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		_, _ = w.WriteString("CLIENT_ERROR bad exptime\r\n")
+		_ = w.Flush()
+		return
+	}
+	now := time.Now()
 	f.mu.Lock()
-	item, ok := f.items[fields[1]]
+	item, ok := f.getLiveLocked(fields[1], now)
 	if ok {
-		item.exptime = fields[2]
+		expiresAt := fakeExpiryFromToken(exptime, now)
+		if !expiresAt.IsZero() && !expiresAt.After(now) {
+			delete(f.items, fields[1])
+		} else {
+			item.expiresAt = expiresAt
+		}
 	}
 	f.mu.Unlock()
 	noReply := len(fields) > 3 && fields[3] == "noreply"

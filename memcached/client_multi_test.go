@@ -136,3 +136,17 @@ func TestApplyCacheLatencyTimeouts(t *testing.T) {
 	equal(t, 100*time.Millisecond, cfg.Transport.ReadTimeout)
 	equal(t, 100*time.Millisecond, cfg.Transport.WriteTimeout)
 }
+
+func TestApplyProductionDefaults(t *testing.T) {
+	var cfg Config
+	cfg.ApplyProductionDefaults()
+	equal(t, DefaultFailover(), cfg.Failover)
+	equal(t, 30*time.Minute, cfg.Pool.MaxLifetime)
+	equal(t, 5*time.Minute, cfg.Pool.MaxIdleTime)
+	equal(t, 30*time.Second, cfg.Pool.IdleHealthPing)
+	prod := DefaultProduction()
+	equal(t, cfg.Failover, prod.Failover)
+	equal(t, cfg.Pool.MaxLifetime, prod.Pool.MaxLifetime)
+	equal(t, cfg.Pool.MaxIdleTime, prod.Pool.MaxIdleTime)
+	equal(t, cfg.Pool.IdleHealthPing, prod.Pool.IdleHealthPing)
+}

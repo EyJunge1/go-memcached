@@ -3,6 +3,8 @@ package memcached
 import (
 	"bufio"
 	"net"
+	"strconv"
+	"time"
 )
 
 func (f *fakeMemcached) dispatchSessionEnd(cmd string, fields []string, w *bufio.Writer, cn net.Conn) bool {
@@ -140,10 +142,22 @@ func (f *fakeMemcached) dispatchGAT(fields []string, w *bufio.Writer) {
 		_ = w.Flush()
 		return
 	}
+	token, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		_, _ = w.WriteString("CLIENT_ERROR bad exptime\r\n")
+		_ = w.Flush()
+		return
+	}
+	now := time.Now()
 	f.mu.Lock()
 	for _, key := range fields[2:] {
-		if item, ok := f.items[key]; ok {
-			item.exptime = fields[1]
+		if item, ok := f.getLiveLocked(key, now); ok {
+			expiresAt := fakeExpiryFromToken(token, now)
+			if !expiresAt.IsZero() && !expiresAt.After(now) {
+				delete(f.items, key)
+			} else {
+				item.expiresAt = expiresAt
+			}
 		}
 	}
 	f.mu.Unlock()

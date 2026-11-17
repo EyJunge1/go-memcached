@@ -1,6 +1,6 @@
 module github.com/EyJunge1/go-memcached/benchmark
 
-go 1.26
+go 1.26.11
 
 replace github.com/EyJunge1/go-memcached/memcached => ../memcached
 

@@ -3,9 +3,17 @@ package memcached
 import "time"
 
 // MetaGetValue returns MetaGet flags that request the value body (wire v).
-// Prefer chaining With* for additional flags.
+// Prefer chaining With* for additional flags, or MetaGetItem for CAS-ready reads.
 func MetaGetValue() MetaGet {
 	return MetaGet{Return: MetaGetReturn{Value: true}}
+}
+
+// MetaGetItem returns Value+CAS+Flags+TTL (wire v, c, f, t).
+// Use before CAS writes so the caller can re-apply remaining TTL via MetaSet.TTL.
+// Protocol misses/conflicts stay on dst (method error nil); see MetaClient.Get.
+// Meta ms without T leaves the existing TTL unchanged; text cas always sends exptime.
+func MetaGetItem() MetaGet {
+	return MetaGet{Return: MetaGetReturn{Value: true, CAS: true, Flags: true, TTL: true}}
 }
 
 // WithBinaryKey sets the b flag (base64 key on the wire).

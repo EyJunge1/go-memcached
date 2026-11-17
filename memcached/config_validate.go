@@ -29,6 +29,40 @@ func DefaultFailover() Failover {
 	}
 }
 
+// production pool lifetimes used by DefaultProduction / ApplyProductionDefaults.
+const (
+	_productionMaxLifetime    = 30 * time.Minute
+	_productionMaxIdleTime    = 5 * time.Minute
+	_productionIdleHealthPing = 30 * time.Second
+)
+
+// DefaultProduction returns multi-node production pool/failover defaults with
+// empty Servers. Callers set Servers (or use NewProductionFromAddrs). Does not
+// change Transport timeouts; combine with ApplyCacheLatencyTimeouts when needed.
+func DefaultProduction() Config {
+	return Config{
+		Failover: DefaultFailover(),
+		Pool: Pool{
+			MaxLifetime:    _productionMaxLifetime,
+			MaxIdleTime:    _productionMaxIdleTime,
+			IdleHealthPing: _productionIdleHealthPing,
+		},
+	}
+}
+
+// ApplyProductionDefaults sets Failover, MaxLifetime, MaxIdleTime, and
+// IdleHealthPing to DefaultProduction values. Other Config fields are unchanged.
+// NewFromAddrs stays bare; call this (or NewProductionFromAddrs) explicitly.
+func (cfg *Config) ApplyProductionDefaults() {
+	if cfg == nil {
+		return
+	}
+	cfg.Failover = DefaultFailover()
+	cfg.Pool.MaxLifetime = _productionMaxLifetime
+	cfg.Pool.MaxIdleTime = _productionMaxIdleTime
+	cfg.Pool.IdleHealthPing = _productionIdleHealthPing
+}
+
 func validateConfigPool(cfg Config) error {
 	if cfg.Pool.MaxOpen < 0 {
 		return fmt.Errorf("Pool.MaxOpen must be >= 0: %w", ErrInvalidArgument)

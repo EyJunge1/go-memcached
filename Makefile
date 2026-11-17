@@ -119,7 +119,10 @@ gorelease:
 	req=$$(cd "$$tmp/memcachedotel" && go list -m -f '{{.Version}}' github.com/EyJunge1/go-memcached/memcached); \
 	if printf '%s\n' "$$req" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
 		echo "Running gorelease (memcachedotel)"; \
-		( cd "$$tmp/memcachedotel" && go run $(GORELEASE) ); \
+		( cd "$$tmp/memcachedotel" && \
+			go mod edit -dropreplace=github.com/EyJunge1/go-memcached/memcached && \
+			go mod tidy && \
+			go run $(GORELEASE) ); \
 	else \
 		echo "Skipping gorelease (memcachedotel): core require is $$req, need a release tag (vX.Y.Z)"; \
 	fi

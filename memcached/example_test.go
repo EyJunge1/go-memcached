@@ -191,6 +191,31 @@ func ExampleDefaultFailover() {
 	_ = memcached.DefaultFailover()
 }
 
+func ExampleConfig_ApplyProductionDefaults() {
+	cfg := memcached.Config{Servers: []memcached.Server{{Address: "localhost:11211"}}}
+	cfg.ApplyProductionDefaults()
+	client, err := memcached.New(cfg)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	defer func() { _ = client.Close() }()
+	_ = client.LiveServers()
+}
+
+func ExampleNewProductionFromAddrs() {
+	client, err := memcached.NewProductionFromAddrs("localhost:11211")
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	defer func() { _ = client.Close() }()
+}
+
+func ExampleMetaGetItem() {
+	_ = memcached.MetaGetItem()
+}
+
 func ExampleClient_GetOne() {
 	client, err := memcached.New(memcached.Config{
 		Servers: []memcached.Server{{Address: "localhost:11211"}},

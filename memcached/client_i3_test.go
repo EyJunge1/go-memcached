@@ -206,9 +206,9 @@ func TestFakeGatStoresExpiry(t *testing.T) {
 	if srv.items == nil || srv.items["k"] == nil {
 		t.Fatal("missing fake item")
 	}
-	got := srv.items["k"].exptime
+	got := srv.items["k"].expiresAt
 	cmd := srv.lastCmd
-	equal(t, "5", got)
+	isTrue(t, !got.IsZero() && got.After(time.Now()))
 	contains(t, cmd, "gat 5 k")
 }
 

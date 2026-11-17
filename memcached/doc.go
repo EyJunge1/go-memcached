@@ -24,16 +24,20 @@
 // account for much of the package size alongside the dual protocol stacks—not
 // dead code.
 //
-// Create a Client with New or NewFromAddrs. Store and GetOne are the usual
-// path: values are raw []byte, keys hash onto the cluster with Rendezvous+XXH3,
-// and a Get miss leaves Found false rather than returning
+// Create a Client with New or NewFromAddrs (bare defaults). For multi-node
+// production, use NewProductionFromAddrs or Config.ApplyProductionDefaults
+// (Failover, MaxLifetime/MaxIdleTime, IdleHealthPing). LiveServers supports
+// Readyz; IdleHealthPing also probes nodes into Failover quarantine. Store and
+// GetOne are the usual path: values are raw []byte, keys hash onto the cluster
+// with Rendezvous+XXH3, and a Get miss leaves Found false rather than returning
 // ErrNotFound. Sentinel aliases (ErrCASConflict, ErrCacheMiss, ErrMalformedKey)
 // ease migration without duplicating the core verbs. Methods take context
 // first, then required arguments, then a caller
 // dst, then options (including text Incr/Decr → dst *uint64). Reuse dst to
 // avoid allocations. Check store outcomes with errors.Is. Example shows a
 // complete program. Meta().GetOne aliases Get; Meta().Store maps Item onto
-// Set. Meta().GetMulti / StoreMulti / DeleteMulti are the quiet multi helpers
+// Set. MetaGetItem requests Value+CAS+Flags+TTL for CAS writes that re-apply
+// TTL. Meta().GetMulti / StoreMulti / DeleteMulti are the quiet multi helpers
 // (DeleteMulti requires DeleteMissIgnore or DeleteMissStrict; the zero mode is
 // invalid).
 //
@@ -54,11 +58,13 @@
 // clears membership; changing the ring remaps keys and does not migrate data.
 //
 // Meta() is the typed meta-protocol surface. Transport and parse failures are
-// the method error; protocol misses and conflicts live on dst.
-// Unknown response flags are ignored for forward compatibility; malformed
-// values of known numeric fields are rejected. MetaGet/MetaSet/… accept
-// literal structs or chained With* helpers (MetaGetValue().WithCAS()); both
-// map to the same wire flags. Extra []string (WithExtra on meta builders)
+// the method error; protocol misses and conflicts live on dst (no miss
+// compatibility layer). Meta ms without T leaves the existing item TTL
+// unchanged; text cas always sends exptime. Unknown response flags are ignored
+// for forward compatibility; malformed values of known numeric fields are
+// rejected. MetaGet/MetaSet/… accept literal structs or chained With* helpers
+// (MetaGetItem(), MetaGetValue().WithCAS()); both map to the same wire flags.
+// Extra []string (WithExtra on meta builders)
 // appends raw wire tokens after typed flags so new server options work without
 // a library release; framing tokens b/q/O stay typed. Text Item/GetOpts/
 // MutateOpts/FlushOpts/AdminOpts/ArithmeticOpts use the same Extra field

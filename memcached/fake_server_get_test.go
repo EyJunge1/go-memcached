@@ -3,13 +3,15 @@ package memcached
 import (
 	"bufio"
 	"fmt"
+	"time"
 )
 
 func (f *fakeMemcached) retrieve(keys []string, withCAS bool, w *bufio.Writer) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	now := time.Now()
 	for _, key := range keys {
-		item, ok := f.items[key]
+		item, ok := f.getLiveLocked(key, now)
 		if !ok {
 			continue
 		}

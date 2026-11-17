@@ -114,6 +114,47 @@ func (c *Client) noteSuccess(node *addr) {
 	c.deadDirty.Store(len(c.deadUntil) != 0)
 }
 
+// LiveServers lists configured members that are not in failover quarantine.
+// Readyz can use len(LiveServers()) > 0 (or a quorum). Unlike liveAddrs routing,
+// this stays empty when every member is quarantined. With Failover off, every
+// configured member is live.
+func (c *Client) LiveServers() []Server {
+	addrs, _ := c.snapshotCluster()
+	if len(addrs) == 0 {
+		return nil
+	}
+	if c.rt == nil || c.rt.failover.FailureLimit <= 0 || !c.deadDirty.Load() {
+		return addrsToServers(addrs)
+	}
+	now := resolveClock(c.now)()
+	c.healthMu.Lock()
+	defer c.healthMu.Unlock()
+	out := make([]Server, 0, len(addrs))
+	changed := false
+	for _, a := range addrs {
+		if a == nil {
+			continue
+		}
+		id := a.id()
+		until, ok := c.deadUntil[id]
+		if !ok {
+			out = append(out, addrToServer(a))
+			continue
+		}
+		if !now.Before(until) {
+			delete(c.deadUntil, id)
+			changed = true
+			out = append(out, addrToServer(a))
+			continue
+		}
+	}
+	if changed {
+		c.healthVersion.Add(1)
+	}
+	c.deadDirty.Store(len(c.deadUntil) != 0)
+	return out
+}
+
 // DeadServers lists members that are in failover quarantine right now.
 func (c *Client) DeadServers() []Server {
 	addrs, _ := c.snapshotCluster()

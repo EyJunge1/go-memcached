@@ -167,6 +167,9 @@ type (
 
 	// MetaSet is the flag set for ms.
 	// Extra appends raw wire tokens after typed flags.
+	// TTL (wire T): omit on update to leave the existing item TTL unchanged;
+	// set explicitly when re-applying a TTL read via MetaGetItem (text cas
+	// always sends exptime and does not preserve TTL by omission).
 	MetaSet struct {
 		BinaryKey  bool
 		Return     MetaSetReturn

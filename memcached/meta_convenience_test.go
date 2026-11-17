@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+func TestMetaGetItemConvenience(t *testing.T) {
+	w := MetaGetItem().toFlags()
+	if !w.v || !w.c || !w.f || !w.t {
+		t.Fatalf("MetaGetItem flags incomplete: %+v", w)
+	}
+}
+
 func TestMetaGetConvenienceMapsToFlags(t *testing.T) {
 	f := MetaGetValue().
 		WithCAS().

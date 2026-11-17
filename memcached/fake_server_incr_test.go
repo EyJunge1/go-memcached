@@ -3,6 +3,7 @@ package memcached
 import (
 	"bufio"
 	"strconv"
+	"time"
 )
 
 func (f *fakeMemcached) arithmetic(fields []string, w *bufio.Writer) {
@@ -20,7 +21,7 @@ func (f *fakeMemcached) arithmetic(fields []string, w *bufio.Writer) {
 	noReply := len(fields) > 3 && fields[3] == "noreply"
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	item, ok := f.items[fields[1]]
+	item, ok := f.getLiveLocked(fields[1], time.Now())
 	if !ok {
 		if !noReply {
 			_, _ = w.WriteString("NOT_FOUND\r\n")

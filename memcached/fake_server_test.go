@@ -18,7 +18,58 @@ type fakeItem struct {
 	cas         uint64
 	stale       bool
 	recacheBusy bool
-	exptime     string
+	// expiresAt is absolute expiry; zero means never expires (wire exptime 0).
+	expiresAt time.Time
+}
+
+// fakeExpiryFromToken converts a memcached wire expiry token to an absolute time.
+// 0 → never (zero Time); negative → already expired; 1–2592000 → relative seconds;
+// larger → Unix timestamp. Matches real memcached protocol semantics.
+func fakeExpiryFromToken(token int64, now time.Time) time.Time {
+	switch {
+	case token == 0:
+		return time.Time{}
+	case token < 0:
+		return now.Add(-time.Second)
+	case token <= _maxRelativeExpirySecs:
+		return now.Add(time.Duration(token) * time.Second)
+	default:
+		return time.Unix(token, 0)
+	}
+}
+
+// fakeRemainingTTLSecs returns remaining TTL seconds for meta t, or -1 if never.
+// Expired items should be purged before calling this.
+func fakeRemainingTTLSecs(item *fakeItem, now time.Time) int64 {
+	if item == nil || item.expiresAt.IsZero() {
+		return -1
+	}
+	sec := int64(item.expiresAt.Sub(now) / time.Second)
+	if sec < 0 {
+		return 0
+	}
+	return sec
+}
+
+// purgeExpiredLocked deletes the key when past expiresAt. Caller must hold f.mu.
+func (f *fakeMemcached) purgeExpiredLocked(key string, item *fakeItem, now time.Time) bool {
+	if item == nil || item.expiresAt.IsZero() || !now.After(item.expiresAt) {
+		return false
+	}
+	delete(f.items, key)
+	return true
+}
+
+// getLiveLocked returns a non-expired item, purging if needed. Caller must hold f.mu.
+func (f *fakeMemcached) getLiveLocked(key string, now time.Time) (*fakeItem, bool) {
+	item, ok := f.items[key]
+	if !ok {
+		return nil, false
+	}
+	if f.purgeExpiredLocked(key, item, now) {
+		return nil, false
+	}
+	return item, true
 }
 
 type fakeMemcached struct {

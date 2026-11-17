@@ -5,7 +5,8 @@ import (
 	"time"
 )
 
-// startIdleHealthPing launches a loop that versions cold idle pooled sockets.
+// startIdleHealthPing launches a loop that versions cold idle pooled sockets
+// and actively probes each node so Failover can quarantine before traffic fails.
 // Close waits on healthWG after closing healthStop (Uber: goroutine lifecycle).
 func (c *Client) startIdleHealthPing() {
 	if c.rt == nil || c.rt.idleHealthPing <= 0 || c.rt.udp {
@@ -31,6 +32,7 @@ func (c *Client) idleHealthLoop(interval time.Duration) {
 				return
 			}
 			c.pingIdlePools(interval)
+			c.probeClusterHealth()
 		case <-c.healthStop:
 			return
 		}
@@ -83,9 +85,62 @@ func (c *Client) pingOneIdle(ctx context.Context, p *connPool, node *addr, minId
 			discard = h.cn
 		}
 		_ = p.discard(discard)
+		c.noteFailure(node)
 		return
 	}
+	c.noteSuccess(node)
 	_ = p.put(h.cn)
+}
+
+// probeClusterHealth versions each configured node and feeds Failover via
+// noteFailure/noteSuccess so Readyz (LiveServers) updates without waiting on
+// application traffic. Runs on the IdleHealthPing interval.
+func (c *Client) probeClusterHealth() {
+	if c.closed.Load() {
+		return
+	}
+	addrs, _ := c.snapshotCluster()
+	if len(addrs) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, node := range addrs {
+		if node == nil || c.closed.Load() {
+			continue
+		}
+		c.probeOneNode(ctx, node)
+	}
+}
+
+func (c *Client) probeOneNode(ctx context.Context, node *addr) {
+	cn, err := c.getConn(ctx, node)
+	if err != nil {
+		c.noteFailure(node)
+		return
+	}
+	req, resp := buildVersionCommand()
+	defer releaseReqAndResp(req, resp)
+	h := &connHolder{cn: cn}
+	if err := c.sendOnConn(ctx, node, h, req, resp); err != nil || h.cn == nil {
+		discard := cn
+		if h.cn != nil {
+			discard = h.cn
+		}
+		if p := discard.getConnPool(); p != nil {
+			_ = p.discard(discard)
+		} else {
+			_ = discard.Close()
+		}
+		c.noteFailure(node)
+		return
+	}
+	c.noteSuccess(node)
+	if p := h.cn.getConnPool(); p != nil {
+		_ = p.put(h.cn)
+	} else {
+		_ = h.cn.Close()
+	}
 }
 
 // takeColdIdle pops the coldest idle conn when unused for at least minIdle.

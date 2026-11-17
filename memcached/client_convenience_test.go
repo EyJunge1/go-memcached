@@ -40,6 +40,18 @@ func TestNewFromAddrsEmpty(t *testing.T) {
 	isErrorIs(t, err, ErrInvalidAddress)
 }
 
+func TestNewProductionFromAddrsAppliesDefaults(t *testing.T) {
+	srv := startFakeMemcached(t)
+	c, err := NewProductionFromAddrs(srv.Addr())
+	noError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	equal(t, DefaultFailover(), c.rt.failover)
+	equal(t, 30*time.Minute, c.rt.maxLifetime)
+	equal(t, 5*time.Minute, c.rt.maxIdleTime)
+	equal(t, 30*time.Second, c.rt.idleHealthPing)
+	equal(t, 1, len(c.LiveServers()))
+}
+
 func TestDiscoveryBackoff(t *testing.T) {
 	d := discoveryBackoff(time.Second, 1)
 	if d <= 0 || d > time.Second {

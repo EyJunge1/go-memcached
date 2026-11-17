@@ -6,8 +6,30 @@ import (
 )
 
 // NewFromAddrs builds a Client from host specs (host:port, unix://, udp://).
-// Specs are joined and parsed with ParseServers, then passed to New with default Config.
+// Specs are joined and parsed with ParseServers, then passed to New with default Config
+// (Failover and IdleHealthPing remain off). Prefer NewProductionFromAddrs or
+// Config.ApplyProductionDefaults for multi-node production defaults.
 func NewFromAddrs(addrs ...string) (*Client, error) {
+	servers, err := parseAddrs(addrs...)
+	if err != nil {
+		return nil, err
+	}
+	return New(Config{Servers: servers})
+}
+
+// NewProductionFromAddrs is NewFromAddrs with ApplyProductionDefaults
+// (DefaultFailover, connection lifetime/idle timeouts, and IdleHealthPing).
+func NewProductionFromAddrs(addrs ...string) (*Client, error) {
+	servers, err := parseAddrs(addrs...)
+	if err != nil {
+		return nil, err
+	}
+	cfg := DefaultProduction()
+	cfg.Servers = servers
+	return New(cfg)
+}
+
+func parseAddrs(addrs ...string) ([]Server, error) {
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 	}
@@ -16,11 +38,7 @@ func NewFromAddrs(addrs ...string) (*Client, error) {
 			return nil, fmt.Errorf("empty address: %w", ErrInvalidAddress)
 		}
 	}
-	servers, err := ParseServers(strings.Join(addrs, ","))
-	if err != nil {
-		return nil, err
-	}
-	return New(Config{Servers: servers})
+	return ParseServers(strings.Join(addrs, ","))
 }
 
 // ConfigID returns the last committed Memorystore discovery ConfigID, or 0
