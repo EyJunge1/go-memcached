@@ -1,6 +1,6 @@
 module github.com/EyJunge1/go-memcached/memcached
 
-go 1.26
+go 1.26.0
 
 require github.com/zeebo/xxh3 v1.1.0
 

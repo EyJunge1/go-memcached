@@ -1,6 +1,6 @@
 module github.com/EyJunge1/go-memcached/memcachedotel
 
-go 1.26
+go 1.26.0
 
 replace github.com/EyJunge1/go-memcached/memcached => ../memcached
 
