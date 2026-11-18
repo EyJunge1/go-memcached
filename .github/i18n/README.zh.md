@@ -1,6 +1,6 @@
 # go-memcached
 
-[![memcached](https://pkg.go.dev/badge/github.com/EyJunge1/go-memcached/memcached.svg)](https://pkg.go.dev/github.com/EyJunge1/go-memcached/memcached) [![memcachedotel](https://pkg.go.dev/badge/github.com/EyJunge1/go-memcached/memcachedotel.svg)](https://pkg.go.dev/github.com/EyJunge1/go-memcached/memcachedotel) [![License](https://img.shields.io/github/license/EyJunge1/go-memcached?style=flat-square&color=blueviolet)](../../LICENSE)
+[![memcached](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fproxy.golang.org%2Fgithub.com%2F%21ey%21junge1%2Fgo-memcached%2Fmemcached%2F%40latest&query=%24.Version&label=memcached&logo=go&logoColor=white&color=00ADD8&style=flat-square)](https://pkg.go.dev/github.com/EyJunge1/go-memcached/memcached) [![memcachedotel](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fproxy.golang.org%2Fgithub.com%2F%21ey%21junge1%2Fgo-memcached%2Fmemcachedotel%2F%40latest&query=%24.Version&label=memcachedotel&logo=go&logoColor=white&color=00ADD8&style=flat-square)](https://pkg.go.dev/github.com/EyJunge1/go-memcached/memcachedotel) [![License](https://img.shields.io/github/license/EyJunge1/go-memcached?style=flat-square&color=blueviolet)](../../LICENSE)
 
 语言: [🇬🇧](../../README.md) | **🇨🇳**
 
