@@ -27,8 +27,8 @@ github.com/rainycape/memcache v0.0.0-20150622160815-1031fa0ce2f2 h1:dq90+d51/hQR
 github.com/rainycape/memcache v0.0.0-20150622160815-1031fa0ce2f2/go.mod h1:7tZKcyumwBO6qip7RNQ5r77yrssm9bfCowcLEBcU5IA=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/yeqown/memcached v1.5.0 h1:tAFjng58dujJIzdQQM6EbyaAK5V/6yqs7RnDofpn/a4=
-github.com/yeqown/memcached v1.5.0/go.mod h1:VuvmPMRn15wU19K1KXYN5Bn0j6cl59ma2EkIA+wzpmU=
+github.com/yeqown/memcached v1.5.1 h1:uNlEA+P9bJC54wW+TUPNRWxDJQdNMvqwGFFedWUPG0I=
+github.com/yeqown/memcached v1.5.1/go.mod h1:VuvmPMRn15wU19K1KXYN5Bn0j6cl59ma2EkIA+wzpmU=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
 github.com/zeebo/assert v1.3.0/go.mod h1:Pq9JiuJQpG8JLJdtkwrJESF0Foym2/D9XMU5ciN/wJ0=
 github.com/zeebo/xxh3 v1.1.0 h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=
