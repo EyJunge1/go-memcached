@@ -8,7 +8,7 @@ require (
 	github.com/EyJunge1/go-memcached/memcached v0.0.0
 	github.com/bradfitz/gomemcache v0.0.0-20260422231931-4d751bb6e37c
 	github.com/rainycape/memcache v0.0.0-20150622160815-1031fa0ce2f2
-	github.com/yeqown/memcached v1.5.0
+	github.com/yeqown/memcached v1.5.1
 )
 
 require (
